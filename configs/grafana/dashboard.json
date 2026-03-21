@@ -1,0 +1,170 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_GUARDIAN",
+      "label": "Guardian DB",
+      "description": "SQLite or TimescaleDB datasource for eval_traces",
+      "type": "datasource",
+      "pluginId": "frser-sqlite-datasource"
+    }
+  ],
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "title": "Pipeline Overview",
+      "type": "stat",
+      "gridPos": { "h": 4, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "uid": "${DS_GUARDIAN}" },
+      "targets": [
+        {
+          "rawSql": "SELECT COUNT(DISTINCT pipeline_name) AS pipelines, COUNT(DISTINCT step_name) AS steps, COUNT(*) AS total_traces FROM eval_traces WHERE created_at >= datetime('now', '-7 days')",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "title": "Pass Rate Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "datasource": { "uid": "${DS_GUARDIAN}" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "fillOpacity": 10 }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT date(created_at) AS time, pipeline_name || ' / ' || step_name AS metric, CAST(SUM(CASE WHEN passed THEN 1 ELSE 0 END) AS REAL) / COUNT(*) AS value FROM eval_traces WHERE created_at >= datetime('now', '-${days:raw} days') GROUP BY date(created_at), pipeline_name, step_name ORDER BY time",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "title": "Average Score Over Time",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "datasource": { "uid": "${DS_GUARDIAN}" },
+      "fieldConfig": {
+        "defaults": {
+          "min": 0,
+          "max": 1,
+          "custom": { "fillOpacity": 10 }
+        }
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT date(created_at) AS time, pipeline_name || ' / ' || step_name AS metric, AVG(score) AS value FROM eval_traces WHERE created_at >= datetime('now', '-${days:raw} days') GROUP BY date(created_at), pipeline_name, step_name ORDER BY time",
+          "format": "time_series"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom" },
+        "tooltip": { "mode": "multi" }
+      }
+    },
+    {
+      "title": "Action Distribution",
+      "type": "piechart",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 12 },
+      "datasource": { "uid": "${DS_GUARDIAN}" },
+      "targets": [
+        {
+          "rawSql": "SELECT action, COUNT(*) AS count FROM eval_traces WHERE created_at >= datetime('now', '-${days:raw} days') AND ('${pipeline:raw}' = '' OR pipeline_name = '${pipeline:raw}') GROUP BY action ORDER BY count DESC",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "table", "placement": "right" }
+      }
+    },
+    {
+      "title": "Failure Rate by Step",
+      "type": "barchart",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 12 },
+      "datasource": { "uid": "${DS_GUARDIAN}" },
+      "fieldConfig": {
+        "defaults": { "unit": "percentunit" }
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT step_name, CAST(SUM(CASE WHEN NOT passed THEN 1 ELSE 0 END) AS REAL) / COUNT(*) AS failure_rate FROM eval_traces WHERE created_at >= datetime('now', '-${days:raw} days') AND ('${pipeline:raw}' = '' OR pipeline_name = '${pipeline:raw}') GROUP BY step_name ORDER BY failure_rate DESC",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "title": "Top Issues (Last 7 Days)",
+      "type": "table",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 12 },
+      "datasource": { "uid": "${DS_GUARDIAN}" },
+      "targets": [
+        {
+          "rawSql": "SELECT pipeline_name, step_name, action, score, issues, created_at FROM eval_traces WHERE NOT passed AND created_at >= datetime('now', '-7 days') ORDER BY created_at DESC LIMIT 20",
+          "format": "table"
+        }
+      ],
+      "options": {
+        "showHeader": true,
+        "sortBy": [{ "displayName": "created_at", "desc": true }]
+      }
+    },
+    {
+      "title": "Daily Trace Volume",
+      "type": "barchart",
+      "gridPos": { "h": 6, "w": 24, "x": 0, "y": 20 },
+      "datasource": { "uid": "${DS_GUARDIAN}" },
+      "targets": [
+        {
+          "rawSql": "SELECT date(created_at) AS time, COUNT(*) AS traces, SUM(CASE WHEN passed THEN 1 ELSE 0 END) AS passed, SUM(CASE WHEN NOT passed THEN 1 ELSE 0 END) AS failed FROM eval_traces WHERE created_at >= datetime('now', '-${days:raw} days') GROUP BY date(created_at) ORDER BY time",
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "passed" }, "properties": [{ "id": "color", "value": { "fixedColor": "green", "mode": "fixed" } }] },
+          { "matcher": { "id": "byName", "options": "failed" }, "properties": [{ "id": "color", "value": { "fixedColor": "red", "mode": "fixed" } }] }
+        ]
+      }
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["pipeline-guardian", "quality", "llm"],
+  "templating": {
+    "list": [
+      {
+        "name": "pipeline",
+        "type": "query",
+        "datasource": { "uid": "${DS_GUARDIAN}" },
+        "query": "SELECT DISTINCT pipeline_name FROM eval_traces ORDER BY pipeline_name",
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      },
+      {
+        "name": "days",
+        "type": "custom",
+        "options": [
+          { "text": "7", "value": "7" },
+          { "text": "14", "value": "14" },
+          { "text": "30", "value": "30" },
+          { "text": "90", "value": "90" }
+        ],
+        "current": { "text": "7", "value": "7" }
+      }
+    ]
+  },
+  "time": { "from": "now-7d", "to": "now" },
+  "title": "Pipeline Guardian — Quality Dashboard",
+  "uid": "pipeline-guardian-main"
+}
