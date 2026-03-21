@@ -200,6 +200,141 @@ def check(
 
 
 @cli.command()
+@click.option(
+    "--pipeline",
+    required=True,
+    type=click.Path(exists=True),
+    help="Path to pipeline YAML config.",
+)
+@click.option("--step", required=True, help="Name of the step to optimize.")
+@click.option(
+    "--db",
+    required=True,
+    type=str,
+    help="Database URL containing eval traces.",
+)
+@click.option("--days", default=14, type=int, help="Lookback period in days.")
+@click.option("--model", default="gpt-4o-mini", help="LLM model for analysis.")
+@click.option("--api-base", default=None, help="OpenAI-compatible API base URL.")
+@click.option("--json-output", "json_out", is_flag=True, help="Output as JSON instead of text.")
+def suggest(
+    pipeline: str,
+    step: str,
+    db: str,
+    days: int,
+    model: str,
+    api_base: str | None,
+    json_out: bool,
+) -> None:
+    """Generate optimization suggestions for a pipeline step.
+
+    Analyzes recent failure patterns, identifies root causes via LLM,
+    and produces actionable suggestions. Human review required — nothing
+    is auto-applied.
+    """
+    import yaml
+
+    from guardian.optimizer.root_cause import analyze_root_causes, extract_failure_pattern
+    from guardian.optimizer.suggestion import format_suggestion_report, generate_suggestions
+    from guardian.store.reader import TraceReader
+
+    logger = logging.getLogger("guardian.cli")
+
+    # Load pipeline config to get guardian YAML
+    config = load_pipeline(pipeline)
+    step_config = None
+    for s in config.steps:
+        if s.name == step:
+            step_config = s
+            break
+
+    if step_config is None:
+        click.echo(f"Error: Step '{step}' not found in pipeline '{config.name}'", err=True)
+        sys.exit(1)
+
+    # Extract guardian config as YAML for the prompt
+    guardian_yaml = ""
+    current_hint = None
+    if step_config.guardian:
+        guardian_dict = step_config.guardian.model_dump(exclude_none=True)
+        guardian_yaml = yaml.dump(guardian_dict, default_flow_style=False)
+        current_hint = step_config.guardian.actions.retry_hint
+
+    # Step 1: Extract failure patterns
+    click.echo(f"Analyzing traces for {config.name}/{step} (last {days} days)...")
+    reader = TraceReader(db)
+    pattern = extract_failure_pattern(reader, config.name, step, days=days)
+
+    if pattern.failed_traces == 0:
+        click.echo(f"No failures found in the last {days} days. Nothing to optimize.")
+        sys.exit(0)
+
+    click.echo(
+        f"Found {pattern.failed_traces}/{pattern.total_traces} failures "
+        f"({pattern.failure_rate:.1%}). Top issues:"
+    )
+    for issue, count in list(pattern.issue_counts.items())[:5]:
+        click.echo(f"  - {issue} ({count}x)")
+
+    # Step 2: Root cause analysis
+    click.echo("\nRunning root cause analysis...")
+    try:
+        root_report = asyncio.run(
+            analyze_root_causes(pattern, model=model, api_base=api_base)
+        )
+    except ValueError as e:
+        click.echo(f"Error: {e}", err=True)
+        click.echo("Set GUARDIAN_LLM_API_KEY environment variable to use this feature.", err=True)
+        sys.exit(1)
+
+    if root_report.root_causes:
+        click.echo(f"Identified {len(root_report.root_causes)} root cause(s):")
+        for rc in root_report.root_causes:
+            click.echo(f"  [{rc.get('severity', '?')}] {rc.get('cause', 'Unknown')}")
+
+    # Step 3: Generate suggestions
+    click.echo("\nGenerating optimization suggestions...")
+    suggestion_report = asyncio.run(
+        generate_suggestions(
+            root_report, guardian_yaml, current_hint,
+            model=model, api_base=api_base,
+        )
+    )
+
+    # Output
+    if json_out:
+        output = {
+            "pipeline": config.name,
+            "step": step,
+            "failure_pattern": {
+                "total": pattern.total_traces,
+                "failed": pattern.failed_traces,
+                "rate": pattern.failure_rate,
+                "avg_score": pattern.avg_score,
+                "top_issues": pattern.issue_counts,
+            },
+            "root_causes": root_report.root_causes,
+            "root_cause_summary": root_report.summary,
+            "suggestions": [
+                {
+                    "type": s.type,
+                    "title": s.title,
+                    "current": s.current,
+                    "proposed": s.proposed,
+                    "rationale": s.rationale,
+                    "expected_impact": s.expected_impact,
+                }
+                for s in suggestion_report.suggestions
+            ],
+            "overall_strategy": suggestion_report.overall_strategy,
+        }
+        click.echo(json.dumps(output, indent=2))
+    else:
+        click.echo("")
+        click.echo(format_suggestion_report(suggestion_report))
+
+
+@cli.command()
 @click.option("--host", default="127.0.0.1", help="Bind host.")
 @click.option("--port", default=8000, type=int, help="Bind port.")
 @click.option(
