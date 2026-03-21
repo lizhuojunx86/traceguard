@@ -1,0 +1,48 @@
+pipeline:
+  name: "market-intelligence"
+  description: "Multi-agent market intelligence pipeline"
+  trigger: "cron"
+
+  steps:
+    - name: "step_01_collect"
+      container: "market-collector:latest"
+      input_source: "trigger"
+
+      guardian:
+        structural:
+          schema: "configs/examples/schemas/step_01_output.json"
+          required_fields: ["data", "timestamp", "source"]
+          max_length: 50000
+          min_length: 100
+          language: "en"
+
+        semantic:
+          enabled: false  # Phase 2
+
+        actions:
+          on_structural_fail: "retry"
+          on_semantic_low: "alert"
+          max_retries: 2
+          retry_hint: "Ensure output is valid JSON with required fields: data, timestamp, source. The data field must be an array of objects with symbol and price."
+          alert_channel: "telegram"
+
+    - name: "step_02_analyze"
+      container: "market-analyzer:latest"
+      input_source: "step_01_collect"
+
+      guardian:
+        structural:
+          schema: "configs/examples/schemas/step_02_output.json"
+          required_fields: ["analysis", "timestamp", "input_step"]
+          max_length: 100000
+          min_length: 200
+          language: "en"
+
+        semantic:
+          enabled: false  # Phase 2
+
+        actions:
+          on_structural_fail: "abort"
+          on_semantic_low: "alert"
+          max_retries: 1
+          alert_channel: "telegram"
