@@ -198,6 +198,24 @@ def _build_analysis_prompt(pattern: FailurePattern) -> str:
 Analyze the failure patterns and identify root causes."""
 
 
+def _rule_based_root_causes(pattern: FailurePattern) -> list[dict]:
+    """Generate rule-based root cause analysis from failure patterns.
+
+    Uses statistical heuristics when no LLM is available.
+    """
+    causes = []
+    for issue, count in list(pattern.issue_counts.items())[:5]:
+        pct = count / pattern.failed_traces if pattern.failed_traces else 0
+        severity = "high" if pct > 0.5 else ("medium" if pct > 0.2 else "low")
+        causes.append({
+            "cause": issue,
+            "evidence": f"Occurred in {count}/{pattern.failed_traces} failures ({pct:.0%})",
+            "severity": severity,
+            "frequency": f"{pct:.0%}",
+        })
+    return causes
+
+
 async def analyze_root_causes(
     pattern: FailurePattern,
     model: str = "gpt-4o-mini",
@@ -205,7 +223,10 @@ async def analyze_root_causes(
     api_key_env: str = "GUARDIAN_LLM_API_KEY",
     http_client: httpx.AsyncClient | None = None,
 ) -> RootCauseReport:
-    """Use an LLM to analyze failure patterns and identify root causes.
+    """Analyze failure patterns and identify root causes.
+
+    Uses LLM when available, falls back to rule-based analysis
+    when no LLM is reachable (graceful degradation).
 
     Args:
         pattern: Extracted failure pattern.
@@ -216,10 +237,9 @@ async def analyze_root_causes(
 
     Returns:
         RootCauseReport with identified root causes.
-
-    Raises:
-        ValueError: If API key is not set.
     """
+    from guardian.env import LLMMode, probe_llm_environment
+
     report = RootCauseReport(
         pipeline_name=pattern.pipeline_name,
         step_name=pattern.step_name,
@@ -230,15 +250,35 @@ async def analyze_root_causes(
         report.summary = "No failures found — nothing to analyze."
         return report
 
-    api_key = os.environ.get(api_key_env, "")
-    if not api_key:
-        raise ValueError(f"Environment variable '{api_key_env}' is not set")
+    # Environment-aware probe
+    endpoint = await probe_llm_environment(
+        config_api_base=api_base,
+        config_api_key_env=api_key_env,
+        config_model=model,
+        http_client=http_client,
+    )
 
-    base = (api_base or DEFAULT_API_BASE).rstrip("/")
-    url = f"{base}/chat/completions"
+    if endpoint.mode == LLMMode.DEGRADED:
+        report.root_causes = _rule_based_root_causes(pattern)
+        report.summary = "LLM unavailable — rule-based analysis only."
+        return report
 
+    # Resolve endpoint
+    actual_base = (endpoint.api_base or DEFAULT_API_BASE).rstrip("/")
+    actual_model = endpoint.model or model
+
+    if endpoint.mode == LLMMode.FULL:
+        api_key = os.environ.get(api_key_env, "")
+        if not api_key:
+            report.root_causes = _rule_based_root_causes(pattern)
+            report.summary = "API key not set — rule-based analysis only."
+            return report
+    else:
+        api_key = os.environ.get(api_key_env, "no-key-needed")
+
+    url = f"{actual_base}/chat/completions"
     payload = {
-        "model": model,
+        "model": actual_model,
         "messages": [
             {"role": "system", "content": ANALYSIS_SYSTEM_PROMPT},
             {"role": "user", "content": _build_analysis_prompt(pattern)},
@@ -265,6 +305,14 @@ async def analyze_root_causes(
         parsed = _parse_analysis(raw)
         report.root_causes = parsed.get("root_causes", [])
         report.summary = parsed.get("summary", "")
+
+    except (
+        httpx.HTTPStatusError, httpx.ProxyError, httpx.ConnectError,
+        httpx.ConnectTimeout, httpx.ReadTimeout, OSError,
+    ) as e:
+        logger.warning("Root cause LLM call failed, falling back to rules: %s", e)
+        report.root_causes = _rule_based_root_causes(pattern)
+        report.summary = f"LLM call failed — rule-based analysis only."
 
     finally:
         if should_close:

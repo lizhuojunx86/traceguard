@@ -10,16 +10,28 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
+from guardian.env import LLMEndpoint, LLMMode, reset_endpoint
 from guardian.optimizer.root_cause import (
     FailurePattern,
     RootCauseReport,
     _build_analysis_prompt,
     _parse_analysis,
+    _rule_based_root_causes,
     analyze_root_causes,
     extract_failure_pattern,
 )
 from guardian.store.models import Base, EvalTrace
 from guardian.store.reader import TraceReader
+
+
+@pytest.fixture(autouse=True)
+def _mock_env():
+    reset_endpoint()
+    ep = LLMEndpoint(mode=LLMMode.FULL, api_base="https://api.example.com/v1",
+                     model="gpt-4o-mini", provider="openai")
+    with patch("guardian.env.probe_llm_environment", return_value=ep):
+        yield
+    reset_endpoint()
 
 
 # -- Fixtures --
@@ -214,12 +226,15 @@ class TestAnalyzeRootCauses:
         mock_client.post.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_missing_api_key(self):
+    async def test_missing_api_key_degrades_to_rules(self):
+        """Missing API key should degrade to rule-based, not crash."""
         pattern = FailurePattern(
             pipeline_name="p", step_name="s",
-            failed_traces=5,
+            total_traces=10, failed_traces=5,
+            issue_counts={"Missing field": 3},
         )
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("GUARDIAN_LLM_API_KEY", None)
-            with pytest.raises(ValueError, match="GUARDIAN_LLM_API_KEY"):
-                await analyze_root_causes(pattern)
+            report = await analyze_root_causes(pattern)
+        assert len(report.root_causes) > 0
+        assert "rule-based" in report.summary.lower()

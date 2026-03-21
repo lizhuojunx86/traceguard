@@ -3,6 +3,11 @@
 Calls an OpenAI-compatible API to evaluate step output against
 a set of human-defined criteria. The LLM returns a structured
 JSON response with a score (1-5) and a list of issues.
+
+Supports automatic environment detection and graceful degradation:
+- FULL mode: uses configured external API
+- LOCAL mode: uses discovered local LLM (Ollama, LM Studio, etc.)
+- DEGRADED mode: skips semantic evaluation entirely
 """
 from __future__ import annotations
 
@@ -15,6 +20,7 @@ import httpx
 
 from guardian.core.config import SemanticCheckConfig
 from guardian.core.step import StepOutput
+from guardian.env import LLMMode, probe_llm_environment
 
 logger = logging.getLogger(__name__)
 
@@ -81,6 +87,11 @@ async def validate_semantic(
 ) -> SemanticResult:
     """Run LLM-as-Judge semantic evaluation on a step output.
 
+    Automatically probes the environment on first call:
+    - FULL: uses configured external API
+    - LOCAL: uses discovered local LLM
+    - DEGRADED: returns a skip result (no crash)
+
     Args:
         output: The step output to evaluate.
         config: Semantic check configuration.
@@ -88,35 +99,63 @@ async def validate_semantic(
 
     Returns:
         SemanticResult with score, pass/fail, and issues.
-
-    Raises:
-        ValueError: If API key environment variable is not set.
-        httpx.HTTPStatusError: If the API returns an error status.
     """
     if not config.enabled or not config.criteria:
         return SemanticResult(passed=True, score=5, issues=[])
 
-    api_key = os.environ.get(config.api_key_env, "")
-    if not api_key:
-        raise ValueError(
-            f"Environment variable '{config.api_key_env}' is not set"
+    # Environment-aware endpoint resolution
+    endpoint = await probe_llm_environment(
+        config_api_base=config.api_base,
+        config_api_key_env=config.api_key_env,
+        config_model=config.model,
+        http_client=http_client,
+    )
+
+    if endpoint.mode == LLMMode.DEGRADED:
+        logger.info("Semantic evaluation skipped: %s", endpoint.reason)
+        return SemanticResult(
+            passed=True, score=5, issues=[],
+            raw_response="skipped: no LLM available",
         )
 
-    api_base = (config.api_base or DEFAULT_API_BASE).rstrip("/")
-    url = f"{api_base}/chat/completions"
+    # Resolve actual API parameters
+    is_ollama = endpoint.provider == "ollama"
+    api_base = (endpoint.api_base or DEFAULT_API_BASE).rstrip("/")
+    model = endpoint.model or config.model or "gpt-4o-mini"
+
+    if endpoint.mode == LLMMode.FULL:
+        api_key = os.environ.get(config.api_key_env, "")
+        if not api_key:
+            raise ValueError(
+                f"Environment variable '{config.api_key_env}' is not set"
+            )
+    else:
+        # LOCAL mode — most local LLMs accept any key or none
+        api_key = os.environ.get(config.api_key_env, "no-key-needed")
 
     output_text = output.output_as_string()
     user_prompt = _build_user_prompt(output_text, config.criteria)
+    messages = [
+        {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
+        {"role": "user", "content": user_prompt},
+    ]
 
-    payload = {
-        "model": config.model or "gpt-4o-mini",
-        "messages": [
-            {"role": "system", "content": JUDGE_SYSTEM_PROMPT},
-            {"role": "user", "content": user_prompt},
-        ],
-        "temperature": 0.0,
-        "max_tokens": 512,
-    }
+    if is_ollama:
+        url = f"{api_base}/api/chat"
+        payload = {
+            "model": model,
+            "messages": messages,
+            "stream": False,
+            "options": {"temperature": 0.0, "num_predict": 512},
+        }
+    else:
+        url = f"{api_base}/chat/completions"
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.0,
+            "max_tokens": 512,
+        }
 
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -131,7 +170,11 @@ async def validate_semantic(
         response.raise_for_status()
 
         body = response.json()
-        raw_content = body["choices"][0]["message"]["content"]
+
+        if is_ollama:
+            raw_content = body.get("message", {}).get("content", "")
+        else:
+            raw_content = body["choices"][0]["message"]["content"]
 
         return _parse_llm_response(raw_content, config.min_score)
 

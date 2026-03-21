@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 import httpx
 import pytest
 
+from guardian.env import LLMEndpoint, LLMMode, reset_endpoint
 from guardian.optimizer.root_cause import FailurePattern, RootCauseReport
 from guardian.optimizer.suggestion import (
     Suggestion,
@@ -14,6 +15,16 @@ from guardian.optimizer.suggestion import (
     format_suggestion_report,
     generate_suggestions,
 )
+
+
+@pytest.fixture(autouse=True)
+def _mock_env():
+    reset_endpoint()
+    ep = LLMEndpoint(mode=LLMMode.FULL, api_base="https://api.example.com/v1",
+                     model="gpt-4o-mini", provider="openai")
+    with patch("guardian.env.probe_llm_environment", return_value=ep):
+        yield
+    reset_endpoint()
 
 
 # -- Helpers --
@@ -146,13 +157,14 @@ class TestGenerateSuggestions:
         mock_client.post.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_missing_api_key(self):
+    async def test_missing_api_key_degrades_to_rules(self):
+        """Missing API key should degrade to rule-based, not crash."""
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("GUARDIAN_LLM_API_KEY", None)
-            with pytest.raises(ValueError):
-                await generate_suggestions(
-                    _make_root_cause_report(), SAMPLE_CONFIG_YAML
-                )
+            report = await generate_suggestions(
+                _make_root_cause_report(), SAMPLE_CONFIG_YAML
+            )
+        assert "rule-based" in report.overall_strategy.lower()
 
     @pytest.mark.asyncio
     async def test_passes_config_in_prompt(self):

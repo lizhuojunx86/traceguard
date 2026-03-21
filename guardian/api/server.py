@@ -120,9 +120,18 @@ def drift_report(
 
 
 @app.get("/api/health")
-def health() -> dict:
-    """Health check endpoint."""
-    return {"status": "ok"}
+async def health() -> dict:
+    """Health check endpoint with LLM mode status."""
+    from guardian.env import LLMMode, probe_llm_environment
+
+    endpoint = await probe_llm_environment()
+    return {
+        "status": "ok",
+        "mode": endpoint.mode.value,
+        "semantic_available": endpoint.mode != LLMMode.DEGRADED,
+        "llm_provider": endpoint.provider,
+        "llm_model": endpoint.model,
+    }
 
 
 @app.get("/", response_class=HTMLResponse)

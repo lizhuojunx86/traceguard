@@ -1,6 +1,6 @@
 """Tests for Guardian node core logic."""
 import json
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
@@ -11,12 +11,29 @@ from guardian.core.config import (
     SemanticCheckConfig,
     StructuralCheckConfig,
 )
+from guardian.env import LLMEndpoint, LLMMode, reset_endpoint
 from guardian.core.guardian_node import (
     GuardianDecision,
     evaluate,
     evaluate_async,
 )
 from guardian.core.step import StepOutput
+
+
+@pytest.fixture(autouse=True)
+def _mock_env():
+    """Mock environment probe for all guardian node tests."""
+    reset_endpoint()
+    ep = LLMEndpoint(
+        mode=LLMMode.FULL, api_base="https://api.example.com/v1",
+        model="gpt-4o-mini", provider="openai",
+    )
+    with patch(
+        "guardian.validators.semantic.probe_llm_environment",
+        return_value=ep,
+    ):
+        yield
+    reset_endpoint()
 
 
 def _make_output(data: str | dict = "valid output data here") -> StepOutput:
