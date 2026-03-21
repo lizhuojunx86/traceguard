@@ -56,20 +56,27 @@ class Suggestion:
     """A single optimization suggestion.
 
     Attributes:
-        type: Category of the suggestion.
+        type: Category (prompt_change, structural_config, action_config, etc.).
         title: Short description.
-        current: Current value.
-        proposed: Proposed new value.
-        rationale: Why this change helps.
-        expected_impact: Expected improvement.
+        diagnosis: What the data shows (quantified).
+        root_cause_hypothesis: Why this is likely happening.
+        proposed: Recommended change.
+        expected_impact: What improvement to expect.
+        alternative: Optional alternative approach.
+        current: Current value (for backward compatibility).
+        rationale: Legacy field mapped to root_cause_hypothesis.
     """
 
     type: str
     title: str
-    current: str
-    proposed: str
-    rationale: str
-    expected_impact: str
+    diagnosis: str = ""
+    root_cause_hypothesis: str = ""
+    proposed: str = ""
+    expected_impact: str = ""
+    alternative: str = ""
+    # Backward-compatible fields
+    current: str = ""
+    rationale: str = ""
 
 
 @dataclass
@@ -141,47 +148,283 @@ def _rule_based_suggestions(
     root_report: RootCauseReport,
     current_retry_hint: str | None,
 ) -> list[Suggestion]:
-    """Generate rule-based suggestions when no LLM is available."""
+    """Generate pattern-specific diagnostic suggestions when no LLM is available.
+
+    Analyzes issue messages to classify failure modes and produce
+    actionable, targeted suggestions rather than generic advice.
+    """
     suggestions = []
     pattern = root_report.pattern
+    if not pattern.issue_counts:
+        return suggestions
 
-    # High failure rate → suggest increasing retries
-    if pattern.failure_rate > 0.3:
+    all_issues = list(pattern.issue_counts.items())
+    total_failed = pattern.failed_traces or 1
+
+    # Classify issues by failure mode
+    lang_issues = [(m, c) for m, c in all_issues if "language" in m.lower() or "language mismatch" in m.lower()]
+    short_issues = [(m, c) for m, c in all_issues if "too short" in m.lower()]
+    long_issues = [(m, c) for m, c in all_issues if "too long" in m.lower()]
+    field_issues = [(m, c) for m, c in all_issues if "missing" in m.lower() and "field" in m.lower()]
+    schema_issues = [(m, c) for m, c in all_issues if "schema" in m.lower()]
+    not_json_issues = [(m, c) for m, c in all_issues if "not a json" in m.lower() or "not valid json" in m.lower()]
+
+    matched = False
+
+    # -- Language mismatch diagnosis --
+    if lang_issues:
+        matched = True
+        total_lang = sum(c for _, c in lang_issues)
+        lang_rate = total_lang / total_failed
+
+        # Try to extract actual ratio from message like "only 28% of text matches"
+        avg_ratio = _extract_percentage_from_issues([m for m, _ in lang_issues])
+
+        if avg_ratio is not None and avg_ratio < 30:
+            severity = "severe"
+            hypothesis = (
+                "Upstream agent is embedding source-language text verbatim "
+                "(e.g. pasting English abstracts into a Chinese report) "
+                "rather than paraphrasing in the target language."
+            )
+            action = (
+                'Add to upstream prompt/SOUL: "All content MUST be written in '
+                '[target language]. Paraphrase all source material — do NOT '
+                'copy-paste text in other languages."'
+            )
+        else:
+            severity = "moderate"
+            hypothesis = (
+                "Agent output contains partial mixed-language content, "
+                "possibly from technical terms or insufficient translation."
+            )
+            action = (
+                'Add to upstream prompt: "Translate all content including '
+                'technical terms. Use target-language equivalents or provide '
+                'translations in parentheses."'
+            )
+
+        ratio_str = f"avg ratio={avg_ratio}%" if avg_ratio is not None else "below threshold"
+        suggestions.append(Suggestion(
+            type="prompt_change",
+            title=f"Language mixing detected in output ({severity})",
+            diagnosis=(
+                f"{total_lang}/{total_failed} failures are language mismatch "
+                f"({lang_rate:.0%} of failures, {ratio_str})"
+            ),
+            root_cause_hypothesis=hypothesis,
+            proposed=action,
+            expected_impact="Target-language ratio should increase significantly",
+            alternative=(
+                "If multilingual citations are intentional, adjust language "
+                "check threshold or disable for this step."
+            ),
+        ))
+
+    # -- Output too short diagnosis --
+    if short_issues:
+        matched = True
+        total_short = sum(c for _, c in short_issues)
+        short_rate = total_short / total_failed
+
+        # Extract actual lengths from messages like "Output too short: 45 chars (minimum: 100)"
+        lengths = _extract_lengths_from_issues([m for m, _ in short_issues])
+        if lengths and len(lengths) >= 2:
+            import statistics
+            mean_len = statistics.mean(lengths)
+            stdev_len = statistics.stdev(lengths) if len(lengths) > 1 else 0
+            is_systematic = stdev_len < mean_len * 0.3 if mean_len > 0 else True
+
+            if is_systematic:
+                suggestions.append(Suggestion(
+                    type="prompt_change",
+                    title="Systematic output length deficit",
+                    diagnosis=(
+                        f"{total_short}/{total_failed} failures are 'too short' "
+                        f"({short_rate:.0%}). Lengths cluster around {mean_len:.0f} chars "
+                        f"(stdev={stdev_len:.0f}) — systematic, not random."
+                    ),
+                    root_cause_hypothesis=(
+                        "Agent consistently produces output near but below the minimum. "
+                        "The upstream prompt likely lacks an explicit length requirement."
+                    ),
+                    proposed=(
+                        "Add to upstream prompt: explicit minimum word/character count. "
+                        'E.g. "Your response must be at least [N] characters. '
+                        'Verify length before submitting."'
+                    ),
+                    expected_impact="Shift output length distribution above minimum threshold",
+                ))
+            else:
+                suggestions.append(Suggestion(
+                    type="action_config",
+                    title="Inconsistent output length (high variance)",
+                    diagnosis=(
+                        f"{total_short}/{total_failed} failures are 'too short' "
+                        f"({short_rate:.0%}). Lengths vary widely (mean={mean_len:.0f}, "
+                        f"stdev={stdev_len:.0f}) — quality is unstable."
+                    ),
+                    root_cause_hypothesis=(
+                        "Agent output length varies significantly across inputs. "
+                        "Some inputs produce adequate length, others don't."
+                    ),
+                    proposed=(
+                        "Increase max_retries to allow recovery on short outputs. "
+                        "Also add format constraints to the upstream prompt."
+                    ),
+                    expected_impact="Reduce abort rate from length failures",
+                ))
+        else:
+            suggestions.append(Suggestion(
+                type="prompt_change",
+                title="Output too short",
+                diagnosis=f"{total_short}/{total_failed} failures are 'too short' ({short_rate:.0%})",
+                root_cause_hypothesis="Agent not producing enough content for this step.",
+                proposed="Add explicit minimum length requirement to upstream prompt.",
+                expected_impact="Reduce short-output failures",
+            ))
+
+    # -- Output too long diagnosis --
+    if long_issues:
+        matched = True
+        total_long = sum(c for _, c in long_issues)
+        suggestions.append(Suggestion(
+            type="prompt_change",
+            title="Output exceeds length limit",
+            diagnosis=f"{total_long}/{total_failed} failures are 'too long' ({total_long/total_failed:.0%})",
+            root_cause_hypothesis=(
+                "Agent is producing overly verbose output, possibly stuck in a "
+                "repetition loop or including unnecessary detail."
+            ),
+            proposed=(
+                "Add to upstream prompt: strict output length cap. "
+                '"Limit your response to [N] characters maximum. Be concise."'
+            ),
+            expected_impact="Eliminate over-length failures",
+        ))
+
+    # -- Missing fields diagnosis --
+    if field_issues:
+        matched = True
+        total_field = sum(c for _, c in field_issues)
+        field_names = _extract_field_names([m for m, _ in field_issues])
+        names_str = ", ".join(field_names) if field_names else "required fields"
+
+        suggestions.append(Suggestion(
+            type="prompt_change",
+            title="Agent omitting required output fields",
+            diagnosis=(
+                f"{total_field}/{total_failed} failures are missing-field errors "
+                f"({total_field/total_failed:.0%}). Missing: {names_str}"
+            ),
+            root_cause_hypothesis=(
+                "Upstream agent does not include all required fields in its JSON output. "
+                "The agent prompt may lack a clear output schema specification."
+            ),
+            proposed=(
+                f"Add to upstream prompt: explicit output schema with required fields "
+                f"({names_str}). Include a concrete example of the expected JSON structure."
+            ),
+            expected_impact="Reduce missing-field failures significantly",
+        ))
+
+    # -- JSON Schema violation --
+    if schema_issues:
+        matched = True
+        total_schema = sum(c for _, c in schema_issues)
+        suggestions.append(Suggestion(
+            type="prompt_change",
+            title="Output does not match JSON Schema",
+            diagnosis=f"{total_schema}/{total_failed} failures are schema violations ({total_schema/total_failed:.0%})",
+            root_cause_hypothesis=(
+                "Agent output structure doesn't match the expected schema. "
+                "Field types, nesting, or enum values may be wrong."
+            ),
+            proposed=(
+                "Include the exact JSON Schema (or a simplified version) in the "
+                "upstream prompt so the agent knows the expected structure."
+            ),
+            expected_impact="Reduce schema-related failures",
+        ))
+
+    # -- Not valid JSON --
+    if not_json_issues:
+        matched = True
+        total_nj = sum(c for _, c in not_json_issues)
+        suggestions.append(Suggestion(
+            type="prompt_change",
+            title="Agent output is not valid JSON",
+            diagnosis=f"{total_nj}/{total_failed} failures: output is not parseable JSON ({total_nj/total_failed:.0%})",
+            root_cause_hypothesis=(
+                "Agent is returning plain text, markdown, or malformed JSON "
+                "instead of a clean JSON object."
+            ),
+            proposed=(
+                'Add to upstream prompt: "Your response must be ONLY a valid JSON object. '
+                'Do not include markdown fences, explanatory text, or any content outside the JSON."'
+            ),
+            expected_impact="Eliminate JSON parse failures",
+        ))
+
+    # -- Generic fallback only if no specific pattern matched --
+    if not matched:
         suggestions.append(Suggestion(
             type="action_config",
-            title="High failure rate detected",
-            current=f"failure_rate={pattern.failure_rate:.0%}",
-            proposed="Consider increasing max_retries or relaxing structural thresholds",
-            rationale=f"Failure rate of {pattern.failure_rate:.0%} exceeds 30% threshold",
-            expected_impact="Reduce abort rate",
-        ))
-
-    # Missing-field issues → suggest retry_hint improvement
-    top_issues = list(pattern.issue_counts.items())[:3]
-    field_issues = [iss for iss, _ in top_issues if "missing" in iss.lower() or "required" in iss.lower()]
-    if field_issues:
-        suggestions.append(Suggestion(
-            type="retry_hint",
-            title="Retry hint may need field-specific guidance",
-            current=current_retry_hint or "(not set)",
-            proposed=f"Explicitly mention required fields: {'; '.join(field_issues)}",
-            rationale="Most common failures are missing-field errors",
-            expected_impact="Reduce field-related failures",
-        ))
-
-    # Length issues
-    length_issues = [iss for iss, _ in top_issues if "too short" in iss.lower() or "too long" in iss.lower()]
-    if length_issues:
-        suggestions.append(Suggestion(
-            type="structural_config",
-            title="Output length thresholds may need adjustment",
-            current="; ".join(length_issues),
-            proposed="Review min_length/max_length thresholds against actual output sizes",
-            rationale="Length violations are among the top failure causes",
-            expected_impact="Reduce length-related failures",
+            title="[generic fallback — no specific pattern detected]",
+            diagnosis=(
+                f"{pattern.failed_traces}/{pattern.total_traces} failures "
+                f"({pattern.failure_rate:.0%}). Top issues: "
+                + "; ".join(f'"{m}" ({c}x)' for m, c in all_issues[:3])
+            ),
+            root_cause_hypothesis="No recognized failure pattern could be matched to a specific diagnosis.",
+            proposed="Review the top issues manually and consider adjusting thresholds or retry hints.",
+            expected_impact="Depends on manual investigation",
         ))
 
     return suggestions
+
+
+def _extract_percentage_from_issues(messages: list[str]) -> int | None:
+    """Extract percentage values from language mismatch messages.
+
+    Looks for patterns like 'only 28% of text matches'.
+    Returns the average percentage, or None if not found.
+    """
+    import re
+
+    percentages = []
+    for msg in messages:
+        match = re.search(r"(\d+)%\s*of\s*text\s*matches", msg)
+        if match:
+            percentages.append(int(match.group(1)))
+    return round(sum(percentages) / len(percentages)) if percentages else None
+
+
+def _extract_lengths_from_issues(messages: list[str]) -> list[int]:
+    """Extract actual output lengths from 'too short' messages.
+
+    Looks for patterns like 'Output too short: 45 chars'.
+    """
+    import re
+
+    lengths = []
+    for msg in messages:
+        match = re.search(r"too short:\s*(\d+)\s*chars", msg, re.IGNORECASE)
+        if match:
+            lengths.append(int(match.group(1)))
+    return lengths
+
+
+def _extract_field_names(messages: list[str]) -> list[str]:
+    """Extract field names from 'Missing required field: X' messages."""
+    import re
+
+    names = set()
+    for msg in messages:
+        match = re.search(r"[Mm]issing\s+(?:required\s+)?field:\s*(\w+)", msg)
+        if match:
+            names.add(match.group(1))
+    return sorted(names)
 
 
 async def generate_suggestions(
@@ -318,11 +561,15 @@ def _parse_suggestions(raw: str) -> dict:
 def format_suggestion_report(report: SuggestionReport) -> str:
     """Format a SuggestionReport as human-readable text output.
 
+    Uses the enhanced format with Diagnosis / Root Cause / Recommended Change
+    when those fields are available, falls back to Current/Proposed for
+    backward compatibility.
+
     Args:
         report: The suggestion report to format.
 
     Returns:
-        Formatted string with diff-style current vs proposed comparisons.
+        Formatted string with diagnostic details.
     """
     lines: list[str] = []
     lines.append(f"{'=' * 60}")
@@ -344,15 +591,45 @@ def format_suggestion_report(report: SuggestionReport) -> str:
     for i, s in enumerate(report.suggestions, 1):
         lines.append(f"--- Suggestion {i}: {s.title} [{s.type}] ---")
         lines.append("")
-        lines.append(f"  Current:")
-        for cl in s.current.split("\n"):
-            lines.append(f"    - {cl}")
-        lines.append(f"  Proposed:")
-        for pl in s.proposed.split("\n"):
-            lines.append(f"    + {pl}")
-        lines.append("")
-        lines.append(f"  Rationale: {s.rationale}")
-        lines.append(f"  Expected Impact: {s.expected_impact}")
+
+        # Enhanced format (diagnosis-driven)
+        if s.diagnosis:
+            lines.append(f"  Diagnosis:")
+            for dl in s.diagnosis.split("\n"):
+                lines.append(f"    {dl}")
+            lines.append("")
+
+        if s.root_cause_hypothesis:
+            lines.append(f"  Root cause hypothesis:")
+            for rl in s.root_cause_hypothesis.split("\n"):
+                lines.append(f"    {rl}")
+            lines.append("")
+
+        if s.proposed:
+            lines.append(f"  Recommended change:")
+            for pl in s.proposed.split("\n"):
+                lines.append(f"    + {pl}")
+            lines.append("")
+
+        if s.expected_impact:
+            lines.append(f"  Expected impact: {s.expected_impact}")
+
+        if s.alternative:
+            lines.append(f"  Alternative: {s.alternative}")
+
+        # Backward-compatible fallback: show Current/Proposed if no diagnosis
+        if not s.diagnosis and s.current:
+            lines.append(f"  Current:")
+            for cl in s.current.split("\n"):
+                lines.append(f"    - {cl}")
+            lines.append(f"  Proposed:")
+            for pl in s.proposed.split("\n"):
+                lines.append(f"    + {pl}")
+            if s.rationale:
+                lines.append(f"  Rationale: {s.rationale}")
+            if s.expected_impact:
+                lines.append(f"  Expected Impact: {s.expected_impact}")
+
         lines.append("")
 
     if report.overall_strategy:
