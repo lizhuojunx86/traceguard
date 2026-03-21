@@ -1,15 +1,23 @@
 """Guardian node — core checkpoint logic.
 
 Receives a step output and guardian configuration, runs structural
-validation, and produces a decision: pass, retry, abort, alert, or passthrough.
+validation and (optionally) semantic evaluation, then produces a
+decision: pass, retry, abort, alert, or passthrough.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 from dataclasses import dataclass, field
+
+import httpx
 
 from guardian.core.config import GuardianConfig
 from guardian.core.step import StepOutput
+from guardian.validators.semantic import SemanticResult, validate_semantic
 from guardian.validators.structural import StructuralResult, validate_structural
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -21,12 +29,14 @@ class GuardianDecision:
         issues: List of human-readable issue descriptions.
         score: Quality score from 0.0 (all checks failed) to 1.0 (all passed).
         retry_hint: Optional hint message for retry attempts.
+        semantic_score: LLM-assigned semantic score (1-5), or None if not evaluated.
     """
 
     action: str
     issues: list[str] = field(default_factory=list)
     score: float = 1.0
     retry_hint: str | None = None
+    semantic_score: int | None = None
 
 
 def evaluate(
@@ -34,37 +44,155 @@ def evaluate(
     config: GuardianConfig,
     attempt: int = 1,
 ) -> GuardianDecision:
-    """Evaluate a step output against its guardian configuration.
+    """Evaluate a step output (sync wrapper).
+
+    Runs structural checks synchronously. If semantic evaluation is enabled,
+    runs it via asyncio.
 
     Args:
         output: The step output to evaluate.
         config: Guardian configuration for this step.
-        attempt: Current attempt number (1-based). Used to determine
-                 whether retries are exhausted.
+        attempt: Current attempt number (1-based).
 
     Returns:
         A GuardianDecision with the action to take.
     """
     structural_result = validate_structural(output, config.structural)
-    score = _compute_score(structural_result)
 
-    if structural_result.passed:
-        return GuardianDecision(action="pass", issues=[], score=score)
+    # If structural checks fail, don't bother with semantic evaluation
+    if not structural_result.passed:
+        score = _compute_score(structural_result, semantic_result=None)
+        action = _resolve_action(
+            config.actions.on_structural_fail, config, attempt
+        )
+        retry_hint = config.actions.retry_hint if action == "retry" else None
+        return GuardianDecision(
+            action=action,
+            issues=structural_result.issues,
+            score=score,
+            retry_hint=retry_hint,
+        )
 
-    action = _resolve_action(config, structural_result, attempt)
-    retry_hint = config.actions.retry_hint if action == "retry" else None
+    # Structural passed — run semantic if enabled
+    semantic_result = None
+    if config.semantic.enabled and config.semantic.criteria:
+        try:
+            semantic_result = asyncio.run(
+                validate_semantic(output, config.semantic)
+            )
+        except RuntimeError:
+            # Already in an async event loop — use the running loop
+            loop = asyncio.get_event_loop()
+            semantic_result = loop.run_until_complete(
+                validate_semantic(output, config.semantic)
+            )
+        except (ValueError, httpx.HTTPStatusError) as e:
+            logger.error("Semantic evaluation failed: %s", e)
+            semantic_result = SemanticResult(
+                passed=False,
+                score=1,
+                issues=[f"Semantic evaluation error: {e}"],
+            )
+
+    score = _compute_score(structural_result, semantic_result)
+
+    if semantic_result and not semantic_result.passed:
+        action = _resolve_action(
+            config.actions.on_semantic_low, config, attempt
+        )
+        retry_hint = config.actions.retry_hint if action == "retry" else None
+        all_issues = semantic_result.issues
+        return GuardianDecision(
+            action=action,
+            issues=all_issues,
+            score=score,
+            retry_hint=retry_hint,
+            semantic_score=semantic_result.score,
+        )
 
     return GuardianDecision(
-        action=action,
-        issues=structural_result.issues,
+        action="pass",
+        issues=[],
         score=score,
-        retry_hint=retry_hint,
+        semantic_score=semantic_result.score if semantic_result else None,
+    )
+
+
+async def evaluate_async(
+    output: StepOutput,
+    config: GuardianConfig,
+    attempt: int = 1,
+    http_client: httpx.AsyncClient | None = None,
+) -> GuardianDecision:
+    """Evaluate a step output (async version).
+
+    Preferred in async contexts. Runs structural checks synchronously
+    then awaits semantic evaluation if enabled.
+
+    Args:
+        output: The step output to evaluate.
+        config: Guardian configuration for this step.
+        attempt: Current attempt number (1-based).
+        http_client: Optional shared httpx client for LLM calls.
+
+    Returns:
+        A GuardianDecision with the action to take.
+    """
+    structural_result = validate_structural(output, config.structural)
+
+    if not structural_result.passed:
+        score = _compute_score(structural_result, semantic_result=None)
+        action = _resolve_action(
+            config.actions.on_structural_fail, config, attempt
+        )
+        retry_hint = config.actions.retry_hint if action == "retry" else None
+        return GuardianDecision(
+            action=action,
+            issues=structural_result.issues,
+            score=score,
+            retry_hint=retry_hint,
+        )
+
+    semantic_result = None
+    if config.semantic.enabled and config.semantic.criteria:
+        try:
+            semantic_result = await validate_semantic(
+                output, config.semantic, http_client=http_client
+            )
+        except (ValueError, httpx.HTTPStatusError) as e:
+            logger.error("Semantic evaluation failed: %s", e)
+            semantic_result = SemanticResult(
+                passed=False,
+                score=1,
+                issues=[f"Semantic evaluation error: {e}"],
+            )
+
+    score = _compute_score(structural_result, semantic_result)
+
+    if semantic_result and not semantic_result.passed:
+        action = _resolve_action(
+            config.actions.on_semantic_low, config, attempt
+        )
+        retry_hint = config.actions.retry_hint if action == "retry" else None
+        return GuardianDecision(
+            action=action,
+            issues=semantic_result.issues,
+            score=score,
+            retry_hint=retry_hint,
+            semantic_score=semantic_result.score,
+        )
+
+    return GuardianDecision(
+        action="pass",
+        issues=[],
+        score=score,
+        semantic_score=semantic_result.score if semantic_result else None,
     )
 
 
 def _resolve_action(
+    configured_action: str,
     config: GuardianConfig,
-    result: StructuralResult,
     attempt: int,
 ) -> str:
     """Determine the action to take based on config and attempt count.
@@ -72,25 +200,37 @@ def _resolve_action(
     If the configured action is 'retry' but max_retries has been reached,
     escalate to 'abort'.
     """
-    action = config.actions.on_structural_fail
-
-    if action == "retry" and attempt >= config.actions.max_retries:
+    if configured_action == "retry" and attempt >= config.actions.max_retries:
         return "abort"
+    return configured_action
 
-    return action
 
+def _compute_score(
+    structural: StructuralResult,
+    semantic_result: SemanticResult | None,
+) -> float:
+    """Compute a combined quality score.
 
-def _compute_score(result: StructuralResult) -> float:
-    """Compute a quality score based on structural validation results.
+    Structural score: 0.0-1.0 based on issue count.
+    Semantic score: normalized from 1-5 to 0.0-1.0.
+    Combined: weighted average (structural 40%, semantic 60%) when both present.
 
-    Returns 1.0 if all checks passed, otherwise a score inversely
-    proportional to the number of issues found.
+    Returns 1.0 if all checks passed with no semantic evaluation.
     """
-    if result.passed:
-        return 1.0
+    # Structural score
+    if structural.passed:
+        struct_score = 1.0
+    else:
+        issue_count = len(structural.issues)
+        penalty = min(issue_count, 5) / 5.0
+        struct_score = max(1.0 - penalty, 0.0)
 
-    issue_count = len(result.issues)
-    # Simple scoring: each issue reduces the score
-    # Cap at 5 issues for scoring purposes to avoid negative scores
-    penalty = min(issue_count, 5) / 5.0
-    return round(max(1.0 - penalty, 0.0), 2)
+    if semantic_result is None:
+        return round(struct_score, 2)
+
+    # Semantic score: normalize 1-5 to 0.0-1.0
+    sem_score = (semantic_result.score - 1) / 4.0
+
+    # Weighted combination
+    combined = struct_score * 0.4 + sem_score * 0.6
+    return round(combined, 2)

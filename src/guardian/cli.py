@@ -147,6 +147,8 @@ def check(
         "issues": decision.issues,
         "attempt": attempt,
     }
+    if decision.semantic_score is not None:
+        result["semantic_score"] = decision.semantic_score
     if decision.retry_hint:
         result["retry_hint"] = decision.retry_hint
 
