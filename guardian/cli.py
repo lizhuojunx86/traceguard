@@ -159,6 +159,27 @@ def check(
         sys.exit(2)
 
 
+@cli.command()
+@click.option("--host", default="127.0.0.1", help="Bind host.")
+@click.option("--port", default=8000, type=int, help="Bind port.")
+@click.option(
+    "--db",
+    default="sqlite:///traces.db",
+    help="Database URL. Default: sqlite:///traces.db",
+)
+def serve(host: str, port: int, db: str) -> None:
+    """Start the Guardian dashboard API server."""
+    import os
+
+    import uvicorn
+
+    os.environ.setdefault("GUARDIAN_DB_URL", db)
+    click.echo(f"Starting Guardian API on http://{host}:{port}")
+    click.echo(f"Database: {db}")
+    click.echo(f"Docs: http://{host}:{port}/docs")
+    uvicorn.run("guardian.api.server:app", host=host, port=port, log_level="info")
+
+
 def main() -> None:
     """Entry point for the guardian CLI."""
     cli()
