@@ -51,6 +51,14 @@ class SemanticCheckConfig(BaseModel):
         default=None,
         description="LLM model to use for semantic evaluation",
     )
+    api_base: str | None = Field(
+        default=None,
+        description="Base URL for OpenAI-compatible API endpoint",
+    )
+    api_key_env: str = Field(
+        default="GUARDIAN_LLM_API_KEY",
+        description="Environment variable name holding the API key",
+    )
     criteria: list[str] = Field(
         default_factory=list,
         description="Evaluation criteria for the LLM judge",
