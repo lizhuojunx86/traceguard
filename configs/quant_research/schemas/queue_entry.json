@@ -1,0 +1,17 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "QueueEntry",
+  "type": "object",
+  "required": ["paper_id", "title", "status"],
+  "properties": {
+    "paper_id":   { "type": "string", "minLength": 5 },
+    "title":      { "type": "string", "minLength": 10 },
+    "abstract":   { "type": "string" },
+    "status":     { "type": "string", "enum": ["pending_review"] },
+    "source":     { "type": "string" },
+    "url":        { "type": "string" },
+    "categories": { "type": "array", "items": { "type": "string" } },
+    "queued_at":  { "type": "string" }
+  },
+  "additionalProperties": true
+}
