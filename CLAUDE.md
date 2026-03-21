@@ -1,6 +1,9 @@
 # Pipeline Guardian — Self-Healing AI Workflow System
 
+> For the full process specification and architecture diagrams, see [docs/Pipeline_Guardian_Specification.html](docs/Pipeline_Guardian_Specification.html).
+
 ## Project Vision
+
 Pipeline Guardian is a **generic** quality assurance and self-optimization system for multi-agent LLM pipelines. It works with ANY pipeline where multiple AI agents execute sequentially, with each step's output feeding the next step's input.
 
 **Core principle**: Insert lightweight "Guardian" checkpoints between pipeline steps to validate, evaluate, score, and auto-correct outputs — transforming blind pipelines into self-healing systems.
@@ -27,55 +30,71 @@ Pipeline Guardian is a **generic** quality assurance and self-optimization syste
 
 ```
 pipeline-guardian/
-├── CLAUDE.md                    # This file
-├── README.md
-├── pyproject.toml               # Python package config (use uv or poetry)
-├── docker-compose.yml           # Guardian system containers
-├── src/
-│   └── guardian/
-│       ├── __init__.py
-│       ├── core/
-│       │   ├── __init__.py
-│       │   ├── pipeline.py      # Pipeline definition & loader
-│       │   ├── step.py          # Step abstraction
-│       │   ├── guardian_node.py # Guardian checkpoint logic
-│       │   └── config.py        # Configuration management
-│       ├── validators/
-│       │   ├── __init__.py
-│       │   ├── structural.py    # JSON schema / format validation
-│       │   ├── semantic.py      # LLM-as-Judge evaluation
-│       │   └── registry.py      # Validator plugin registry
-│       ├── actions/
-│       │   ├── __init__.py
-│       │   ├── retry.py         # Retry with corrective hints
-│       │   ├── alert.py         # Telegram / webhook alerts
-│       │   └── passthrough.py   # Log and continue
-│       ├── store/
-│       │   ├── __init__.py
-│       │   ├── models.py        # SQLAlchemy/dataclass models for eval_traces
-│       │   ├── writer.py        # Write eval results
-│       │   └── reader.py        # Query historical traces
-│       ├── optimizer/           # Phase 4: optimization engine (future)
-│       │   ├── __init__.py
-│       │   ├── drift_detector.py
-│       │   ├── root_cause.py
-│       │   └── suggestion.py
-│       └── api/
-│           ├── __init__.py
-│           └── server.py        # FastAPI endpoints for dashboard
-├── configs/
-│   └── examples/
-│       ├── market_intel.yaml    # Example: market intelligence pipeline
-│       └── quant_research.yaml  # Example: quantitative research pipeline
-├── tests/
+├── CLAUDE.md                        # This file
+├── pyproject.toml                   # Python package config (uv)
+├── guardian/                        # Main package (root-level, not src/)
 │   ├── __init__.py
+│   ├── cli.py                       # CLI entry point (check, suggest, serve)
+│   ├── core/
+│   │   ├── config.py                # Pydantic config models + YAML loader
+│   │   ├── step.py                  # StepOutput abstraction
+│   │   └── guardian_node.py         # Guardian checkpoint logic (sync + async)
+│   ├── validators/
+│   │   ├── structural.py            # JSON Schema, fields, length, language checks
+│   │   └── semantic.py              # LLM-as-Judge evaluation (OpenAI-compatible)
+│   ├── actions/
+│   │   └── alert.py                 # Telegram Bot API alerts
+│   ├── store/
+│   │   ├── models.py                # SQLAlchemy EvalTrace model
+│   │   ├── writer.py                # Write eval traces
+│   │   └── reader.py                # Query traces, stats, daily aggregations
+│   ├── optimizer/
+│   │   ├── drift_detector.py        # Quality drift detection (baseline vs recent)
+│   │   ├── root_cause.py            # LLM-powered root cause analysis
+│   │   └── suggestion.py            # Optimization suggestion engine
+│   └── api/
+│       ├── server.py                # FastAPI dashboard API
+│       └── dashboard.html           # Built-in single-page dashboard UI
+├── configs/
+│   ├── examples/
+│   │   ├── market_intel.yaml        # Example pipeline config
+│   │   └── schemas/                 # JSON Schema files for step outputs
+│   └── grafana/
+│       └── dashboard.json           # Grafana dashboard template
+├── scripts/
+│   └── seed_demo_data.py            # Generate demo traces for testing
+├── tests/                           # pytest test suite (180 tests)
+│   ├── test_config.py
+│   ├── test_step.py
 │   ├── test_structural.py
 │   ├── test_semantic.py
 │   ├── test_guardian_node.py
-│   └── test_pipeline.py
+│   ├── test_store.py
+│   ├── test_reader.py
+│   ├── test_alert.py
+│   ├── test_drift.py
+│   ├── test_root_cause.py
+│   ├── test_suggestion.py
+│   ├── test_server.py
+│   └── test_cli.py
 └── docs/
-    ├── architecture.md
-    └── configuration.md
+    └── Pipeline_Guardian_Specification.html  # Full process specification
+```
+
+## CLI Commands
+
+```bash
+# Run guardian check on a step output
+guardian check --pipeline config.yaml --step step_01 --input output.json --db sqlite:///traces.db
+
+# Run check with auto-start dashboard
+guardian check ... --db sqlite:///traces.db --serve
+
+# Start dashboard API server standalone
+guardian serve --db sqlite:///traces.db --port 8000
+
+# Generate optimization suggestions (human-in-the-loop)
+guardian suggest --pipeline config.yaml --step step_01 --db sqlite:///traces.db
 ```
 
 ## Pipeline Configuration Format (YAML)
@@ -85,52 +104,72 @@ pipeline:
   name: "example-pipeline"
   description: "A sample multi-agent pipeline"
   trigger: "cron"  # or "webhook", "manual"
-  
+
   steps:
     - name: "step_01_collect"
-      container: "collector:latest"  # Docker image
-      input_source: "trigger"        # or previous step name
-      
+      container: "collector:latest"
+      input_source: "trigger"
+
       guardian:
         structural:
-          schema: "schemas/step_01_output.json"  # JSON Schema file
+          schema: "schemas/step_01_output.json"
           required_fields: ["data", "timestamp", "source"]
           max_length: 50000
-          language: "en"  # expected language
-        
+          min_length: 100
+          language: "en"
+
         semantic:
           enabled: true
-          model: "minimax-m2.7"  # or any LLM
+          model: "gpt-4o-mini"
+          api_base: "https://api.openai.com/v1"  # any OpenAI-compatible endpoint
+          api_key_env: "GUARDIAN_LLM_API_KEY"
           criteria:
             - "Output contains structured market data"
             - "Data is from the correct date range"
           min_score: 3  # out of 5
-        
+
         actions:
-          on_structural_fail: "retry"  # retry | abort | alert | passthrough
-          on_semantic_low: "retry"
+          on_structural_fail: "retry"   # retry | abort | alert | passthrough
+          on_semantic_low: "alert"
           max_retries: 2
-          retry_hint: "Ensure output is valid JSON with required fields: {required_fields}"
+          retry_hint: "Ensure output is valid JSON with required fields."
           alert_channel: "telegram"
-    
-    - name: "step_02_analyze"
-      container: "analyzer:latest"
-      input_source: "step_01_collect"
-      guardian:
-        # ... similar config
 ```
+
+## API Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/` | Built-in dashboard UI |
+| GET | `/api/health` | Health check |
+| GET | `/api/pipelines` | List all pipelines with trace metadata |
+| GET | `/api/traces?pipeline=X&step=Y&days=7` | Query historical traces |
+| GET | `/api/stats?pipeline=X&step=Y` | Aggregated step statistics |
+| GET | `/api/drift?pipeline=X` | Drift detection report |
+| GET | `/docs` | Swagger API documentation |
 
 ## Tech Stack
 
 - **Language**: Python 3.11+
-- **Package manager**: uv (preferred) or poetry
-- **Database**: SQLite for MVP, TimescaleDB for production
-- **LLM calls**: httpx (direct API calls to OpenAI-compatible endpoints)
-- **Schema validation**: jsonschema or pydantic
-- **API**: FastAPI (for dashboard endpoints)
-- **Alerts**: Telegram Bot API, webhooks
-- **Container orchestration**: Docker Compose
-- **Testing**: pytest
+- **Package manager**: uv
+- **Database**: SQLite (MVP), TimescaleDB (production)
+- **LLM calls**: httpx (OpenAI-compatible endpoints)
+- **Config models**: Pydantic v2
+- **Schema validation**: jsonschema
+- **API**: FastAPI + uvicorn
+- **Dashboard**: Single-page HTML + Chart.js
+- **Alerts**: Telegram Bot API (via httpx async)
+- **CLI**: Click
+- **Testing**: pytest + pytest-asyncio (180 tests)
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `GUARDIAN_LLM_API_KEY` | API key for LLM calls (semantic eval, root cause, suggestions) |
+| `GUARDIAN_TELEGRAM_BOT_TOKEN` | Telegram bot token for alerts |
+| `GUARDIAN_TELEGRAM_CHAT_ID` | Telegram chat ID for alerts |
+| `GUARDIAN_DB_URL` | Database URL for the API server (default: `sqlite:///traces.db`) |
 
 ## Coding Standards
 
@@ -142,23 +181,15 @@ pipeline:
 - Log at INFO level for normal operations, DEBUG for troubleshooting
 - Test coverage target: 80%+
 
-## Current Phase: Phase 1 (MVP)
+## Implementation Status
 
-Focus: Structural validation + alerting for any configured pipeline.
-
-**In scope:**
-- Pipeline config loader (YAML → Python objects)
-- Guardian node with structural validation (JSON schema, field checks, length, language)
-- Eval trace storage (SQLite)
-- Telegram alert on failure
-- Auto-retry with corrective hints
-- CLI to run guardian checks on a pipeline step's output
-
-**Out of scope (future phases):**
-- LLM-as-Judge semantic evaluation (Phase 2)
-- Dashboard / Grafana integration (Phase 3)
-- Drift detection and optimization suggestions (Phase 4)
-- Auto-optimization loop (Phase 5)
+| Phase | Feature | Status |
+|-------|---------|--------|
+| 1 | Structural validation, alerting, CLI, eval trace storage | Done |
+| 2 | LLM-as-Judge semantic evaluation | Done |
+| 3 | Drift detection, FastAPI dashboard, Grafana template | Done |
+| 4 | Root cause analysis, optimization suggestions (human-in-the-loop) | Done |
+| 5 | Auto-optimization loop | Planned |
 
 ## Important Notes
 
@@ -166,3 +197,4 @@ Focus: Structural validation + alerting for any configured pipeline.
 - Guardian nodes must be stateless — all state lives in eval_store.
 - The system should work both as a standalone CLI tool AND as Docker middleware.
 - Prioritize reliability over features. A guardian that crashes is worse than no guardian.
+- The `suggest` command generates recommendations only — it never auto-applies changes.
