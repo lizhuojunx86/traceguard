@@ -137,6 +137,53 @@ Identified causes:
 Generate specific, actionable suggestions to reduce the failure rate."""
 
 
+def _rule_based_suggestions(
+    root_report: RootCauseReport,
+    current_retry_hint: str | None,
+) -> list[Suggestion]:
+    """Generate rule-based suggestions when no LLM is available."""
+    suggestions = []
+    pattern = root_report.pattern
+
+    # High failure rate → suggest increasing retries
+    if pattern.failure_rate > 0.3:
+        suggestions.append(Suggestion(
+            type="action_config",
+            title="High failure rate detected",
+            current=f"failure_rate={pattern.failure_rate:.0%}",
+            proposed="Consider increasing max_retries or relaxing structural thresholds",
+            rationale=f"Failure rate of {pattern.failure_rate:.0%} exceeds 30% threshold",
+            expected_impact="Reduce abort rate",
+        ))
+
+    # Missing-field issues → suggest retry_hint improvement
+    top_issues = list(pattern.issue_counts.items())[:3]
+    field_issues = [iss for iss, _ in top_issues if "missing" in iss.lower() or "required" in iss.lower()]
+    if field_issues:
+        suggestions.append(Suggestion(
+            type="retry_hint",
+            title="Retry hint may need field-specific guidance",
+            current=current_retry_hint or "(not set)",
+            proposed=f"Explicitly mention required fields: {'; '.join(field_issues)}",
+            rationale="Most common failures are missing-field errors",
+            expected_impact="Reduce field-related failures",
+        ))
+
+    # Length issues
+    length_issues = [iss for iss, _ in top_issues if "too short" in iss.lower() or "too long" in iss.lower()]
+    if length_issues:
+        suggestions.append(Suggestion(
+            type="structural_config",
+            title="Output length thresholds may need adjustment",
+            current="; ".join(length_issues),
+            proposed="Review min_length/max_length thresholds against actual output sizes",
+            rationale="Length violations are among the top failure causes",
+            expected_impact="Reduce length-related failures",
+        ))
+
+    return suggestions
+
+
 async def generate_suggestions(
     root_cause_report: RootCauseReport,
     guardian_config_yaml: str,
@@ -146,7 +193,10 @@ async def generate_suggestions(
     api_key_env: str = "GUARDIAN_LLM_API_KEY",
     http_client: httpx.AsyncClient | None = None,
 ) -> SuggestionReport:
-    """Generate optimization suggestions using an LLM.
+    """Generate optimization suggestions.
+
+    Uses LLM when available, falls back to rule-based suggestions
+    when no LLM is reachable (graceful degradation).
 
     Args:
         root_cause_report: Root cause analysis results.
@@ -159,10 +209,9 @@ async def generate_suggestions(
 
     Returns:
         SuggestionReport with optimization suggestions.
-
-    Raises:
-        ValueError: If API key is not set.
     """
+    from guardian.env import LLMMode, probe_llm_environment
+
     report = SuggestionReport(
         pipeline_name=root_cause_report.pipeline_name,
         step_name=root_cause_report.step_name,
@@ -173,15 +222,35 @@ async def generate_suggestions(
         report.overall_strategy = "No root causes identified — no suggestions to generate."
         return report
 
-    api_key = os.environ.get(api_key_env, "")
-    if not api_key:
-        raise ValueError(f"Environment variable '{api_key_env}' is not set")
+    # Environment-aware probe
+    endpoint = await probe_llm_environment(
+        config_api_base=api_base,
+        config_api_key_env=api_key_env,
+        config_model=model,
+        http_client=http_client,
+    )
 
-    base = (api_base or DEFAULT_API_BASE).rstrip("/")
-    url = f"{base}/chat/completions"
+    if endpoint.mode == LLMMode.DEGRADED:
+        report.suggestions = _rule_based_suggestions(root_cause_report, current_retry_hint)
+        report.overall_strategy = "LLM unavailable — rule-based suggestions only."
+        return report
 
+    # Resolve endpoint
+    actual_base = (endpoint.api_base or DEFAULT_API_BASE).rstrip("/")
+    actual_model = endpoint.model or model
+
+    if endpoint.mode == LLMMode.FULL:
+        api_key = os.environ.get(api_key_env, "")
+        if not api_key:
+            report.suggestions = _rule_based_suggestions(root_cause_report, current_retry_hint)
+            report.overall_strategy = "API key not set — rule-based suggestions only."
+            return report
+    else:
+        api_key = os.environ.get(api_key_env, "no-key-needed")
+
+    url = f"{actual_base}/chat/completions"
     payload = {
-        "model": model,
+        "model": actual_model,
         "messages": [
             {"role": "system", "content": SUGGESTION_SYSTEM_PROMPT},
             {
@@ -215,6 +284,14 @@ async def generate_suggestions(
             Suggestion(**s) for s in parsed.get("suggestions", [])
         ]
         report.overall_strategy = parsed.get("overall_strategy", "")
+
+    except (
+        httpx.HTTPStatusError, httpx.ProxyError, httpx.ConnectError,
+        httpx.ConnectTimeout, httpx.ReadTimeout, OSError,
+    ) as e:
+        logger.warning("Suggestion LLM call failed, falling back to rules: %s", e)
+        report.suggestions = _rule_based_suggestions(root_cause_report, current_retry_hint)
+        report.overall_strategy = "LLM call failed — rule-based suggestions only."
 
     finally:
         if should_close:

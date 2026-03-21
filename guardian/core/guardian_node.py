@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import ssl
 from dataclasses import dataclass, field
 
 import httpx
@@ -18,6 +19,18 @@ from guardian.validators.semantic import SemanticResult, validate_semantic
 from guardian.validators.structural import StructuralResult, validate_structural
 
 logger = logging.getLogger(__name__)
+
+# All network-related exceptions to catch for graceful degradation
+_NETWORK_ERRORS = (
+    ValueError,
+    httpx.HTTPStatusError,
+    httpx.ProxyError,
+    httpx.ConnectError,
+    httpx.ConnectTimeout,
+    httpx.ReadTimeout,
+    ssl.SSLError,
+    OSError,
+)
 
 
 @dataclass
@@ -30,6 +43,7 @@ class GuardianDecision:
         score: Quality score from 0.0 (all checks failed) to 1.0 (all passed).
         retry_hint: Optional hint message for retry attempts.
         semantic_score: LLM-assigned semantic score (1-5), or None if not evaluated.
+        semantic_status: Status of semantic evaluation ('evaluated', 'skipped ...', or None).
     """
 
     action: str
@@ -37,6 +51,7 @@ class GuardianDecision:
     score: float = 1.0
     retry_hint: str | None = None
     semantic_score: int | None = None
+    semantic_status: str | None = None
 
 
 def evaluate(
@@ -75,6 +90,7 @@ def evaluate(
 
     # Structural passed — run semantic if enabled
     semantic_result = None
+    semantic_status = None
     if config.semantic.enabled and config.semantic.criteria:
         try:
             semantic_result = asyncio.run(
@@ -86,13 +102,18 @@ def evaluate(
             semantic_result = loop.run_until_complete(
                 validate_semantic(output, config.semantic)
             )
-        except (ValueError, httpx.HTTPStatusError) as e:
-            logger.error("Semantic evaluation failed: %s", e)
-            semantic_result = SemanticResult(
-                passed=False,
-                score=1,
-                issues=[f"Semantic evaluation error: {e}"],
-            )
+        except _NETWORK_ERRORS as e:
+            logger.warning("Semantic evaluation skipped: %s", e)
+            semantic_result = None
+            semantic_status = f"skipped ({e})"
+
+    # Detect DEGRADED skip (validate_semantic returns pass with skip marker)
+    if semantic_result and semantic_result.raw_response.startswith("skipped:"):
+        semantic_status = "skipped (no LLM available)"
+        semantic_result = None  # treat as not evaluated for scoring
+
+    if semantic_result is not None and semantic_status is None:
+        semantic_status = "evaluated"
 
     score = _compute_score(structural_result, semantic_result)
 
@@ -101,13 +122,13 @@ def evaluate(
             config.actions.on_semantic_low, config, attempt
         )
         retry_hint = config.actions.retry_hint if action == "retry" else None
-        all_issues = semantic_result.issues
         return GuardianDecision(
             action=action,
-            issues=all_issues,
+            issues=semantic_result.issues,
             score=score,
             retry_hint=retry_hint,
             semantic_score=semantic_result.score,
+            semantic_status=semantic_status,
         )
 
     return GuardianDecision(
@@ -115,6 +136,7 @@ def evaluate(
         issues=[],
         score=score,
         semantic_score=semantic_result.score if semantic_result else None,
+        semantic_status=semantic_status,
     )
 
 
@@ -154,18 +176,23 @@ async def evaluate_async(
         )
 
     semantic_result = None
+    semantic_status = None
     if config.semantic.enabled and config.semantic.criteria:
         try:
             semantic_result = await validate_semantic(
                 output, config.semantic, http_client=http_client
             )
-        except (ValueError, httpx.HTTPStatusError) as e:
-            logger.error("Semantic evaluation failed: %s", e)
-            semantic_result = SemanticResult(
-                passed=False,
-                score=1,
-                issues=[f"Semantic evaluation error: {e}"],
-            )
+        except _NETWORK_ERRORS as e:
+            logger.warning("Semantic evaluation skipped: %s", e)
+            semantic_result = None
+            semantic_status = f"skipped ({e})"
+
+    if semantic_result and semantic_result.raw_response.startswith("skipped:"):
+        semantic_status = "skipped (no LLM available)"
+        semantic_result = None
+
+    if semantic_result is not None and semantic_status is None:
+        semantic_status = "evaluated"
 
     score = _compute_score(structural_result, semantic_result)
 
@@ -180,6 +207,7 @@ async def evaluate_async(
             score=score,
             retry_hint=retry_hint,
             semantic_score=semantic_result.score,
+            semantic_status=semantic_status,
         )
 
     return GuardianDecision(
@@ -187,6 +215,7 @@ async def evaluate_async(
         issues=[],
         score=score,
         semantic_score=semantic_result.score if semantic_result else None,
+        semantic_status=semantic_status,
     )
 
 

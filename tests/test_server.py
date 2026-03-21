@@ -10,7 +10,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from guardian.api.server import app
+from guardian.env import LLMEndpoint, LLMMode, reset_endpoint
 from guardian.store.models import Base, EvalTrace
+
+
+@pytest.fixture(autouse=True)
+def _mock_env():
+    reset_endpoint()
+    ep = LLMEndpoint(mode=LLMMode.DEGRADED, reason="test environment")
+    with patch("guardian.env.probe_llm_environment", return_value=ep):
+        yield
+    reset_endpoint()
 
 
 @pytest.fixture
@@ -70,7 +80,10 @@ class TestHealthEndpoint:
     def test_health(self, client):
         r = client.get("/api/health")
         assert r.status_code == 200
-        assert r.json() == {"status": "ok"}
+        data = r.json()
+        assert data["status"] == "ok"
+        assert "mode" in data
+        assert "semantic_available" in data
 
 
 class TestPipelinesEndpoint:

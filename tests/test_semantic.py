@@ -8,12 +8,31 @@ import pytest
 
 from guardian.core.config import SemanticCheckConfig
 from guardian.core.step import StepOutput
+from guardian.env import LLMEndpoint, LLMMode, reset_endpoint
 from guardian.validators.semantic import (
     SemanticResult,
     _build_user_prompt,
     _parse_llm_response,
     validate_semantic,
 )
+
+
+@pytest.fixture(autouse=True)
+def _mock_env_full():
+    """All semantic tests assume FULL mode with external API reachable."""
+    reset_endpoint()
+    ep = LLMEndpoint(
+        mode=LLMMode.FULL,
+        api_base="https://api.example.com/v1",
+        model="gpt-4o-mini",
+        provider="openai",
+    )
+    with patch(
+        "guardian.validators.semantic.probe_llm_environment",
+        return_value=ep,
+    ):
+        yield
+    reset_endpoint()
 
 
 # -- Helpers --
@@ -220,8 +239,18 @@ class TestValidateSemantic:
             model="claude-3-haiku",
             api_base="https://custom.api.com/v1/",
         )
-        with patch.dict(os.environ, {"GUARDIAN_LLM_API_KEY": "key-123"}):
-            await validate_semantic(_make_output(), config, http_client=mock_client)
+        ep = LLMEndpoint(
+            mode=LLMMode.FULL,
+            api_base="https://custom.api.com/v1",
+            model="claude-3-haiku",
+            provider="openai-compatible",
+        )
+        with patch(
+            "guardian.validators.semantic.probe_llm_environment",
+            return_value=ep,
+        ):
+            with patch.dict(os.environ, {"GUARDIAN_LLM_API_KEY": "key-123"}):
+                await validate_semantic(_make_output(), config, http_client=mock_client)
 
         call_args = mock_client.post.call_args
         assert call_args[0][0] == "https://custom.api.com/v1/chat/completions"

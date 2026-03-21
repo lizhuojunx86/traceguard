@@ -178,6 +178,12 @@ def check(
             except (ValueError, Exception) as e:
                 logger.warning("Failed to send Telegram alert: %s", e)
 
+    # Print environment status to stderr
+    from guardian.env import get_cached_endpoint, print_status
+    cached = get_cached_endpoint()
+    if cached:
+        print_status(cached)
+
     # Output result as JSON
     result = {
         "pipeline": config.name,
@@ -189,6 +195,8 @@ def check(
     }
     if decision.semantic_score is not None:
         result["semantic_score"] = decision.semantic_score
+    if decision.semantic_status is not None:
+        result["semantic"] = decision.semantic_status
     if decision.retry_hint:
         result["retry_hint"] = decision.retry_hint
 
@@ -278,14 +286,15 @@ def suggest(
 
     # Step 2: Root cause analysis
     click.echo("\nRunning root cause analysis...")
-    try:
-        root_report = asyncio.run(
-            analyze_root_causes(pattern, model=model, api_base=api_base)
-        )
-    except ValueError as e:
-        click.echo(f"Error: {e}", err=True)
-        click.echo("Set GUARDIAN_LLM_API_KEY environment variable to use this feature.", err=True)
-        sys.exit(1)
+    root_report = asyncio.run(
+        analyze_root_causes(pattern, model=model, api_base=api_base)
+    )
+
+    # Print environment status
+    from guardian.env import get_cached_endpoint, print_status
+    cached = get_cached_endpoint()
+    if cached:
+        print_status(cached)
 
     if root_report.root_causes:
         click.echo(f"Identified {len(root_report.root_causes)} root cause(s):")
