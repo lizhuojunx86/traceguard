@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pipeline Guardian — Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root { --bg: #0f1117; --card: #1a1d2e; --border: #2a2d3e; --text: #e1e4ed; --dim: #8b8fa3; --green: #22c55e; --red: #ef4444; --yellow: #eab308; --blue: #3b82f6; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .header { padding: 20px 32px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 16px; }
+  .header h1 { font-size: 20px; font-weight: 600; }
+  .header .badge { font-size: 11px; background: var(--blue); color: #fff; padding: 2px 8px; border-radius: 10px; }
+  .controls { padding: 16px 32px; display: flex; gap: 12px; align-items: center; }
+  .controls select, .controls button { background: var(--card); color: var(--text); border: 1px solid var(--border); padding: 8px 14px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+  .controls button:hover { border-color: var(--blue); }
+  .grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; padding: 0 32px 16px; }
+  .stat-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+  .stat-card .label { font-size: 12px; color: var(--dim); text-transform: uppercase; letter-spacing: 0.5px; }
+  .stat-card .value { font-size: 28px; font-weight: 700; margin-top: 4px; }
+  .stat-card .value.green { color: var(--green); }
+  .stat-card .value.red { color: var(--red); }
+  .stat-card .value.yellow { color: var(--yellow); }
+  .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 0 32px 16px; }
+  .chart-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; }
+  .chart-card h3 { font-size: 14px; margin-bottom: 12px; color: var(--dim); }
+  .chart-card canvas { max-height: 260px; }
+  .full-width { grid-column: 1 / -1; }
+  .table-wrap { padding: 0 32px 32px; }
+  .table-card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 20px; overflow-x: auto; }
+  .table-card h3 { font-size: 14px; margin-bottom: 12px; color: var(--dim); }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--dim); font-weight: 500; }
+  td { padding: 8px 12px; border-bottom: 1px solid var(--border); }
+  .badge-pass { color: var(--green); }
+  .badge-fail { color: var(--red); }
+  .badge-retry { color: var(--yellow); }
+  .drift-banner { margin: 0 32px 16px; padding: 14px 20px; border-radius: 10px; font-size: 13px; }
+  .drift-banner.ok { background: #0f2e1a; border: 1px solid #166534; color: var(--green); }
+  .drift-banner.warn { background: #2e1a0f; border: 1px solid #9a3412; color: var(--red); }
+  .drift-details { margin: 0 32px 16px; display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 12px; }
+  .drift-step { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 16px; font-size: 13px; }
+  .drift-step .step-name { font-weight: 600; margin-bottom: 6px; }
+  .drift-step .trend { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+  .trend-stable { background: #1a2e1a; color: var(--green); }
+  .trend-degrading { background: #2e1a1a; color: var(--red); }
+  .trend-improving { background: #1a1a2e; color: var(--blue); }
+  .signal { color: var(--dim); margin-top: 4px; }
+  .loading { color: var(--dim); padding: 40px; text-align: center; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>Pipeline Guardian</h1>
+  <span class="badge">Dashboard</span>
+</div>
+
+<div class="controls">
+  <select id="pipelineSelect"><option value="">Loading...</option></select>
+  <select id="daysSelect">
+    <option value="7">Last 7 days</option>
+    <option value="14">Last 14 days</option>
+    <option value="30" selected>Last 30 days</option>
+  </select>
+  <button onclick="refresh()">Refresh</button>
+</div>
+
+<div id="stats" class="grid"></div>
+<div id="driftBanner"></div>
+<div id="driftDetails" class="drift-details"></div>
+<div class="charts">
+  <div class="chart-card"><h3>Score Over Time</h3><canvas id="scoreChart"></canvas></div>
+  <div class="chart-card"><h3>Action Distribution</h3><canvas id="actionChart"></canvas></div>
+</div>
+<div class="table-wrap">
+  <div class="table-card">
+    <h3>Recent Traces</h3>
+    <table><thead><tr><th>Time</th><th>Step</th><th>Action</th><th>Score</th><th>Issues</th></tr></thead><tbody id="traceBody"></tbody></table>
+  </div>
+</div>
+
+<script>
+const API = window.location.origin + '/api';
+let scoreChart = null, actionChart = null;
+
+async function fetchJSON(url) {
+  const r = await fetch(url);
+  return r.json();
+}
+
+async function loadPipelines() {
+  const sel = document.getElementById('pipelineSelect');
+  const data = await fetchJSON(`${API}/pipelines`);
+  sel.innerHTML = data.map(p => `<option value="${p.pipeline_name}">${p.pipeline_name} (${p.trace_count} traces)</option>`).join('');
+  sel.onchange = refresh;
+  if (data.length) refresh();
+}
+
+function getPipeline() { return document.getElementById('pipelineSelect').value; }
+function getDays() { return document.getElementById('daysSelect').value; }
+
+async function refresh() {
+  const pipe = getPipeline();
+  const days = getDays();
+  if (!pipe) return;
+  await Promise.all([loadStats(pipe, days), loadDrift(pipe, days), loadCharts(pipe, days), loadTraces(pipe, days)]);
+}
+
+async function loadStats(pipe, days) {
+  const traces = await fetchJSON(`${API}/traces?pipeline=${pipe}&days=${days}&limit=10000`);
+  const total = traces.length;
+  const passed = traces.filter(t => t.passed).length;
+  const passRate = total ? (passed / total * 100).toFixed(1) : 0;
+  const avgScore = total ? (traces.reduce((s, t) => s + t.score, 0) / total).toFixed(3) : 0;
+  const steps = new Set(traces.map(t => t.step_name)).size;
+
+  document.getElementById('stats').innerHTML = `
+    <div class="stat-card"><div class="label">Total Traces</div><div class="value">${total}</div></div>
+    <div class="stat-card"><div class="label">Pass Rate</div><div class="value ${passRate >= 80 ? 'green' : passRate >= 50 ? 'yellow' : 'red'}">${passRate}%</div></div>
+    <div class="stat-card"><div class="label">Avg Score</div><div class="value ${avgScore >= 0.8 ? 'green' : avgScore >= 0.5 ? 'yellow' : 'red'}">${avgScore}</div></div>
+    <div class="stat-card"><div class="label">Steps Monitored</div><div class="value">${steps}</div></div>
+  `;
+}
+
+async function loadDrift(pipe, days) {
+  const data = await fetchJSON(`${API}/drift?pipeline=${pipe}&baseline_days=${days}`);
+  const banner = document.getElementById('driftBanner');
+  const details = document.getElementById('driftDetails');
+
+  if (data.has_drift) {
+    banner.className = 'drift-banner warn';
+    banner.innerHTML = `⚠️ ${data.summary}`;
+  } else {
+    banner.className = 'drift-banner ok';
+    banner.innerHTML = `✅ ${data.summary}`;
+  }
+
+  details.innerHTML = data.steps.map(s => `
+    <div class="drift-step">
+      <div class="step-name">${s.step_name} <span class="trend trend-${s.trend}">${s.trend}</span></div>
+      ${s.baseline_avg_score !== null ? `<div class="signal">Score: ${s.baseline_avg_score?.toFixed(3)} → ${s.recent_avg_score?.toFixed(3)}</div>` : ''}
+      ${s.baseline_pass_rate !== null ? `<div class="signal">Pass rate: ${(s.baseline_pass_rate*100)?.toFixed(1)}% → ${(s.recent_pass_rate*100)?.toFixed(1)}%</div>` : ''}
+      ${s.signals.map(sig => `<div class="signal">• ${sig}</div>`).join('')}
+    </div>
+  `).join('');
+}
+
+async function loadCharts(pipe, days) {
+  const traces = await fetchJSON(`${API}/traces?pipeline=${pipe}&days=${days}&limit=10000`);
+
+  // Score over time — group by date
+  const byDate = {};
+  traces.forEach(t => {
+    const d = t.created_at?.substring(0, 10);
+    if (!d) return;
+    if (!byDate[d]) byDate[d] = [];
+    byDate[d].push(t.score);
+  });
+  const dates = Object.keys(byDate).sort();
+  const avgScores = dates.map(d => byDate[d].reduce((a,b) => a+b, 0) / byDate[d].length);
+
+  if (scoreChart) scoreChart.destroy();
+  scoreChart = new Chart(document.getElementById('scoreChart'), {
+    type: 'line',
+    data: {
+      labels: dates,
+      datasets: [{ label: 'Avg Score', data: avgScores, borderColor: '#3b82f6', backgroundColor: 'rgba(59,130,246,0.1)', fill: true, tension: 0.3, pointRadius: 3 }]
+    },
+    options: {
+      responsive: true, scales: { y: { min: 0, max: 1, ticks: { color: '#8b8fa3' }, grid: { color: '#2a2d3e' } }, x: { ticks: { color: '#8b8fa3', maxRotation: 45 }, grid: { display: false } } },
+      plugins: { legend: { display: false } }
+    }
+  });
+
+  // Action distribution
+  const actions = {};
+  traces.forEach(t => { actions[t.action] = (actions[t.action] || 0) + 1; });
+  const actionColors = { pass: '#22c55e', retry: '#eab308', abort: '#ef4444', alert: '#f97316', passthrough: '#8b8fa3' };
+
+  if (actionChart) actionChart.destroy();
+  actionChart = new Chart(document.getElementById('actionChart'), {
+    type: 'doughnut',
+    data: {
+      labels: Object.keys(actions),
+      datasets: [{ data: Object.values(actions), backgroundColor: Object.keys(actions).map(a => actionColors[a] || '#6366f1') }]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'right', labels: { color: '#e1e4ed', padding: 12 } } }
+    }
+  });
+}
+
+async function loadTraces(pipe, days) {
+  const traces = await fetchJSON(`${API}/traces?pipeline=${pipe}&days=${days}&limit=30`);
+  const cls = a => a === 'pass' ? 'badge-pass' : a === 'retry' ? 'badge-retry' : 'badge-fail';
+  document.getElementById('traceBody').innerHTML = traces.map(t => `
+    <tr>
+      <td>${t.created_at?.substring(0, 19).replace('T', ' ')}</td>
+      <td>${t.step_name}</td>
+      <td class="${cls(t.action)}">${t.action}</td>
+      <td>${t.score?.toFixed(2)}</td>
+      <td>${t.issues?.length ? t.issues.join('; ') : '—'}</td>
+    </tr>
+  `).join('');
+}
+
+document.getElementById('daysSelect').onchange = refresh;
+loadPipelines();
+</script>
+</body>
+</html>

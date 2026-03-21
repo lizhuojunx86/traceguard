@@ -8,6 +8,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import multiprocessing
+import os
+import socket
 import sys
 
 import click
@@ -17,6 +20,20 @@ from guardian.core.config import load_pipeline
 from guardian.core.guardian_node import evaluate
 from guardian.core.step import load_step_output
 from guardian.store.writer import TraceWriter
+
+
+def _is_port_in_use(host: str, port: int) -> bool:
+    """Check if a TCP port is already listening."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex((host, port)) == 0
+
+
+def _start_dashboard_bg(host: str, port: int, db: str) -> None:
+    """Start the dashboard API server in a background process."""
+    import uvicorn
+
+    os.environ["GUARDIAN_DB_URL"] = db
+    uvicorn.run("guardian.api.server:app", host=host, port=port, log_level="warning")
 
 
 @click.group()
@@ -61,12 +78,21 @@ def cli(verbose: bool) -> None:
     type=str,
     help="SQLite database URL for storing traces. E.g. sqlite:///traces.db",
 )
+@click.option(
+    "--serve",
+    is_flag=True,
+    default=False,
+    help="Auto-start the dashboard server alongside the check.",
+)
+@click.option("--serve-port", default=8000, type=int, help="Dashboard port (used with --serve).")
 def check(
     pipeline: str,
     step: str,
     input_file: str,
     attempt: int,
     db: str | None,
+    serve: bool,
+    serve_port: int,
 ) -> None:
     """Run Guardian checks on a step's output.
 
@@ -74,6 +100,20 @@ def check(
     output, writes the eval trace, and outputs the result as JSON.
     """
     logger = logging.getLogger("guardian.cli")
+
+    # Auto-start dashboard if requested and not already running
+    if serve and db:
+        host = "127.0.0.1"
+        if not _is_port_in_use(host, serve_port):
+            proc = multiprocessing.Process(
+                target=_start_dashboard_bg,
+                args=(host, serve_port, db),
+                daemon=True,
+            )
+            proc.start()
+            logger.info("Dashboard started at http://%s:%d", host, serve_port)
+        else:
+            logger.debug("Dashboard already running on port %d", serve_port)
 
     # Load pipeline config
     config = load_pipeline(pipeline)

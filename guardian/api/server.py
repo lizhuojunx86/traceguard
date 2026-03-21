@@ -6,9 +6,11 @@ and drift detection results.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 
 from guardian.optimizer.drift_detector import detect_drift
 from guardian.store.reader import TraceReader
@@ -121,3 +123,10 @@ def drift_report(
 def health() -> dict:
     """Health check endpoint."""
     return {"status": "ok"}
+
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard() -> str:
+    """Serve the built-in dashboard UI."""
+    html_path = Path(__file__).parent / "dashboard.html"
+    return html_path.read_text(encoding="utf-8")
