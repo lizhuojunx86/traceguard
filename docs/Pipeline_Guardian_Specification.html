@@ -1,0 +1,1035 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pipeline Guardian — Product Specification</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;1,9..40,400&family=DM+Mono:wght@400;500&family=Noto+Sans+SC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --font-body: 'DM Sans', 'Noto Sans SC', sans-serif;
+  --font-mono: 'DM Mono', monospace;
+  --bg-primary: #ffffff;
+  --bg-secondary: #f5f4f0;
+  --bg-tertiary: #eae8e1;
+  --text-primary: #1a1a18;
+  --text-secondary: #6b6a65;
+  --text-tertiary: #9c9a92;
+  --border-color: rgba(0,0,0,0.1);
+  --border-strong: rgba(0,0,0,0.2);
+  --accent: #0F6E56;
+  --accent-bg: #E1F5EE;
+  --accent-text: #085041;
+  --info: #185FA5;
+  --info-bg: #E6F1FB;
+  --info-text: #0C447C;
+  --warn: #854F0B;
+  --warn-bg: #FAEEDA;
+  --warn-text: #633806;
+  --danger: #A32D2D;
+  --danger-bg: #FCEBEB;
+  --danger-text: #791F1F;
+  --success: #3B6D11;
+  --success-bg: #EAF3DE;
+  --success-text: #27500A;
+  --purple-50: #EEEDFE; --purple-100: #CECBF6; --purple-200: #AFA9EC; --purple-400: #7F77DD; --purple-600: #534AB7; --purple-800: #3C3489;
+  --teal-50: #E1F5EE; --teal-100: #9FE1CB; --teal-200: #5DCAA5; --teal-400: #1D9E75; --teal-600: #0F6E56; --teal-800: #085041;
+  --coral-50: #FAECE7; --coral-100: #F5C4B3; --coral-200: #F0997B; --coral-400: #D85A30; --coral-600: #993C1D; --coral-800: #712B13;
+  --blue-50: #E6F1FB; --blue-100: #B5D4F4; --blue-200: #85B7EB; --blue-400: #378ADD; --blue-600: #185FA5; --blue-800: #0C447C;
+  --green-50: #EAF3DE; --green-100: #C0DD97; --green-400: #639922; --green-600: #3B6D11; --green-800: #27500A;
+  --red-50: #FCEBEB; --red-100: #F7C1C1; --red-200: #F09595; --red-400: #E24B4A; --red-600: #A32D2D; --red-800: #791F1F;
+  --amber-50: #FAEEDA; --amber-400: #BA7517; --amber-600: #854F0B; --amber-800: #633806;
+  --gray-50: #F1EFE8; --gray-100: #D3D1C7; --gray-200: #B4B2A9; --gray-400: #888780; --gray-600: #5F5E5A; --gray-800: #444441;
+  --radius: 8px;
+  --radius-lg: 12px;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg-primary: #1a1a18;
+    --bg-secondary: #252523;
+    --bg-tertiary: #2c2c2a;
+    --text-primary: #e8e6df;
+    --text-secondary: #9c9a92;
+    --text-tertiary: #6b6a65;
+    --border-color: rgba(255,255,255,0.1);
+    --border-strong: rgba(255,255,255,0.2);
+    --accent-bg: #0a3d2e;
+    --accent-text: #9FE1CB;
+    --info-bg: #0a2d4e;
+    --info-text: #B5D4F4;
+    --warn-bg: #3d2a05;
+    --warn-text: #FAC775;
+    --danger-bg: #3d1212;
+    --danger-text: #F7C1C1;
+    --success-bg: #1a3508;
+    --success-text: #C0DD97;
+  }
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html { scroll-behavior: smooth; }
+body {
+  font-family: var(--font-body);
+  background: var(--bg-tertiary);
+  color: var(--text-primary);
+  line-height: 1.7;
+  font-size: 15px;
+  -webkit-font-smoothing: antialiased;
+}
+.page {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 0 24px;
+}
+
+/* Navigation */
+.nav {
+  position: sticky; top: 0; z-index: 100;
+  background: var(--bg-primary);
+  border-bottom: 0.5px solid var(--border-color);
+  padding: 12px 0;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+.nav-inner {
+  max-width: 820px; margin: 0 auto; padding: 0 24px;
+  display: flex; align-items: center; gap: 24px;
+  overflow-x: auto; white-space: nowrap;
+  scrollbar-width: none;
+}
+.nav-inner::-webkit-scrollbar { display: none; }
+.nav-brand {
+  font-size: 14px; font-weight: 700; color: var(--accent);
+  letter-spacing: -0.5px; flex-shrink: 0;
+}
+.nav-link {
+  font-size: 12px; color: var(--text-secondary);
+  text-decoration: none; flex-shrink: 0;
+  transition: color 0.2s;
+}
+.nav-link:hover { color: var(--text-primary); }
+
+/* Hero */
+.hero {
+  padding: 80px 0 48px;
+  text-align: center;
+}
+.hero h1 {
+  font-size: 36px; font-weight: 700;
+  letter-spacing: -1.5px;
+  line-height: 1.2;
+  margin-bottom: 16px;
+}
+.hero .subtitle {
+  font-size: 17px; color: var(--text-secondary);
+  max-width: 560px; margin: 0 auto;
+  line-height: 1.6;
+}
+.hero .version-badge {
+  display: inline-block;
+  font-size: 12px; font-weight: 500;
+  padding: 4px 14px; border-radius: 20px;
+  background: var(--accent-bg); color: var(--accent-text);
+  margin-top: 20px;
+}
+
+/* Sections */
+.section {
+  padding: 56px 0 32px;
+}
+.section-label {
+  font-size: 11px; font-weight: 700;
+  text-transform: uppercase; letter-spacing: 1.5px;
+  color: var(--accent); margin-bottom: 8px;
+}
+.section h2 {
+  font-size: 26px; font-weight: 700;
+  letter-spacing: -0.8px; line-height: 1.3;
+  margin-bottom: 16px;
+}
+.section h3 {
+  font-size: 18px; font-weight: 700;
+  letter-spacing: -0.3px;
+  margin: 32px 0 12px;
+}
+.section p, .section li {
+  color: var(--text-primary);
+  margin-bottom: 12px;
+}
+.section ul { padding-left: 20px; margin-bottom: 16px; }
+.section li { margin-bottom: 6px; }
+
+/* Cards */
+.card {
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  margin: 20px 0;
+}
+.card-dark {
+  background: var(--bg-secondary);
+  border: none;
+}
+
+/* SVG diagram container */
+.diagram-wrap {
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  margin: 24px 0;
+  overflow: hidden;
+}
+.diagram-wrap svg {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+.diagram-wrap svg text { font-family: var(--font-body); }
+.diagram-wrap svg text.th { font-size: 14px; font-weight: 500; fill: var(--text-primary); }
+.diagram-wrap svg text.ts { font-size: 12px; font-weight: 400; fill: var(--text-secondary); }
+.diagram-wrap svg text.t  { font-size: 14px; font-weight: 400; fill: var(--text-primary); }
+.diagram-wrap svg .arr { stroke: var(--text-secondary); stroke-width: 1.5; }
+.diagram-wrap svg .leader { stroke: var(--text-tertiary); stroke-width: 0.5; stroke-dasharray: 3 3; }
+
+/* SVG color classes */
+.diagram-wrap svg .c-gray > rect, .diagram-wrap svg rect.c-gray { fill: var(--gray-50); stroke: var(--gray-600); }
+.diagram-wrap svg .c-gray text.th { fill: var(--gray-800); }
+.diagram-wrap svg .c-gray text.ts { fill: var(--gray-600); }
+
+.diagram-wrap svg .c-blue > rect, .diagram-wrap svg rect.c-blue { fill: var(--blue-50); stroke: var(--blue-600); }
+.diagram-wrap svg .c-blue text.th { fill: var(--blue-800); }
+.diagram-wrap svg .c-blue text.ts { fill: var(--blue-600); }
+
+.diagram-wrap svg .c-teal > rect, .diagram-wrap svg rect.c-teal { fill: var(--teal-50); stroke: var(--teal-600); }
+.diagram-wrap svg .c-teal text.th { fill: var(--teal-800); }
+.diagram-wrap svg .c-teal text.ts { fill: var(--teal-600); }
+
+.diagram-wrap svg .c-purple > rect, .diagram-wrap svg rect.c-purple { fill: var(--purple-50); stroke: var(--purple-600); }
+.diagram-wrap svg .c-purple text.th { fill: var(--purple-800); }
+.diagram-wrap svg .c-purple text.ts { fill: var(--purple-600); }
+
+.diagram-wrap svg .c-coral > rect, .diagram-wrap svg rect.c-coral { fill: var(--coral-50); stroke: var(--coral-600); }
+.diagram-wrap svg .c-coral text.th { fill: var(--coral-800); }
+.diagram-wrap svg .c-coral text.ts { fill: var(--coral-600); }
+
+.diagram-wrap svg .c-green > rect, .diagram-wrap svg rect.c-green { fill: var(--green-50); stroke: var(--green-600); }
+.diagram-wrap svg .c-green text.th { fill: var(--green-800); }
+.diagram-wrap svg .c-green text.ts { fill: var(--green-600); }
+
+.diagram-wrap svg .c-red > rect, .diagram-wrap svg rect.c-red { fill: var(--red-50); stroke: var(--red-600); }
+.diagram-wrap svg .c-red text.th { fill: var(--red-800); }
+.diagram-wrap svg .c-red text.ts { fill: var(--red-600); }
+
+.diagram-wrap svg .c-amber > rect, .diagram-wrap svg rect.c-amber { fill: var(--amber-50); stroke: var(--amber-600); }
+
+@media (prefers-color-scheme: dark) {
+  .diagram-wrap svg .c-gray > rect, .diagram-wrap svg rect.c-gray { fill: var(--gray-800); stroke: var(--gray-200); }
+  .diagram-wrap svg .c-gray text.th { fill: var(--gray-100); }
+  .diagram-wrap svg .c-gray text.ts { fill: var(--gray-200); }
+  .diagram-wrap svg .c-blue > rect, .diagram-wrap svg rect.c-blue { fill: var(--blue-800); stroke: var(--blue-200); }
+  .diagram-wrap svg .c-blue text.th { fill: #E6F1FB; }
+  .diagram-wrap svg .c-blue text.ts { fill: var(--blue-200); }
+  .diagram-wrap svg .c-teal > rect, .diagram-wrap svg rect.c-teal { fill: var(--teal-800); stroke: var(--teal-200); }
+  .diagram-wrap svg .c-teal text.th { fill: #E1F5EE; }
+  .diagram-wrap svg .c-teal text.ts { fill: var(--teal-200); }
+  .diagram-wrap svg .c-purple > rect, .diagram-wrap svg rect.c-purple { fill: var(--purple-800); stroke: var(--purple-200); }
+  .diagram-wrap svg .c-purple text.th { fill: #EEEDFE; }
+  .diagram-wrap svg .c-purple text.ts { fill: var(--purple-200); }
+  .diagram-wrap svg .c-coral > rect, .diagram-wrap svg rect.c-coral { fill: var(--coral-800); stroke: var(--coral-200); }
+  .diagram-wrap svg .c-coral text.th { fill: #FAECE7; }
+  .diagram-wrap svg .c-coral text.ts { fill: var(--coral-200); }
+  .diagram-wrap svg .c-green > rect, .diagram-wrap svg rect.c-green { fill: var(--green-800); stroke: var(--green-100); }
+  .diagram-wrap svg .c-green text.th { fill: #EAF3DE; }
+  .diagram-wrap svg .c-green text.ts { fill: var(--green-100); }
+  .diagram-wrap svg .c-red > rect, .diagram-wrap svg rect.c-red { fill: var(--red-800); stroke: var(--red-200); }
+  .diagram-wrap svg .c-red text.th { fill: #FCEBEB; }
+  .diagram-wrap svg .c-red text.ts { fill: var(--red-200); }
+  .diagram-wrap svg .c-amber > rect, .diagram-wrap svg rect.c-amber { fill: var(--amber-800); stroke: #FAC775; }
+}
+
+/* Widget container */
+.widget-wrap {
+  background: var(--bg-primary);
+  border: 0.5px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  margin: 24px 0;
+  overflow: hidden;
+}
+
+/* Inline code */
+code {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: var(--bg-secondary);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+pre {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  background: var(--bg-secondary);
+  padding: 16px;
+  border-radius: var(--radius);
+  overflow-x: auto;
+  margin: 12px 0;
+  line-height: 1.7;
+}
+
+/* Divider */
+.divider {
+  height: 0.5px;
+  background: var(--border-color);
+  margin: 48px 0;
+}
+
+/* Footer */
+.footer {
+  text-align: center;
+  padding: 48px 0;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+
+/* Shared widget styles */
+.w-btn {
+  padding: 6px 14px;
+  border-radius: var(--radius);
+  font-size: 13px;
+  cursor: pointer;
+  border: 0.5px solid var(--border-strong);
+  background: transparent;
+  color: var(--text-primary);
+  font-family: var(--font-body);
+  transition: background 0.2s;
+}
+.w-btn:hover { background: var(--bg-secondary); }
+.w-btn:active { transform: scale(0.98); }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <div class="nav-inner">
+    <span class="nav-brand">Pipeline Guardian</span>
+    <a class="nav-link" href="#overview">Overview</a>
+    <a class="nav-link" href="#loop">6-Step loop</a>
+    <a class="nav-link" href="#step1">1. Analyze</a>
+    <a class="nav-link" href="#step2">2. Quantify</a>
+    <a class="nav-link" href="#step3">3. Propose</a>
+    <a class="nav-link" href="#step4">4. Implement</a>
+    <a class="nav-link" href="#step5">5. Backtest</a>
+    <a class="nav-link" href="#step6">6. Output</a>
+  </div>
+</nav>
+
+<div class="page">
+
+<!-- HERO -->
+<div class="hero">
+  <h1>Pipeline Guardian</h1>
+  <div class="subtitle">Self-healing quality assurance for multi-agent LLM pipelines. Validate every step, detect deviations, and auto-optimize — turning blind pipelines into self-correcting systems.</div>
+  <div class="version-badge">Product Specification v1.0 — March 2026</div>
+</div>
+
+<!-- ============================================================ -->
+<!-- OVERVIEW -->
+<!-- ============================================================ -->
+<div class="section" id="overview">
+  <div class="section-label">Core value</div>
+  <h2>Without vs with quality gates</h2>
+  <p>上图展示了核心价值主张：从"盲跑"到"每步校验"。在没有 Guardian 的情况下，中间步骤的格式偏差和内容缺失会静默传播，直到最终产出出现明显问题时才被察觉。Pipeline Guardian 在每两个 agent 之间插入轻量的质量闸门（Guardian 节点），实现结构校验、语义评估和自动重试。</p>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 680 360" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a1" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+      <text class="th" x="340" y="24" text-anchor="middle">Without quality gates</text>
+      <text class="ts" x="340" y="42" text-anchor="middle">Failures propagate silently through the pipeline</text>
+      <g class="c-gray"><rect x="40" y="62" width="110" height="50" rx="8" stroke-width="0.5"/><text class="th" x="95" y="80" text-anchor="middle" dominant-baseline="central">Agent 01</text><text class="ts" x="95" y="96" text-anchor="middle" dominant-baseline="central">Collect</text></g>
+      <g class="c-gray"><rect x="196" y="62" width="110" height="50" rx="8" stroke-width="0.5"/><text class="th" x="251" y="80" text-anchor="middle" dominant-baseline="central">Agent 02</text><text class="ts" x="251" y="96" text-anchor="middle" dominant-baseline="central">Analyze</text></g>
+      <g class="c-gray"><rect x="352" y="62" width="110" height="50" rx="8" stroke-width="0.5"/><text class="th" x="407" y="80" text-anchor="middle" dominant-baseline="central">Agent 03</text><text class="ts" x="407" y="96" text-anchor="middle" dominant-baseline="central">Generate</text></g>
+      <g class="c-red"><rect x="528" y="62" width="110" height="50" rx="8" stroke-width="0.5"/><text class="th" x="583" y="80" text-anchor="middle" dominant-baseline="central">Output</text><text class="ts" x="583" y="96" text-anchor="middle" dominant-baseline="central">Degraded</text></g>
+      <line x1="150" y1="87" x2="196" y2="87" class="arr" marker-end="url(#a1)"/>
+      <line x1="306" y1="87" x2="352" y2="87" class="arr" marker-end="url(#a1)"/>
+      <line x1="462" y1="87" x2="528" y2="87" class="arr" marker-end="url(#a1)"/>
+      <circle cx="173" cy="70" r="9" fill="#F09595"/><text x="173" y="70" text-anchor="middle" dominant-baseline="central" fill="#791F1F" style="font-size:11px;font-weight:500">!</text>
+      <circle cx="329" cy="70" r="9" fill="#F09595"/><text x="329" y="70" text-anchor="middle" dominant-baseline="central" fill="#791F1F" style="font-size:11px;font-weight:500">!</text>
+      <line class="leader" x1="173" y1="79" x2="173" y2="130"/><text class="ts" x="173" y="144" text-anchor="middle" fill="#A32D2D">Format drift</text>
+      <line class="leader" x1="329" y1="79" x2="329" y2="130"/><text class="ts" x="329" y="144" text-anchor="middle" fill="#A32D2D">Content miss</text>
+      <path d="M528 130 L583 118" stroke="#A32D2D" stroke-width="0.5" stroke-dasharray="3 3" fill="none"/>
+      <text class="ts" x="583" y="144" text-anchor="middle" fill="#A32D2D">Discovered too late</text>
+      <line x1="60" y1="175" x2="620" y2="175" stroke="var(--border-color)" stroke-width="0.5" stroke-dasharray="4 4"/>
+      <text class="th" x="340" y="200" text-anchor="middle">With Pipeline Guardian</text>
+      <text class="ts" x="340" y="218" text-anchor="middle">Every step is validated, scored, and auto-corrected</text>
+      <g class="c-gray"><rect x="40" y="238" width="100" height="50" rx="8" stroke-width="0.5"/><text class="th" x="90" y="256" text-anchor="middle" dominant-baseline="central">Agent 01</text><text class="ts" x="90" y="272" text-anchor="middle" dominant-baseline="central">Collect</text></g>
+      <g class="c-gray"><rect x="200" y="238" width="100" height="50" rx="8" stroke-width="0.5"/><text class="th" x="250" y="256" text-anchor="middle" dominant-baseline="central">Agent 02</text><text class="ts" x="250" y="272" text-anchor="middle" dominant-baseline="central">Analyze</text></g>
+      <g class="c-gray"><rect x="360" y="238" width="100" height="50" rx="8" stroke-width="0.5"/><text class="th" x="410" y="256" text-anchor="middle" dominant-baseline="central">Agent 03</text><text class="ts" x="410" y="272" text-anchor="middle" dominant-baseline="central">Generate</text></g>
+      <g class="c-green"><rect x="540" y="238" width="100" height="50" rx="8" stroke-width="0.5"/><text class="th" x="590" y="256" text-anchor="middle" dominant-baseline="central">Output</text><text class="ts" x="590" y="272" text-anchor="middle" dominant-baseline="central">Validated</text></g>
+      <g class="c-teal"><rect x="148" y="249" width="44" height="28" rx="6" stroke-width="0.5"/><text class="ts" x="170" y="263" text-anchor="middle" dominant-baseline="central">G1</text></g>
+      <g class="c-teal"><rect x="308" y="249" width="44" height="28" rx="6" stroke-width="0.5"/><text class="ts" x="330" y="263" text-anchor="middle" dominant-baseline="central">G2</text></g>
+      <g class="c-teal"><rect x="468" y="249" width="44" height="28" rx="6" stroke-width="0.5"/><text class="ts" x="490" y="263" text-anchor="middle" dominant-baseline="central">G3</text></g>
+      <line x1="140" y1="263" x2="148" y2="263" class="arr" marker-end="url(#a1)"/>
+      <line x1="192" y1="263" x2="200" y2="263" class="arr" marker-end="url(#a1)"/>
+      <line x1="300" y1="263" x2="308" y2="263" class="arr" marker-end="url(#a1)"/>
+      <line x1="352" y1="263" x2="360" y2="263" class="arr" marker-end="url(#a1)"/>
+      <line x1="460" y1="263" x2="468" y2="263" class="arr" marker-end="url(#a1)"/>
+      <line x1="512" y1="263" x2="540" y2="263" class="arr" marker-end="url(#a1)"/>
+      <text class="ts" x="170" y="296" text-anchor="middle">Validate</text>
+      <text class="ts" x="330" y="296" text-anchor="middle">Evaluate</text>
+      <text class="ts" x="490" y="296" text-anchor="middle">Score</text>
+      <path d="M160 249 C160 234,130 234,130 249 L130 263" fill="none" stroke="#0F6E56" stroke-width="0.5" marker-end="url(#a1)" opacity="0.6"/>
+      <text class="ts" x="128" y="232" text-anchor="middle" fill="#0F6E56">Retry</text>
+      <path d="M320 249 C320 234,290 234,290 249 L290 263" fill="none" stroke="#0F6E56" stroke-width="0.5" marker-end="url(#a1)" opacity="0.6"/>
+      <text class="ts" x="288" y="232" text-anchor="middle" fill="#0F6E56">Retry</text>
+      <text class="ts" x="340" y="336" text-anchor="middle">Each Guardian: structural check → semantic eval → auto-retry or alert</text>
+    </svg>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+<!-- ============================================================ -->
+<!-- 6-STEP LOOP -->
+<!-- ============================================================ -->
+<div class="section" id="loop">
+  <div class="section-label">System architecture</div>
+  <h2>The 6-step self-optimization loop</h2>
+  <p>Pipeline Guardian 的核心工作机制是一个闭环自优化系统：分析偏差 → 量化测试 → 提出改造 → 实施改造 → 回测验证 → 输出新工作流。当回测未达标时，系统会从 Step 5 循环回到 Step 2，直到达成目标或触发熔断。</p>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 680 520" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+      <g class="c-gray"><rect x="180" y="16" width="280" height="36" rx="18" stroke-width="0.5"/><text class="th" x="320" y="34" text-anchor="middle" dominant-baseline="central">Input: any multi-agent workflow</text></g>
+      <line x1="320" y1="52" x2="320" y2="72" class="arr" marker-end="url(#a2)"/>
+      <g class="c-blue"><rect x="140" y="72" width="320" height="52" rx="8" stroke-width="0.5"/><text class="th" x="170" y="92" dominant-baseline="central">1. Analyze deviation risks</text><text class="ts" x="170" y="110" dominant-baseline="central">Parse workflow, identify fragile points</text></g>
+      <line x1="320" y1="124" x2="320" y2="144" class="arr" marker-end="url(#a2)"/>
+      <g class="c-blue"><rect x="140" y="144" width="320" height="52" rx="8" stroke-width="0.5"/><text class="th" x="170" y="164" dominant-baseline="central">2. Run test cases</text><text class="ts" x="170" y="182" dominant-baseline="central">Measure deviation with real data</text></g>
+      <line x1="320" y1="196" x2="320" y2="216" class="arr" marker-end="url(#a2)"/>
+      <g class="c-purple"><rect x="140" y="216" width="320" height="52" rx="8" stroke-width="0.5"/><text class="th" x="170" y="236" dominant-baseline="central">3. Propose improvements</text><text class="ts" x="170" y="254" dominant-baseline="central">Generate optimization plan</text></g>
+      <line x1="320" y1="268" x2="320" y2="288" class="arr" marker-end="url(#a2)"/>
+      <g class="c-purple"><rect x="140" y="288" width="320" height="52" rx="8" stroke-width="0.5"/><text class="th" x="170" y="308" dominant-baseline="central">4. Implement changes</text><text class="ts" x="170" y="326" dominant-baseline="central">Apply prompt/config modifications</text></g>
+      <line x1="320" y1="340" x2="320" y2="360" class="arr" marker-end="url(#a2)"/>
+      <g class="c-teal"><rect x="140" y="360" width="320" height="52" rx="8" stroke-width="0.5"/><text class="th" x="170" y="380" dominant-baseline="central">5. Backtest &amp; validate</text><text class="ts" x="170" y="398" dominant-baseline="central">Compare against quality targets</text></g>
+      <path d="M460,386 L510,386 L510,170 L460,170" fill="none" stroke="#0F6E56" stroke-width="1" marker-end="url(#a2)"/>
+      <g class="c-coral"><rect x="516" y="260" width="100" height="36" rx="6" stroke-width="0.5"/><text class="th" x="566" y="272" text-anchor="middle" dominant-baseline="central">Iterate</text><text class="ts" x="566" y="288" text-anchor="middle" dominant-baseline="central">If not met</text></g>
+      <line x1="320" y1="412" x2="320" y2="432" class="arr" marker-end="url(#a2)"/>
+      <text class="ts" x="305" y="427" text-anchor="end" fill="#085041">Pass</text>
+      <g class="c-green"><rect x="140" y="432" width="320" height="52" rx="8" stroke-width="0.5"/><text class="th" x="170" y="452" dominant-baseline="central">6. Output new workflow</text><text class="ts" x="170" y="470" dominant-baseline="central">Deploy optimized version</text></g>
+      <text class="ts" x="120" y="134" text-anchor="end" fill="var(--blue-800)">Diagnosis</text>
+      <line x1="126" y1="80" x2="126" y2="190" stroke="var(--blue-200)" stroke-width="0.5"/>
+      <text class="ts" x="120" y="278" text-anchor="end" fill="var(--purple-800)">Treatment</text>
+      <line x1="126" y1="224" x2="126" y2="334" stroke="var(--purple-200)" stroke-width="0.5"/>
+      <text class="ts" x="120" y="400" text-anchor="end" fill="var(--teal-800)">Validation</text>
+      <line x1="126" y1="368" x2="126" y2="478" stroke="var(--teal-200)" stroke-width="0.5"/>
+      <text class="ts" x="320" y="504" text-anchor="middle">Optimized workflow ready for production</text>
+    </svg>
+  </div>
+</div>
+
+<div class="divider"></div>
+
+</div><!-- .page -->
+
+<!-- ============================================================ -->
+<!-- STEP 1: ANALYZE -->
+<!-- ============================================================ -->
+<div class="page">
+<div class="section" id="step1">
+  <div class="section-label">Step 1</div>
+  <h2>Analyze deviation risks in a workflow</h2>
+  <p>偏差分析是整个 Pipeline Guardian 的"诊断"起点。它的工作机制分为两个阶段：</p>
+  <h3>阶段一：静态解析</h3>
+  <p>Guardian 读取你的 YAML 配置文件，提取每个步骤的输入输出合约——包括期望的 JSON Schema、必需字段、输出长度范围、目标语言等。这一步完全不需要运行 pipeline，纯粹从配置中推断出每个"接缝"处可能出错的方式。比如 <code>market_02</code> 的输出需要包含 <code>leads</code> 数组，但 LLM 有时候会输出一个纯文本段落而非 JSON——这就是一个"格式风险"。</p>
+  <h3>阶段二：风险分类扫描</h3>
+  <p>系统对每个步骤间的交接点扫描五类偏差风险：</p>
+  <ul>
+    <li><strong>格式风险</strong>——输出不是合法 JSON、字段名拼写错误、嵌套结构不符合 schema。这是串联 pipeline 中最常见的崩溃原因。</li>
+    <li><strong>语义连贯风险</strong>——上一步给了美股数据，下一步却开始分析港股。输入和输出之间的语义断裂。</li>
+    <li><strong>输出漂移风险</strong>——同一个 prompt 在不同运行间产出结构不一致。第一天输出 5 个字段，第二天输出 3 个。这是 LLM 的固有不确定性。</li>
+    <li><strong>边界风险</strong>——输出被截断（达到 token 上限）或异常膨胀（LLM 进入重复循环），导致下游解析失败。</li>
+    <li><strong>语言风险</strong>——在中文 pipeline 中混入英文段落，或在多语言环境下语言标签不一致。</li>
+  </ul>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 680 580" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+      <g class="c-gray"><rect x="220" y="20" width="240" height="44" rx="8" stroke-width="0.5"/><text class="th" x="340" y="42" text-anchor="middle" dominant-baseline="central">Workflow config (YAML)</text></g>
+      <line x1="340" y1="64" x2="340" y2="94" class="arr" marker-end="url(#a3)"/>
+      <g class="c-blue"><rect x="160" y="94" width="360" height="56" rx="8" stroke-width="0.5"/><text class="th" x="180" y="114" dominant-baseline="central">Parse workflow structure</text><text class="ts" x="180" y="134" dominant-baseline="central">Extract steps, schemas, data contracts</text></g>
+      <line x1="340" y1="150" x2="340" y2="180" class="arr" marker-end="url(#a3)"/>
+      <g class="c-teal"><rect x="40" y="180" width="600" height="240" rx="16" stroke-width="0.5"/><text class="th" x="340" y="204" text-anchor="middle">Risk scanner — 5 deviation categories</text></g>
+      <g class="c-coral"><rect x="64" y="224" width="168" height="56" rx="8" stroke-width="0.5"/><text class="th" x="148" y="244" text-anchor="middle" dominant-baseline="central">Format risk</text><text class="ts" x="148" y="264" text-anchor="middle" dominant-baseline="central">Schema violations</text></g>
+      <g class="c-coral"><rect x="256" y="224" width="168" height="56" rx="8" stroke-width="0.5"/><text class="th" x="340" y="244" text-anchor="middle" dominant-baseline="central">Coherence risk</text><text class="ts" x="340" y="264" text-anchor="middle" dominant-baseline="central">Semantic mismatch</text></g>
+      <g class="c-coral"><rect x="448" y="224" width="168" height="56" rx="8" stroke-width="0.5"/><text class="th" x="532" y="244" text-anchor="middle" dominant-baseline="central">Drift risk</text><text class="ts" x="532" y="264" text-anchor="middle" dominant-baseline="central">Output instability</text></g>
+      <g class="c-coral"><rect x="112" y="308" width="168" height="56" rx="8" stroke-width="0.5"/><text class="th" x="196" y="328" text-anchor="middle" dominant-baseline="central">Boundary risk</text><text class="ts" x="196" y="348" text-anchor="middle" dominant-baseline="central">Truncation, overflow</text></g>
+      <g class="c-coral"><rect x="400" y="308" width="168" height="56" rx="8" stroke-width="0.5"/><text class="th" x="484" y="328" text-anchor="middle" dominant-baseline="central">Language risk</text><text class="ts" x="484" y="348" text-anchor="middle" dominant-baseline="central">Mixed languages</text></g>
+      <text class="ts" x="340" y="404" text-anchor="middle">Each risk is scored per step</text>
+      <line x1="340" y1="420" x2="340" y2="448" class="arr" marker-end="url(#a3)"/>
+      <g class="c-purple"><rect x="140" y="448" width="400" height="56" rx="8" stroke-width="0.5"/><text class="th" x="160" y="468" dominant-baseline="central">Risk map</text><text class="ts" x="160" y="488" dominant-baseline="central">Per-step risk profile with severity scores</text></g>
+      <text class="ts" x="340" y="530" text-anchor="middle">This map drives test case generation (step 2)</text>
+      <text class="ts" x="340" y="548" text-anchor="middle">and determines where Guardian nodes are inserted</text>
+    </svg>
+  </div>
+
+  <p>扫描完成后，系统为每个步骤生成一个<strong>风险图谱（Risk Map）</strong>：哪些风险类别存在、严重程度如何（高/中/低）、建议的校验策略是什么。这个 Risk Map 直接驱动下一步——系统根据风险等级决定为每个步骤配置什么样的 Guardian 检查规则，以及优先生成哪些测试用例来量化偏差。</p>
+</div>
+
+<div class="divider"></div>
+
+<!-- ============================================================ -->
+<!-- STEP 2: QUANTIFY -->
+<!-- ============================================================ -->
+<div class="section" id="step2">
+  <div class="section-label">Step 2</div>
+  <h2>Quantify deviations with test cases</h2>
+  <p>这一步是把"可能出问题"变成"用数据证明哪里出了问题、出了多少"。</p>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 680 640" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a4" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+      <g class="c-purple"><rect x="220" y="16" width="240" height="40" rx="8" stroke-width="0.5"/><text class="th" x="340" y="36" text-anchor="middle" dominant-baseline="central">Risk map (from step 1)</text></g>
+      <line x1="340" y1="56" x2="340" y2="80" class="arr" marker-end="url(#a4)"/>
+      <g class="c-teal"><rect x="40" y="80" width="600" height="110" rx="14" stroke-width="0.5"/><text class="th" x="340" y="104" text-anchor="middle">Test case assembly</text></g>
+      <g class="c-gray"><rect x="64" y="118" width="168" height="50" rx="8" stroke-width="0.5"/><text class="th" x="148" y="136" text-anchor="middle" dominant-baseline="central">Historical replay</text><text class="ts" x="148" y="154" text-anchor="middle" dominant-baseline="central">Past pipeline runs</text></g>
+      <g class="c-gray"><rect x="256" y="118" width="168" height="50" rx="8" stroke-width="0.5"/><text class="th" x="340" y="136" text-anchor="middle" dominant-baseline="central">Synthetic cases</text><text class="ts" x="340" y="154" text-anchor="middle" dominant-baseline="central">LLM-generated edges</text></g>
+      <g class="c-gray"><rect x="448" y="118" width="168" height="50" rx="8" stroke-width="0.5"/><text class="th" x="532" y="136" text-anchor="middle" dominant-baseline="central">Golden samples</text><text class="ts" x="532" y="154" text-anchor="middle" dominant-baseline="central">Hand-curated pairs</text></g>
+      <line x1="340" y1="190" x2="340" y2="218" class="arr" marker-end="url(#a4)"/>
+      <g class="c-blue"><rect x="120" y="218" width="440" height="52" rx="8" stroke-width="0.5"/><text class="th" x="140" y="238" dominant-baseline="central">Isolated step runner</text><text class="ts" x="140" y="258" dominant-baseline="central">Execute each step independently with test inputs</text></g>
+      <line x1="340" y1="270" x2="340" y2="298" class="arr" marker-end="url(#a4)"/>
+      <g class="c-teal"><rect x="40" y="298" width="600" height="130" rx="14" stroke-width="0.5"/><text class="th" x="340" y="322" text-anchor="middle">Three-layer scoring</text></g>
+      <g class="c-coral"><rect x="64" y="338" width="168" height="68" rx="8" stroke-width="0.5"/><text class="th" x="148" y="358" text-anchor="middle" dominant-baseline="central">Structural score</text><text class="ts" x="148" y="376" text-anchor="middle" dominant-baseline="central">Schema pass rate</text><text class="ts" x="148" y="392" text-anchor="middle" dominant-baseline="central">Field completeness</text></g>
+      <g class="c-coral"><rect x="256" y="338" width="168" height="68" rx="8" stroke-width="0.5"/><text class="th" x="340" y="358" text-anchor="middle" dominant-baseline="central">Semantic score</text><text class="ts" x="340" y="376" text-anchor="middle" dominant-baseline="central">LLM-as-Judge</text><text class="ts" x="340" y="392" text-anchor="middle" dominant-baseline="central">Relevance, quality</text></g>
+      <g class="c-coral"><rect x="448" y="338" width="168" height="68" rx="8" stroke-width="0.5"/><text class="th" x="532" y="358" text-anchor="middle" dominant-baseline="central">Stability score</text><text class="ts" x="532" y="376" text-anchor="middle" dominant-baseline="central">Cross-run variance</text><text class="ts" x="532" y="392" text-anchor="middle" dominant-baseline="central">Output consistency</text></g>
+      <line x1="340" y1="428" x2="340" y2="456" class="arr" marker-end="url(#a4)"/>
+      <g class="c-purple"><rect x="100" y="456" width="480" height="52" rx="8" stroke-width="0.5"/><text class="th" x="120" y="476" dominant-baseline="central">Deviation report</text><text class="ts" x="120" y="496" dominant-baseline="central">Per-step scores, failure rates, worst-case samples</text></g>
+      <line x1="340" y1="508" x2="340" y2="536" class="arr" marker-end="url(#a4)"/>
+      <g class="c-green"><rect x="180" y="536" width="320" height="40" rx="8" stroke-width="0.5"/><text class="th" x="340" y="556" text-anchor="middle" dominant-baseline="central">Stored in eval_store (baseline)</text></g>
+      <text class="ts" x="340" y="600" text-anchor="middle">This baseline is what step 5 (backtest) compares against</text>
+      <text class="ts" x="340" y="618" text-anchor="middle">to determine if improvements actually worked</text>
+    </svg>
+  </div>
+
+  <h3>测试用例从哪里来</h3>
+  <p><strong>历史回放</strong>是最有价值的来源。你的 pipeline 每天通过 cron 触发，每次运行都会被 Guardian 记录在 <code>eval_store</code> 里。积累一周后，系统就拥有了 7 组真实的输入输出对。回放时，系统把历史输入重新喂给每个步骤，观察输出是否与历史记录一致——如果同样的输入今天产出了不同结构的输出，这就是可量化的漂移。</p>
+  <p><strong>合成边界用例</strong>由 LLM 根据 Risk Map 自动生成。如果 Step 1 识别出 <code>market_02</code> 有"截断风险"，系统会让 LLM 生成一个特别长的输入（逼近 token 上限），看这个步骤在极端条件下是否仍能产出合法输出。</p>
+  <p><strong>黄金样本</strong>是你手动标注的"标准答案"。比如你知道一个理想的 <code>market_03</code> 市场报告应该长什么样，把它存为 golden sample，系统每次测试都会拿实际输出与它对比。这些样本数量不需要多，5-10 个足够建立质量锚点。</p>
+
+  <h3>隔离执行器怎么工作</h3>
+  <p>关键设计：不是跑整条 pipeline，而是<strong>逐步隔离运行</strong>。系统把测试输入直接注入某个步骤的容器，只运行这一个步骤，收集它的输出。这样做有两个好处：一是能精确定位问题出在哪一步（而不是只看到最终输出有问题）；二是节省成本——不需要每次都跑完整 pipeline。</p>
+  <p>同一个测试输入会被执行多次（默认 3 次），用来测量输出稳定性。如果三次运行产出的 JSON 结构完全一致，稳定性得分就是满分；如果第二次少了一个字段，稳定性就会下降。</p>
+
+  <h3>三层评分的具体指标</h3>
+
+  <!-- Interactive scoring dashboard -->
+  <div class="widget-wrap" id="scoring-widget">
+    <div id="scoring-tabs" style="display:flex;gap:8px;margin-bottom:16px"></div>
+    <div id="scoring-summary" style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px"></div>
+    <div id="scoring-detail"></div>
+  </div>
+
+  <p><strong>结构层（零 LLM 开销）</strong>纯规则引擎，跑得最快：<code>schema_pass</code> 是输出通过 JSON Schema 校验的比例；<code>field_complete</code> 检查每个必需字段是否都存在且非空；<code>length_ok</code> 检测输出长度是否在历史分布的合理区间内（过短意味着截断，过长可能是重复循环）；<code>lang_ok</code> 用简单的字符集分析检测语言混用。如果你的 pipeline 有 10 组测试用例，其中 8 组通过 schema 校验，schema_pass 就是 80%。</p>
+  <p><strong>语义层（轻量 LLM 调用）</strong>用 LLM-as-Judge 打 1-5 分。系统给评判模型一段极短的评估 prompt：这是步骤 X 的输入，这是它的输出，请从三个维度打分——输入输出相关性（上一步给了美股数据，这一步确实在分析美股吗）、内容质量（信息密度高不高，有没有明显的胡编）、逻辑连贯性（论述有没有自相矛盾）。每个维度 1-5 分，评判模型只需返回一个 JSON，token 消耗很小。</p>
+  <p><strong>稳定层（多次运行对比）</strong>同一个输入跑 3 次，对比输出的变化。<code>format_var</code> 看三次输出的 JSON 结构是否一致（字段名、嵌套层级）；<code>content_var</code> 用简单的文本相似度（如 Jaccard 或 embedding cosine）衡量内容漂移程度；<code>length_var</code> 检查三次输出的长度波动是否在合理范围内。这一层直接捕捉"同一个 prompt 在不同运行间输出结构不一致"的问题。</p>
+  <h3>偏差报告的核心产出</h3>
+  <p>三层评分完成后，系统生成一份结构化的偏差报告，包含每个步骤的综合分数、最薄弱的指标、以及失败最严重的具体样本（附带原始输入和实际输出）。这份报告有两个用途：一是作为<strong>基线</strong>存入 <code>eval_store</code>，后续第 5 步回测时，系统会把优化后的分数与这个基线对比，用 delta 值量化改进幅度；二是直接驱动<strong>第 3 步的改造建议</strong>——如果 <code>step_02</code> 的 <code>field_complete</code> 只有 76%，系统知道应该优先修复这个步骤的输出约束。</p>
+  <p>整个量化过程对一条 4 步 pipeline、10 组测试用例、3 次重复运行来说，大约需要 120 次步骤执行 + 40 次 LLM 评判调用。按 MiniMax M2.7 的成本，总开销在几毛钱的级别。</p>
+</div>
+
+<div class="divider"></div>
+
+<!-- ============================================================ -->
+<!-- STEP 3: PROPOSE -->
+<!-- ============================================================ -->
+<div class="section" id="step3">
+  <div class="section-label">Step 3</div>
+  <h2>Generate improvement proposals</h2>
+  <p>这是从"诊断"跨入"治疗"的关键一步——系统要回答的问题不再是"哪里有问题"，而是"怎么修"。</p>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 680 600" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a5" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+      <g class="c-purple"><rect x="180" y="16" width="320" height="40" rx="8" stroke-width="0.5"/><text class="th" x="340" y="36" text-anchor="middle" dominant-baseline="central">Deviation report (from step 2)</text></g>
+      <line x1="340" y1="56" x2="340" y2="84" class="arr" marker-end="url(#a5)"/>
+      <g class="c-blue"><rect x="140" y="84" width="400" height="52" rx="8" stroke-width="0.5"/><text class="th" x="160" y="104" dominant-baseline="central">Triage: rank steps by severity</text><text class="ts" x="160" y="124" dominant-baseline="central">Worst composite score first</text></g>
+      <line x1="340" y1="136" x2="340" y2="164" class="arr" marker-end="url(#a5)"/>
+      <g class="c-teal"><rect x="40" y="164" width="600" height="130" rx="14" stroke-width="0.5"/><text class="th" x="340" y="188" text-anchor="middle">Root cause classifier</text></g>
+      <g class="c-coral"><rect x="64" y="206" width="128" height="68" rx="8" stroke-width="0.5"/><text class="th" x="128" y="228" text-anchor="middle" dominant-baseline="central">Prompt issue</text><text class="ts" x="128" y="248" text-anchor="middle" dominant-baseline="central">Vague instructions</text><text class="ts" x="128" y="262" text-anchor="middle" dominant-baseline="central">Missing format spec</text></g>
+      <g class="c-coral"><rect x="212" y="206" width="128" height="68" rx="8" stroke-width="0.5"/><text class="th" x="276" y="228" text-anchor="middle" dominant-baseline="central">Contract issue</text><text class="ts" x="276" y="248" text-anchor="middle" dominant-baseline="central">Loose schema</text><text class="ts" x="276" y="262" text-anchor="middle" dominant-baseline="central">Missing validation</text></g>
+      <g class="c-coral"><rect x="360" y="206" width="128" height="68" rx="8" stroke-width="0.5"/><text class="th" x="424" y="228" text-anchor="middle" dominant-baseline="central">Config issue</text><text class="ts" x="424" y="248" text-anchor="middle" dominant-baseline="central">Temperature</text><text class="ts" x="424" y="262" text-anchor="middle" dominant-baseline="central">Token limits</text></g>
+      <g class="c-coral"><rect x="508" y="206" width="128" height="68" rx="8" stroke-width="0.5"/><text class="th" x="572" y="228" text-anchor="middle" dominant-baseline="central">Design issue</text><text class="ts" x="572" y="248" text-anchor="middle" dominant-baseline="central">Step overloaded</text><text class="ts" x="572" y="262" text-anchor="middle" dominant-baseline="central">Needs splitting</text></g>
+      <line x1="340" y1="294" x2="340" y2="322" class="arr" marker-end="url(#a5)"/>
+      <g class="c-purple"><rect x="120" y="322" width="440" height="52" rx="8" stroke-width="0.5"/><text class="th" x="140" y="342" dominant-baseline="central">Proposal generator (LLM-powered)</text><text class="ts" x="140" y="362" dominant-baseline="central">Generates concrete fixes with before/after diffs</text></g>
+      <line x1="340" y1="374" x2="340" y2="402" class="arr" marker-end="url(#a5)"/>
+      <g class="c-teal"><rect x="40" y="402" width="600" height="110" rx="14" stroke-width="0.5"/><text class="th" x="340" y="426" text-anchor="middle">Proposal package (per step)</text></g>
+      <g class="c-gray"><rect x="64" y="442" width="128" height="50" rx="8" stroke-width="0.5"/><text class="th" x="128" y="460" text-anchor="middle" dominant-baseline="central">Diagnosis</text><text class="ts" x="128" y="478" text-anchor="middle" dominant-baseline="central">Root cause + data</text></g>
+      <g class="c-gray"><rect x="212" y="442" width="128" height="50" rx="8" stroke-width="0.5"/><text class="th" x="276" y="460" text-anchor="middle" dominant-baseline="central">Diff</text><text class="ts" x="276" y="478" text-anchor="middle" dominant-baseline="central">Before / after</text></g>
+      <g class="c-gray"><rect x="360" y="442" width="128" height="50" rx="8" stroke-width="0.5"/><text class="th" x="424" y="460" text-anchor="middle" dominant-baseline="central">Prediction</text><text class="ts" x="424" y="478" text-anchor="middle" dominant-baseline="central">Expected impact</text></g>
+      <g class="c-gray"><rect x="508" y="442" width="128" height="50" rx="8" stroke-width="0.5"/><text class="th" x="572" y="460" text-anchor="middle" dominant-baseline="central">Risk level</text><text class="ts" x="572" y="478" text-anchor="middle" dominant-baseline="central">Safe / moderate</text></g>
+      <line x1="340" y1="512" x2="340" y2="540" class="arr" marker-end="url(#a5)"/>
+      <g class="c-green"><rect x="180" y="540" width="320" height="40" rx="8" stroke-width="0.5"/><text class="th" x="340" y="560" text-anchor="middle" dominant-baseline="central">Human review: approve / reject / edit</text></g>
+    </svg>
+  </div>
+
+  <h3>分诊：先修哪一步</h3>
+  <p>引擎不会同时改所有步骤。它先对偏差报告中的步骤按综合严重度排序——结构分最低的排前面，因为结构失败会直接让下游崩溃；语义分低但结构通过的排后面，因为至少 pipeline 不会中断。用上一步的例子：<code>step_02 analyze</code> 的结构分只有 82%、语义分 68%、稳定性 72%，它会被排在第一优先级。</p>
+
+  <h3>根因分类：为什么出错</h3>
+  <p>这是整个提案引擎最关键的环节。系统把每个低分步骤的<strong>失败样本</strong>（来自 Step 2 存储的具体输入输出对）喂给 LLM，让它分析这些失败的共性原因，归入四个类别之一：</p>
+  <p><strong>Prompt 问题</strong>——最常见，也最容易修。比如系统发现 <code>step_02</code> 的 20 个测试中有 5 个缺少 <code>leads</code> 字段，LLM 分析后发现原始 prompt 只说了"分析市场数据并输出结果"，根本没有指定输出必须包含哪些字段。这就是指令模糊导致的格式偏差。</p>
+  <p><strong>合约问题</strong>——Guardian 的校验规则本身定义得太松。比如 schema 允许 <code>leads</code> 是字符串或数组，但下游步骤只能处理数组。这不是 LLM 的错，是接口合约没定义清楚。</p>
+  <p><strong>配置问题</strong>——temperature 设太高导致输出不稳定，或 max_tokens 设太低导致截断。这类问题的根因分析相对简单，因为偏差报告中的稳定性得分和长度检查能直接指向。</p>
+  <p><strong>架构问题</strong>——最严重但最少见。比如某个步骤被赋予了太多职责（同时做数据清洗、分析、和格式化），单个 LLM 调用难以稳定完成。系统会建议拆分步骤。</p>
+
+  <h3>提案示例</h3>
+
+  <!-- Interactive proposal cards -->
+  <div class="widget-wrap" id="proposal-widget">
+    <div style="font-size:13px;color:var(--text-secondary);margin-bottom:12px">3 proposals for step_02 analyze — click to expand</div>
+    <div id="proposals"></div>
+  </div>
+
+  <h3>提案生成器的内部逻辑</h3>
+  <p>引擎对每个提案的生成过程是这样的：它把<strong>失败样本</strong>（具体的输入输出对）、<strong>偏差报告中的量化指标</strong>、以及<strong>当前的 prompt / config 原文</strong>一起喂给 LLM，用一段结构化的元提示词（meta-prompt）要求它输出诊断和修复方案。元提示词大致是：</p>
+  <p style="background:var(--bg-secondary);padding:12px;border-radius:var(--radius);font-size:13px;color:var(--text-secondary);line-height:1.6;font-style:italic">以下是 step_02 的当前 prompt、配置、以及 5 个失败测试样本。每个样本标注了具体的失败原因（字段缺失/语言混用/截断等）。请分析共性根因，提出具体修改方案，以 before/after diff 格式输出，并预估修改后各指标的改善幅度。</p>
+  <p>这里有一个关键设计——<strong>预测的影响值是估算而非承诺</strong>。系统标注的 "82% → 97%" 是 LLM 基于对失败模式的分析做出的合理推测，真实效果要等第 5 步回测才能验证。这就是为什么闭环设计至关重要。</p>
+
+  <h3>为什么是"人在环"</h3>
+  <p>每个提案底部都有 "Apply" 和 "Edit first" 两个按钮。这不是偷懒，而是深思熟虑的设计。在当前阶段，让 AI 自动改写工作流代码的风险太高。一个 prompt 改动看起来无害，但可能破坏下游三个步骤对它输出格式的依赖。所以系统只做到"生成提案"，由你来做最终决策。</p>
+  <p>被批准的提案才会进入第 4 步（实施改造），被拒绝的提案会被记录下来，作为 LLM 在未来生成提案时的负反馈：上次你拒绝了"降 temperature"的方案并附了理由"分析任务也需要一定创造性"，系统下次就不会再为同类步骤提出这种建议。</p>
+</div>
+
+<div class="divider"></div>
+
+<!-- ============================================================ -->
+<!-- STEP 4: IMPLEMENT -->
+<!-- ============================================================ -->
+<div class="section" id="step4">
+  <div class="section-label">Step 4</div>
+  <h2>Implement workflow changes</h2>
+  <p>这一步是整个系统中最需要"谨慎"的环节。核心设计原则是：<strong>永远不直接改生产环境，所有改动先在沙箱里跑通。</strong></p>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 680 620" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a6" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+      <g class="c-green"><rect x="190" y="16" width="300" height="40" rx="8" stroke-width="0.5"/><text class="th" x="340" y="36" text-anchor="middle" dominant-baseline="central">Approved proposal (from step 3)</text></g>
+      <line x1="340" y1="56" x2="340" y2="84" class="arr" marker-end="url(#a6)"/>
+      <g class="c-blue"><rect x="140" y="84" width="400" height="52" rx="8" stroke-width="0.5"/><text class="th" x="160" y="104" dominant-baseline="central">Snapshot current version</text><text class="ts" x="160" y="124" dominant-baseline="central">Save prompt + config + schema as v(N)</text></g>
+      <line class="leader" x1="540" y1="110" x2="600" y2="110"/><circle cx="540" cy="110" r="2" fill="var(--text-tertiary)"/><text class="ts" x="606" y="114">Rollback anchor</text>
+      <line x1="340" y1="136" x2="340" y2="164" class="arr" marker-end="url(#a6)"/>
+      <g class="c-teal"><rect x="60" y="164" width="560" height="108" rx="14" stroke-width="0.5"/><text class="th" x="340" y="188" text-anchor="middle">Classify change type and apply</text></g>
+      <g class="c-gray"><rect x="84" y="204" width="120" height="50" rx="8" stroke-width="0.5"/><text class="th" x="144" y="222" text-anchor="middle" dominant-baseline="central">Prompt edit</text><text class="ts" x="144" y="240" text-anchor="middle" dominant-baseline="central">Text replacement</text></g>
+      <g class="c-gray"><rect x="224" y="204" width="120" height="50" rx="8" stroke-width="0.5"/><text class="th" x="284" y="222" text-anchor="middle" dominant-baseline="central">Config edit</text><text class="ts" x="284" y="240" text-anchor="middle" dominant-baseline="central">YAML value swap</text></g>
+      <g class="c-gray"><rect x="364" y="204" width="120" height="50" rx="8" stroke-width="0.5"/><text class="th" x="424" y="222" text-anchor="middle" dominant-baseline="central">Schema edit</text><text class="ts" x="424" y="240" text-anchor="middle" dominant-baseline="central">JSON Schema patch</text></g>
+      <g class="c-gray"><rect x="504" y="204" width="108" height="50" rx="8" stroke-width="0.5"/><text class="th" x="558" y="222" text-anchor="middle" dominant-baseline="central">Guard edit</text><text class="ts" x="558" y="240" text-anchor="middle" dominant-baseline="central">Add/tune rules</text></g>
+      <line x1="340" y1="272" x2="340" y2="300" class="arr" marker-end="url(#a6)"/>
+      <g class="c-purple"><rect x="140" y="300" width="400" height="52" rx="8" stroke-width="0.5"/><text class="th" x="160" y="320" dominant-baseline="central">Sandbox smoke test</text><text class="ts" x="160" y="340" dominant-baseline="central">Run 3 test cases on patched version</text></g>
+      <line x1="340" y1="352" x2="340" y2="390" class="arr" marker-end="url(#a6)"/>
+      <g class="c-coral"><rect x="290" y="390" width="100" height="44" rx="8" stroke-width="0.5"/><text class="th" x="340" y="412" text-anchor="middle" dominant-baseline="central">Pass?</text></g>
+      <path d="M290,412 L220,412" fill="none" class="arr" marker-end="url(#a6)"/><text class="ts" x="255" y="404" text-anchor="middle">No</text>
+      <g class="c-red"><rect x="80" y="392" width="140" height="40" rx="8" stroke-width="0.5"/><text class="th" x="150" y="412" text-anchor="middle" dominant-baseline="central">Rollback to v(N)</text></g>
+      <line x1="340" y1="434" x2="340" y2="468" class="arr" marker-end="url(#a6)"/><text class="ts" x="356" y="456" text-anchor="start">Yes</text>
+      <g class="c-blue"><rect x="140" y="468" width="400" height="52" rx="8" stroke-width="0.5"/><text class="th" x="160" y="488" dominant-baseline="central">Promote to production as v(N+1)</text><text class="ts" x="160" y="508" dominant-baseline="central">Replace live config, log change record</text></g>
+      <line x1="340" y1="520" x2="340" y2="548" class="arr" marker-end="url(#a6)"/>
+      <g class="c-green"><rect x="140" y="548" width="400" height="40" rx="8" stroke-width="0.5"/><text class="th" x="340" y="568" text-anchor="middle" dominant-baseline="central">Ready for step 5 (backtest at scale)</text></g>
+    </svg>
+  </div>
+
+  <h3>第一道安全网：快照</h3>
+  <p>在做任何改动之前，系统先把当前步骤的所有可变文件打一个快照，存为版本号 <code>v(N)</code>。这包括：prompt 文本文件、YAML 配置（temperature、max_tokens 等）、JSON Schema 定义、以及 Guardian 校验规则。快照存储在 <code>eval_store</code> 里，和 eval trace 数据放在一起。这意味着你随时可以一键回滚到任何历史版本——改坏了不怕，30 秒恢复。</p>
+
+  <h3>改动分类：系统能改什么，不能改什么</h3>
+  <p>这是整个 Step 4 最重要的设计边界。Pipeline Guardian 只操作四种类型的文件，全部是声明式配置，不涉及任何业务逻辑代码：</p>
+
+  <h3>为什么只改配置，不改代码</h3>
+  <p>这是一个深思熟虑的架构决策，不是能力限制。你的 agent 容器（<code>market_01</code>、<code>market_02</code>...）是独立的 Docker 镜像，内部可能有复杂的 Python 逻辑——数据清洗、API 调用、格式转换。如果 Guardian 去改写这些代码，一个变量名拼错就可能导致容器启动失败，而且排查成本极高。</p>
+  <p>但 prompt、temperature、schema 和 Guardian 规则这四样东西都是<strong>声明式配置</strong>——它们描述"要什么"而不是"怎么做"。改一个 prompt 文件不会让容器崩溃，最坏的情况是 LLM 输出变差，而这正是 Step 5 回测能捕获的。改一个 temperature 值更是零风险的操作。这种"只改旋钮，不改引擎"的策略，是让自动化改造可以安全执行的根本前提。</p>
+
+  <!-- Interactive change type cards -->
+  <div class="widget-wrap" id="changetype-widget">
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px" id="change-grid"></div>
+    <div style="background:var(--bg-secondary);border-radius:var(--radius-lg);padding:1rem;margin-top:12px">
+      <div style="font-size:14px;font-weight:500;color:var(--danger-text);margin-bottom:6px">Out of scope — Guardian never touches these</div>
+      <div style="font-size:12px;color:var(--text-secondary);line-height:1.8">
+        Agent container code (Python, JS, etc.) — requires human developer<br>
+        Docker Compose orchestration — container order, networking<br>
+        External API credentials or endpoints<br>
+        Database schemas or data stores<br>
+        Cron schedules or trigger logic
+      </div>
+    </div>
+  </div>
+
+  <h3>沙箱烟雾测试：改完先试跑</h3>
+  <p>配置修改完成后，系统不会直接推送到生产环境。它先在沙箱中做一个快速验证：用 3 个测试用例（1 个历史正常案例 + 1 个历史失败案例 + 1 个边界案例）跑一遍被修改的步骤。沙箱检查三件事：</p>
+  <p>容器是否能正常启动并返回输出（没有因为 prompt 格式错误而报错）；输出是否通过了新版 schema 的结构校验（如果 schema 也被改了）；以及新输出的语义分是否不低于旧版本（防止"修了格式但内容变差"）。</p>
+  <p>如果三个测试中任何一个失败，系统自动回滚到 <code>v(N)</code> 快照，标记这个提案为"沙箱失败"，并把失败原因记录到 <code>eval_store</code>——下次提案引擎生成建议时会参考这条记录，避免重蹈覆辙。</p>
+
+  <h3>版本推进：从沙箱到生产</h3>
+  <p>沙箱通过后，系统将修改后的配置文件标记为 <code>v(N+1)</code> 并写入生产路径。整个推进过程会生成一条变更记录：</p>
+  <pre>change_id:    chg_20260321_step02_001
+version:      v6 → v7
+timestamp:    2026-03-21T22:30:00+08:00
+proposal_id:  prop_003
+changes:
+  - file: prompts/step_02.txt (v6 → v7)
+  - file: configs/market_intel.yaml (temperature: 0.7 → 0.3)
+sandbox:      PASS (3/3 cases)
+status:       PROMOTED</pre>
+  <p>这条记录是 Step 5 回测的起点——回测时，系统知道 <code>v7</code> 做了什么改动，可以精确比较 <code>v6</code> 和 <code>v7</code> 在完整测试集上的表现差异。</p>
+
+  <h3>如果回测发现改坏了呢？</h3>
+  <p>这正是为什么快照机制如此重要。如果 Step 5 的大规模回测显示 <code>v7</code> 的某些指标反而下降了，系统有两个选择：回退到 <code>v6</code>（安全的一键操作），或者进入下一轮迭代——Step 5 的失败数据会喂回 Step 3 的提案引擎，生成一个更好的修复方案。这就是整个 6 步闭环中"5 → 2 → 3 → 4 → 5"的迭代循环。</p>
+</div>
+
+<div class="divider"></div>
+
+<!-- ============================================================ -->
+<!-- STEP 5: BACKTEST -->
+<!-- ============================================================ -->
+<div class="section" id="step5">
+  <div class="section-label">Step 5</div>
+  <h2>Backtest and validate improvements</h2>
+  <p>这一步是整个闭环中的"裁判"——它决定 Step 4 的改动到底有没有用，用的是同一套量化标准、同一批测试数据，容不得半点含糊。</p>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 680 590" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a7" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+      <g class="c-purple"><rect x="40" y="16" width="260" height="40" rx="8" stroke-width="0.5"/><text class="th" x="170" y="36" text-anchor="middle" dominant-baseline="central">Baseline scores v(N)</text></g>
+      <g class="c-green"><rect x="380" y="16" width="260" height="40" rx="8" stroke-width="0.5"/><text class="th" x="510" y="36" text-anchor="middle" dominant-baseline="central">Patched config v(N+1)</text></g>
+      <line x1="170" y1="56" x2="170" y2="74" stroke="var(--text-tertiary)" stroke-width="0.5"/>
+      <line x1="510" y1="56" x2="510" y2="74" stroke="var(--text-tertiary)" stroke-width="0.5"/>
+      <path d="M170 74 L170 84 L510 84 L510 74" fill="none" stroke="var(--text-tertiary)" stroke-width="0.5"/>
+      <line x1="340" y1="84" x2="340" y2="104" class="arr" marker-end="url(#a7)"/>
+      <g class="c-blue"><rect x="120" y="104" width="440" height="52" rx="8" stroke-width="0.5"/><text class="th" x="140" y="124" dominant-baseline="central">Full test suite on v(N+1)</text><text class="ts" x="140" y="144" dominant-baseline="central">All test cases, 3 runs each, 3-layer scoring</text></g>
+      <line x1="340" y1="156" x2="340" y2="184" class="arr" marker-end="url(#a7)"/>
+      <g class="c-purple"><rect x="120" y="184" width="440" height="52" rx="8" stroke-width="0.5"/><text class="th" x="140" y="204" dominant-baseline="central">Compute deltas: v(N+1) vs v(N)</text><text class="ts" x="140" y="224" dominant-baseline="central">Per-metric delta with statistical significance</text></g>
+      <line x1="340" y1="236" x2="340" y2="264" class="arr" marker-end="url(#a7)"/>
+      <g class="c-teal"><rect x="60" y="264" width="560" height="110" rx="14" stroke-width="0.5"/><text class="th" x="340" y="288" text-anchor="middle">Three validation gates</text></g>
+      <g class="c-coral"><rect x="84" y="304" width="152" height="50" rx="8" stroke-width="0.5"/><text class="th" x="160" y="322" text-anchor="middle" dominant-baseline="central">No regression</text><text class="ts" x="160" y="340" text-anchor="middle" dominant-baseline="central">No metric dropped</text></g>
+      <g class="c-coral"><rect x="264" y="304" width="152" height="50" rx="8" stroke-width="0.5"/><text class="th" x="340" y="322" text-anchor="middle" dominant-baseline="central">Target met</text><text class="ts" x="340" y="340" text-anchor="middle" dominant-baseline="central">Hit quality threshold</text></g>
+      <g class="c-coral"><rect x="444" y="304" width="152" height="50" rx="8" stroke-width="0.5"/><text class="th" x="520" y="322" text-anchor="middle" dominant-baseline="central">Downstream safe</text><text class="ts" x="520" y="340" text-anchor="middle" dominant-baseline="central">Next steps still pass</text></g>
+      <line x1="340" y1="374" x2="340" y2="404" class="arr" marker-end="url(#a7)"/>
+      <g class="c-gray"><rect x="278" y="404" width="124" height="40" rx="8" stroke-width="0.5"/><text class="th" x="340" y="424" text-anchor="middle" dominant-baseline="central">All 3 pass?</text></g>
+      <line x1="340" y1="444" x2="340" y2="480" class="arr" marker-end="url(#a7)"/><text class="ts" x="356" y="466" fill="#085041">Yes</text>
+      <g class="c-green"><rect x="180" y="480" width="320" height="40" rx="8" stroke-width="0.5"/><text class="th" x="340" y="500" text-anchor="middle" dominant-baseline="central">Proceed to step 6: output workflow</text></g>
+      <path d="M278,424 L200,424" fill="none" class="arr" marker-end="url(#a7)"/><text class="ts" x="240" y="418" text-anchor="middle" fill="#A32D2D">No</text>
+      <g class="c-red"><rect x="56" y="404" width="144" height="40" rx="8" stroke-width="0.5"/><text class="th" x="128" y="424" text-anchor="middle" dominant-baseline="central">Diagnose failure</text></g>
+      <line x1="128" y1="444" x2="128" y2="480" class="arr" marker-end="url(#a7)"/>
+      <g class="c-gray"><rect x="44" y="480" width="168" height="40" rx="8" stroke-width="0.5"/><text class="th" x="128" y="500" text-anchor="middle" dominant-baseline="central">Iteration decision</text></g>
+      <path d="M44,500 L20,500 L20,184 L120,184" fill="none" stroke="#A32D2D" stroke-width="0.5" marker-end="url(#a7)"/>
+      <text class="ts" x="28" y="340" fill="#A32D2D">Loop back</text>
+      <line x1="128" y1="520" x2="128" y2="550" class="arr" marker-end="url(#a7)"/>
+      <g class="c-red"><rect x="48" y="550" width="160" height="32" rx="8" stroke-width="0.5"/><text class="ts" x="128" y="566" text-anchor="middle" dominant-baseline="central">Or rollback to v(N)</text></g>
+    </svg>
+  </div>
+
+  <h3>为什么回测和 Step 4 的沙箱不同</h3>
+  <p>Step 4 的沙箱只跑了 3 个测试用例——那是快速冒烟测试，目的是确保改动没有让容器崩溃。Step 5 的回测则是<strong>全量对比测试</strong>：用 Step 2 建立的完整测试集（历史回放 + 合成边界 + 黄金样本），对修改后的 v(N+1) 配置重新执行一遍完整的三层评分（结构 + 语义 + 稳定性），然后逐指标和 v(N) 的基线比较 delta 值。</p>
+
+  <h3>三道验证门</h3>
+  <p><strong>第一道：无退化门（No Regression）</strong>——检查 v(N+1) 的每一项指标是否都不低于 v(N)。即使一个指标提升了 20%，但另一个指标下降了 2%，也会触发告警。这道门防止的是"拆东墙补西墙"——比如修复了字段缺失问题，但 prompt 变化导致内容质量下降。允许一个很小的容差（默认 2%），避免统计噪声导致误报。</p>
+  <p><strong>第二道：目标达成门（Target Met）</strong>——检查触发本轮优化的那个核心指标是否达到了目标值。如果 Step 3 的提案承诺把 <code>field_complete</code> 从 76% 提升到 95%，但实际只到了 85%，这道门会判定"目标未达成"。这不一定触发回滚——85% 毕竟比 76% 好——但系统会标记这轮优化为"部分成功"，并建议再迭代一轮。</p>
+  <p><strong>第三道：下游安全门（Downstream Safe）</strong>——这是最容易被忽略、但最重要的一道检查。改了 <code>step_02</code> 的输出格式后，<code>step_03</code> 还能正常消费它吗？系统会用 v(N+1) 的实际输出作为输入，跑一遍下游步骤的 Guardian 检查。如果下游的结构校验通过率下降了，说明改动破坏了步骤间的合约——即使 <code>step_02</code> 自身的分数提升了，整体 pipeline 可能变差了。</p>
+
+  <!-- Interactive backtest report -->
+  <div class="widget-wrap" id="backtest-widget">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+      <span style="font-size:15px;font-weight:500">Backtest report: step_02 analyze</span>
+      <span style="font-size:13px;padding:4px 14px;border-radius:var(--radius);background:var(--warn-bg);color:var(--warn-text)">Partial pass — 2/3 gates</span>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:16px">
+      <div style="background:var(--bg-secondary);border-radius:var(--radius);padding:10px;text-align:center"><div style="font-size:11px;color:var(--text-secondary)">No regression</div><div style="font-size:16px;font-weight:500;color:var(--success-text)">Pass</div></div>
+      <div style="background:var(--bg-secondary);border-radius:var(--radius);padding:10px;text-align:center"><div style="font-size:11px;color:var(--text-secondary)">Target met</div><div style="font-size:16px;font-weight:500;color:var(--warn-text)">Partial</div></div>
+      <div style="background:var(--bg-secondary);border-radius:var(--radius);padding:10px;text-align:center"><div style="font-size:11px;color:var(--text-secondary)">Downstream safe</div><div style="font-size:16px;font-weight:500;color:var(--success-text)">Pass</div></div>
+    </div>
+    <div id="backtest-tables"></div>
+    <div style="font-size:12px;color:var(--text-secondary);margin-top:16px;padding:10px;background:var(--bg-secondary);border-radius:var(--radius);line-height:1.6">
+      Target for field completeness was 95%, achieved 88%. All other metrics improved with no regressions. Downstream step_03 structural pass rate unchanged at 90%. Recommendation: accept v7 as improvement, schedule one more iteration targeting the remaining field completeness gap.
+    </div>
+  </div>
+
+  <h3>Delta 计算的细节</h3>
+  <p>回测不是简单地比两个数字。系统对每个指标计算三个维度的 delta：</p>
+  <p><strong>绝对值 delta</strong>——v(N+1) 得分减去 v(N) 得分。这是最直观的：schema pass 从 82% 升到 96%，绝对 delta 是 +14%。</p>
+  <p><strong>统计显著性</strong>——因为 LLM 输出有固有随机性，一个 +2% 的提升可能只是噪声。系统用多次运行（每个测试用例跑 3 次 × 全部测试用例）的数据做简单的 t 检验或 bootstrap 置信区间。只有 delta 在 95% 置信水平上显著为正，才算真正的改进。对于你的 pipeline 规模（10-20 个测试用例 × 3 次运行 = 30-60 个数据点），这已经足够做出可靠判断。</p>
+  <p><strong>副作用扫描</strong>——即使被修改的步骤本身所有指标都提升了，系统还会检查"未被修改的步骤是否受到了影响"。因为步骤是串联的，改了 step_02 的输出格式可能会导致 step_03 的输入解析方式变化。这就是第三道门（下游安全门）做的事。</p>
+
+  <h3>三种回测结果及其后续动作</h3>
+  <p><strong>全通过</strong>（3/3 门）——改动被确认为成功。v(N+1) 成为新的生产版本，系统进入 Step 6 输出优化后的工作流。同时，这轮成功的改动记录（哪种根因 → 哪种修复 → 多少改进）会存入 <code>eval_store</code>，作为未来提案引擎的正反馈——下次遇到类似问题，系统知道这种修复策略是有效的。</p>
+  <p><strong>部分通过</strong>（1-2/3 门）——就像上面的例子。改动确实带来了改善，但没有完全达标，或者有某个指标出现了轻微副作用。系统给你两个选择：接受当前改动并安排下一轮迭代（从 Step 2 重新量化，这次的基线是 v7 而不是 v6）；或者回滚到 v(N) 重新来过。</p>
+  <p><strong>全失败</strong>——改动让情况变更糟了。系统自动回滚到 v(N)，标记这个提案为失败，并记录失败原因。下一轮提案引擎会避免生成类似的修复方案。</p>
+
+  <h3>防止无限循环</h3>
+  <p>一个关键的工程问题是：如果系统反复迭代，每次都只是"部分通过"，永远达不到目标怎么办？Pipeline Guardian 设置了两个熔断机制。</p>
+  <p>第一个是<strong>最大迭代次数</strong>（默认 3 轮）。超过 3 轮仍未达标，系统停止自动迭代，发送一条总结报告给你，列出每轮尝试的修复方案和结果，建议人工介入。</p>
+  <p>第二个是<strong>递减改善阈值</strong>。如果第一轮改善了 +14%，第二轮只改善了 +2%，第三轮 +0.5%——系统检测到改善速度在收敛，判断已经接近当前策略的天花板，同样会停止迭代并报告"当前优化空间已基本耗尽，剩余偏差可能需要架构级调整（如拆分步骤或更换模型）"。</p>
+  <p>这两个机制确保系统不会陷入"改了又改"的死循环，同时也能诚实地告诉你：有些问题不是 prompt 和配置能解决的。</p>
+</div>
+
+<div class="divider"></div>
+
+<!-- ============================================================ -->
+<!-- STEP 6: OUTPUT -->
+<!-- ============================================================ -->
+<div class="section" id="step6">
+  <div class="section-label">Step 6</div>
+  <h2>Output the optimized workflow</h2>
+  <p>这是闭环的终点，也是下一个循环的起点——系统把经过验证的改进打包成一个可以直接部署的新版工作流。</p>
+
+  <div class="diagram-wrap">
+    <svg viewBox="0 0 680 580" xmlns="http://www.w3.org/2000/svg">
+      <defs><marker id="a8" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></marker></defs>
+      <g class="c-green"><rect x="170" y="16" width="340" height="40" rx="8" stroke-width="0.5"/><text class="th" x="340" y="36" text-anchor="middle" dominant-baseline="central">Backtest passed (from step 5)</text></g>
+      <line x1="340" y1="56" x2="340" y2="84" class="arr" marker-end="url(#a8)"/>
+      <g class="c-blue"><rect x="120" y="84" width="440" height="52" rx="8" stroke-width="0.5"/><text class="th" x="140" y="104" dominant-baseline="central">Assemble optimized config</text><text class="ts" x="140" y="124" dominant-baseline="central">Merge all approved v(N+1) patches</text></g>
+      <line x1="340" y1="136" x2="340" y2="164" class="arr" marker-end="url(#a8)"/>
+      <g class="c-teal"><rect x="40" y="164" width="600" height="130" rx="14" stroke-width="0.5"/><text class="th" x="340" y="188" text-anchor="middle">Output package contents</text></g>
+      <g class="c-gray"><rect x="64" y="206" width="128" height="68" rx="8" stroke-width="0.5"/><text class="th" x="128" y="228" text-anchor="middle" dominant-baseline="central">Config YAML</text><text class="ts" x="128" y="248" text-anchor="middle" dominant-baseline="central">Prompts, params</text><text class="ts" x="128" y="262" text-anchor="middle" dominant-baseline="central">schemas, rules</text></g>
+      <g class="c-gray"><rect x="212" y="206" width="128" height="68" rx="8" stroke-width="0.5"/><text class="th" x="276" y="228" text-anchor="middle" dominant-baseline="central">Changelog</text><text class="ts" x="276" y="248" text-anchor="middle" dominant-baseline="central">What changed</text><text class="ts" x="276" y="262" text-anchor="middle" dominant-baseline="central">and why</text></g>
+      <g class="c-gray"><rect x="360" y="206" width="128" height="68" rx="8" stroke-width="0.5"/><text class="th" x="424" y="228" text-anchor="middle" dominant-baseline="central">Quality cert</text><text class="ts" x="424" y="248" text-anchor="middle" dominant-baseline="central">Before/after scores</text><text class="ts" x="424" y="262" text-anchor="middle" dominant-baseline="central">test evidence</text></g>
+      <g class="c-gray"><rect x="508" y="206" width="128" height="68" rx="8" stroke-width="0.5"/><text class="th" x="572" y="228" text-anchor="middle" dominant-baseline="central">Rollback plan</text><text class="ts" x="572" y="248" text-anchor="middle" dominant-baseline="central">One-command</text><text class="ts" x="572" y="262" text-anchor="middle" dominant-baseline="central">revert path</text></g>
+      <line x1="340" y1="294" x2="340" y2="322" class="arr" marker-end="url(#a8)"/>
+      <g class="c-purple"><rect x="120" y="322" width="440" height="52" rx="8" stroke-width="0.5"/><text class="th" x="140" y="342" dominant-baseline="central">Deploy to production</text><text class="ts" x="140" y="362" dominant-baseline="central">Replace live configs, notify via Telegram</text></g>
+      <line x1="340" y1="374" x2="340" y2="402" class="arr" marker-end="url(#a8)"/>
+      <g class="c-teal"><rect x="80" y="402" width="520" height="100" rx="14" stroke-width="0.5"/><text class="th" x="340" y="426" text-anchor="middle">Continuous monitoring (Guardian stays active)</text></g>
+      <g class="c-gray"><rect x="104" y="444" width="148" height="40" rx="8" stroke-width="0.5"/><text class="th" x="178" y="464" text-anchor="middle" dominant-baseline="central">Live scoring</text></g>
+      <g class="c-gray"><rect x="268" y="444" width="148" height="40" rx="8" stroke-width="0.5"/><text class="th" x="342" y="464" text-anchor="middle" dominant-baseline="central">Drift detection</text></g>
+      <g class="c-gray"><rect x="432" y="444" width="148" height="40" rx="8" stroke-width="0.5"/><text class="th" x="506" y="464" text-anchor="middle" dominant-baseline="central">Auto-alert</text></g>
+      <path d="M340,502 L340,535 L640,535 L640,36 L510,36" fill="none" stroke="#0F6E56" stroke-width="0.5" marker-end="url(#a8)"/>
+      <text class="ts" x="644" y="290" fill="#0F6E56" transform="rotate(90,644,290)" text-anchor="middle">Drift detected — new cycle</text>
+    </svg>
+  </div>
+
+  <h3>部署之后：Guardian 不下班</h3>
+  <p>部署不是结束，而是进入持续监控模式。Guardian 节点继续做三件事：</p>
+  <ul>
+    <li><strong>实时评分</strong>——每次 cron 触发 pipeline 运行时，Guardian 都会对每个步骤的输出做三层检查并写入 <code>eval_store</code>。</li>
+    <li><strong>漂移检测</strong>——系统每天对比最近 7 天的评分分布与部署时的基线。如果某个指标连续 3 天低于基线超过 5%，触发告警。</li>
+    <li><strong>自动触发新循环</strong>——一旦检测到显著漂移，系统自动从 Step 1 重新开始。整个 6 步不是一次性流程，而是一个永远在转的飞轮。</li>
+  </ul>
+
+  <h3>变更日志：不只记录"改了什么"，更记录"为什么改"</h3>
+  <p>每条变更记录都带有一个 <code>root cause</code> 字段——不是写给机器看的标签，而是写给你（或未来的你）看的一句话解释。三个月后你回看这个 pipeline 的历史，不需要去翻 eval_store 里的原始数据，直接在 changelog 里就能看到："当时 24% 的运行缺少字段，因为 prompt 没有指定输出格式，所以加了 JSON schema 约束"。</p>
+  <p>这也是给提案引擎的长期记忆。未来处理另一条 pipeline 的类似问题时，系统可以检索历史 changelog 里的成功修复模式："上次 market-intel 的字段缺失问题通过添加 JSON schema 约束解决了，类似策略可能适用于当前情况"。</p>
+
+  <h3>质量证书：用数据证明改进</h3>
+  <p>质量证书是整个优化周期的"成绩单"，包含三项不可伪造的证据：改动前后的每项指标对比、测试的样本量（20 个输入 × 3 次运行 = 60 个数据点）、以及零退化声明。这份证书的价值在于——如果你将来要向团队成员、合作伙伴或自己证明"这个系统真的有用"，数据全在这里。</p>
+
+  <h3>部署：怎么生效</h3>
+  <p>部署动作本身极其简单。系统把新版配置文件写入生产路径，更新 YAML 里的文件引用（比如把 <code>prompt_file: step_02_v6.txt</code> 改为 <code>step_02_v7.txt</code>）。不需要重启 Docker 容器、不需要重新构建镜像——因为你的 agent 容器在每次 cron 触发时都会读取最新的配置文件。这意味着今晚改完，明天凌晨的 cron 任务就自动使用新配置运行。</p>
+  <p>部署完成后，系统通过 Telegram 发送一条简洁的通知：</p>
+  <pre>Pipeline Guardian: market-intel v6 → v7 deployed
+Changes: prompt rewrite, temperature 0.7→0.3, language constraint added
+Composite score: 72% → 89% (+17%)
+Rollback: guardian rollback --pipeline market-intel --to v6</pre>
+
+  <!-- Timeline -->
+  <div class="widget-wrap" id="timeline-widget">
+    <div style="font-size:14px;font-weight:500;margin-bottom:16px">Quality timeline — market-intel pipeline</div>
+    <div id="timeline"></div>
+  </div>
+
+  <h3>为什么这个设计是"通用的"</h3>
+  <p>回到最初强调的要求——这不是只能改进某两个 pipeline 的工具。整个 Step 6 的输出机制对 pipeline 内容零假设：</p>
+  <p>配置文件是从 YAML 定义中读取的，不关心你的 agent 具体做什么。变更日志的模板是通用的，任何 pipeline 的任何步骤改动都能以同样的结构记录。质量证书从 <code>eval_store</code> 的通用 <code>eval_traces</code> 表中聚合数据，不绑定特定指标名。回滚命令只操作版本号和文件路径，不涉及业务逻辑。</p>
+  <p>这意味着当你明天给一条新的 quant-research pipeline 写了 YAML 配置并定义好每个步骤的 schema，它就自动获得了和 market-intel 完全相同的优化-回测-发布能力，不需要改一行 Guardian 代码。</p>
+
+  <h3>完整闭环总结</h3>
+  <p>六步走完，我们回头看整个系统做了什么：从一条"盲跑"的 pipeline，变成了一条每个接缝都有质量闸门、每次运行都有量化记录、出了问题能自动诊断和修复、并且持续监控漂移的自愈系统。整个过程中你作为人类的介入点只有两个：批准 Step 3 的提案、以及在 Step 5 部分通过时决定"接受还是回滚"。其余的分析、量化、修复、回测、部署、监控全部自动完成。</p>
+  <p>这就是 Pipeline Guardian 的完整工作机制。</p>
+</div>
+
+<div class="footer">
+  Pipeline Guardian — Product Specification v1.0<br>
+  Generated March 2026
+</div>
+
+</div><!-- .page -->
+
+<!-- ============================================================ -->
+<!-- INTERACTIVE SCRIPTS (all at bottom for clean loading) -->
+<!-- ============================================================ -->
+<script>
+// ---- Step 2: Scoring Dashboard ----
+(function(){
+var steps=[
+{name:"step_01 collect",struct:{schema_pass:100,field_complete:100,length_ok:95,lang_ok:100},semantic:{relevance:4.2,quality:3.8,coherence:4.5},stability:{format_var:98,content_var:88,length_var:92}},
+{name:"step_02 analyze",struct:{schema_pass:82,field_complete:76,length_ok:90,lang_ok:88},semantic:{relevance:3.6,quality:3.1,coherence:3.4},stability:{format_var:72,content_var:65,length_var:80}},
+{name:"step_03 generate",struct:{schema_pass:90,field_complete:85,length_ok:70,lang_ok:95},semantic:{relevance:4.0,quality:3.5,coherence:3.9},stability:{format_var:85,content_var:60,length_var:55}},
+{name:"step_04 deliver",struct:{schema_pass:95,field_complete:92,length_ok:88,lang_ok:100},semantic:{relevance:4.4,quality:4.0,coherence:4.2},stability:{format_var:90,content_var:82,length_var:88}}
+];
+function color(v,max){if(max===5)return v>=4?"var(--success-text)":v>=3?"var(--warn-text)":"var(--danger-text)";return v>=85?"var(--success-text)":v>=65?"var(--warn-text)":"var(--danger-text)";}
+function barColor(v){return v>=85?"var(--success-text)":v>=65?"var(--warn-text)":"var(--danger-text)";}
+function avg(obj){var vals=Object.values(obj);return Math.round(vals.reduce(function(a,b){return a+b},0)/vals.length);}
+function render(i){
+var s=steps[i];
+document.querySelectorAll('.sc-tab').forEach(function(t,j){
+  t.style.background=j===i?'var(--info-bg)':'var(--bg-primary)';
+  t.style.color=j===i?'var(--info-text)':'var(--text-secondary)';
+  t.style.borderColor=j===i?'var(--info-text)':'var(--border-color)';
+});
+var structAvg=avg(s.struct);var semAvg=Math.round((s.semantic.relevance+s.semantic.quality+s.semantic.coherence)/3*20);var stabAvg=avg(s.stability);
+document.getElementById('scoring-summary').innerHTML=
+  '<div style="background:var(--bg-secondary);border-radius:var(--radius);padding:12px;text-align:center"><div style="font-size:12px;color:var(--text-secondary)">Structural</div><div style="font-size:22px;font-weight:500;color:'+color(structAvg,100)+'">'+structAvg+'%</div></div>'+
+  '<div style="background:var(--bg-secondary);border-radius:var(--radius);padding:12px;text-align:center"><div style="font-size:12px;color:var(--text-secondary)">Semantic</div><div style="font-size:22px;font-weight:500;color:'+color(semAvg,100)+'">'+semAvg+'%</div></div>'+
+  '<div style="background:var(--bg-secondary);border-radius:var(--radius);padding:12px;text-align:center"><div style="font-size:12px;color:var(--text-secondary)">Stability</div><div style="font-size:22px;font-weight:500;color:'+color(stabAvg,100)+'">'+stabAvg+'%</div></div>';
+var h='<div style="background:var(--bg-secondary);border-radius:var(--radius);padding:12px;margin-bottom:8px"><div style="font-size:14px;font-weight:500;margin-bottom:8px">Structural checks</div>';
+var sNames={schema_pass:"Schema pass rate",field_complete:"Field completeness",length_ok:"Length in range",lang_ok:"Language match"};
+for(var k in s.struct){
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:0.5px solid var(--border-color)"><span style="font-size:13px;color:var(--text-secondary)">'+sNames[k]+'</span><div style="display:flex;align-items:center;gap:8px"><div style="width:120px;height:6px;background:var(--border-color);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+s.struct[k]+'%;background:'+barColor(s.struct[k])+';border-radius:3px"></div></div><span style="font-size:13px;font-weight:500;min-width:36px;text-align:right;color:'+color(s.struct[k],100)+'">'+s.struct[k]+'%</span></div></div>';
+}
+h+='</div>';
+h+='<div style="background:var(--bg-secondary);border-radius:var(--radius);padding:12px;margin-bottom:8px"><div style="font-size:14px;font-weight:500;margin-bottom:8px">Semantic evaluation (1-5)</div>';
+var semNames={relevance:"Input-output relevance",quality:"Content quality",coherence:"Logical coherence"};
+for(var k in s.semantic){var pct=Math.round(s.semantic[k]*20);
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:0.5px solid var(--border-color)"><span style="font-size:13px;color:var(--text-secondary)">'+semNames[k]+'</span><div style="display:flex;align-items:center;gap:8px"><div style="width:120px;height:6px;background:var(--border-color);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+pct+'%;background:'+barColor(pct)+';border-radius:3px"></div></div><span style="font-size:13px;font-weight:500;min-width:36px;text-align:right;color:'+color(s.semantic[k],5)+'">'+s.semantic[k].toFixed(1)+'</span></div></div>';
+}
+h+='</div>';
+h+='<div style="background:var(--bg-secondary);border-radius:var(--radius);padding:12px"><div style="font-size:14px;font-weight:500;margin-bottom:8px">Stability (3 repeated runs)</div>';
+var stNames={format_var:"Format consistency",content_var:"Content consistency",length_var:"Length consistency"};
+for(var k in s.stability){
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:0.5px solid var(--border-color)"><span style="font-size:13px;color:var(--text-secondary)">'+stNames[k]+'</span><div style="display:flex;align-items:center;gap:8px"><div style="width:120px;height:6px;background:var(--border-color);border-radius:3px;overflow:hidden"><div style="height:100%;width:'+s.stability[k]+'%;background:'+barColor(s.stability[k])+';border-radius:3px"></div></div><span style="font-size:13px;font-weight:500;min-width:36px;text-align:right;color:'+color(s.stability[k],100)+'">'+s.stability[k]+'%</span></div></div>';
+}
+h+='</div>';
+document.getElementById('scoring-detail').innerHTML=h;
+}
+var tabsHtml='';
+steps.forEach(function(s,i){tabsHtml+='<div class="sc-tab" onclick="window._renderScore('+i+')" style="padding:6px 14px;border-radius:var(--radius);font-size:13px;cursor:pointer;border:0.5px solid var(--border-color);transition:all .2s">'+s.name+'</div>';});
+document.getElementById('scoring-tabs').innerHTML=tabsHtml;
+window._renderScore=render;
+render(1);
+})();
+
+// ---- Step 3: Proposal Cards ----
+(function(){
+var props=[
+{title:"Add explicit output schema to prompt",type:"Prompt fix",typeBg:"var(--info-bg)",typeCol:"var(--info-text)",sub:"Targets: field completeness (76% → ~95%), schema pass rate (82% → ~97%)",
+diagnosis:"In 5 of 20 test runs, the output was missing the \"leads\" array or returned it as a flat string. The current prompt says \"analyze the data and output results\" without specifying the required JSON structure.",
+diff:'<span style="color:var(--danger-text)">- Analyze the following market data and output your results.</span>\n<span style="color:var(--success-text)">+ Analyze the following market data.</span>\n<span style="color:var(--success-text)">+ You MUST respond with valid JSON matching this schema:</span>\n<span style="color:var(--success-text)">+ {</span>\n<span style="color:var(--success-text)">+   "analysis_summary": "string (2-5 sentences)",</span>\n<span style="color:var(--success-text)">+   "leads": [{"ticker": "str", "signal": "str",</span>\n<span style="color:var(--success-text)">+              "confidence": "high|medium|low"}],</span>\n<span style="color:var(--success-text)">+   "risk_factors": ["string"],</span>\n<span style="color:var(--success-text)">+   "data_date": "YYYY-MM-DD"</span>\n<span style="color:var(--success-text)">+ }</span>\n<span style="color:var(--success-text)">+ Do not include any text outside the JSON object.</span>',
+impacts:[{label:"Schema pass",val:"82 → 97%"},{label:"Field complete",val:"76 → 95%"},{label:"Format stability",val:"72 → 90%"}],risk:"Low risk — prompt-only change",riskBg:"var(--success-bg)",riskCol:"var(--success-text)"},
+{title:"Reduce temperature from 0.7 to 0.3",type:"Config fix",typeBg:"var(--warn-bg)",typeCol:"var(--warn-text)",sub:"Targets: content consistency (65% → ~82%), format variance reduction",
+diagnosis:"Stability scoring found that 3 identical inputs produced structurally different outputs across runs. Content similarity averaged only 65%. The current temperature of 0.7 introduces unnecessary randomness for a structured analysis task.",
+diff:'<span style="color:var(--danger-text)">- temperature: 0.7</span>\n<span style="color:var(--success-text)">+ temperature: 0.3</span>',
+impacts:[{label:"Content var.",val:"65 → 82%"},{label:"Length var.",val:"80 → 90%"},{label:"Quality score",val:"3.1 → 3.1"}],risk:"Low risk — config-only change",riskBg:"var(--success-bg)",riskCol:"var(--success-text)"},
+{title:"Add language constraint for Chinese output",type:"Contract fix",typeBg:"var(--success-bg)",typeCol:"var(--success-text)",sub:"Targets: language match (88% → ~98%), downstream parsing stability",
+diagnosis:"In 12% of runs, step_02 mixed English phrases into what should be Chinese-language analysis. This happens when the input market data contains English ticker names — the LLM sometimes continues in English.",
+diff:'<span style="color:var(--text-secondary)"># In step_02 prompt:</span>\n<span style="color:var(--success-text)">+ 请使用中文输出所有分析内容。</span>\n<span style="color:var(--success-text)">+ 股票代码和专有名词可保留英文，其余必须为中文。</span>\n\n<span style="color:var(--text-secondary)"># In guardian config:</span>\n<span style="color:var(--danger-text)">- lang_ok: null</span>\n<span style="color:var(--success-text)">+ language: "zh"</span>\n<span style="color:var(--success-text)">+ language_tolerance: 0.15</span>',
+impacts:[{label:"Language match",val:"88 → 98%"},{label:"Coherence",val:"3.4 → 3.8"},{label:"Downstream ok",val:"+12%"}],risk:"Medium risk — prompt + config",riskBg:"var(--warn-bg)",riskCol:"var(--warn-text)"}
+];
+var h='';
+props.forEach(function(p,i){
+  h+='<div id="prop'+i+'" onclick="window._toggleProp('+i+')" style="background:var(--bg-primary);border:0.5px solid var(--border-color);border-radius:var(--radius-lg);padding:1rem;margin-bottom:10px;cursor:pointer;transition:border-color .2s">';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center"><span style="font-size:14px;font-weight:500">'+p.title+'</span><span style="font-size:11px;padding:3px 10px;border-radius:var(--radius);background:'+p.typeBg+';color:'+p.typeCol+'">'+p.type+'</span></div>';
+  h+='<div style="font-size:12px;color:var(--text-secondary);margin-top:4px">'+p.sub+'</div>';
+  h+='<div id="propd'+i+'" style="display:none;margin-top:16px">';
+  h+='<div style="font-size:13px;font-weight:500;margin:12px 0 4px">Diagnosis</div>';
+  h+='<div style="font-size:13px;color:var(--text-secondary);line-height:1.6">'+p.diagnosis+'</div>';
+  h+='<div style="font-size:13px;font-weight:500;margin:12px 0 4px">Proposed change</div>';
+  h+='<pre style="white-space:pre-wrap">'+p.diff+'</pre>';
+  h+='<div style="font-size:13px;font-weight:500;margin:12px 0 4px">Expected impact</div>';
+  h+='<div style="display:flex;gap:12px">';
+  p.impacts.forEach(function(imp){h+='<div style="flex:1;background:var(--bg-secondary);border-radius:var(--radius);padding:10px;text-align:center"><div style="font-size:11px;color:var(--text-secondary)">'+imp.label+'</div><div style="font-size:16px;font-weight:500;color:var(--success-text);margin-top:2px">'+imp.val+'</div></div>';});
+  h+='</div>';
+  h+='<div style="display:inline-block;font-size:11px;padding:3px 10px;border-radius:var(--radius);margin-top:8px;background:'+p.riskBg+';color:'+p.riskCol+'">'+p.risk+'</div>';
+  h+='</div></div>';
+});
+document.getElementById('proposals').innerHTML=h;
+window._toggleProp=function(i){
+  var el=document.getElementById('propd'+i);
+  var card=document.getElementById('prop'+i);
+  var showing=el.style.display==='block';
+  document.querySelectorAll('[id^=propd]').forEach(function(d){d.style.display='none';});
+  document.querySelectorAll('[id^=prop]').forEach(function(c){if(c.id.length<=5)c.style.borderColor='var(--border-color)';c.style.borderWidth='0.5px';});
+  if(!showing){el.style.display='block';card.style.borderColor='var(--info-text)';card.style.borderWidth='2px';}
+};
+})();
+
+// ---- Step 4: Change Type Cards ----
+(function(){
+var types=[
+{title:"Prompt edit",risk:"Low",riskBg:"var(--success-bg)",riskCol:"var(--success-text)",desc:"Rewrite or append instructions in the step's prompt template. Most common fix type — addresses ~60% of all deviations.",mech:"File replacement",how:"Guardian reads the prompt file path from the YAML config, writes the patched version to a new file (prompt_v7.txt), and updates the config to point to the new file. The old file is never deleted.",
+ex:'# prompt_v6.txt (current)\nAnalyze the market data.\n\n# prompt_v7.txt (patched)\nAnalyze the following market data.\nRespond ONLY with valid JSON:\n{"analysis_summary": "...",\n "leads": [{"ticker": "...", ...}]}'},
+{title:"Config edit",risk:"Low",riskBg:"var(--success-bg)",riskCol:"var(--success-text)",desc:"Adjust LLM call parameters: temperature, max_tokens, top_p. Pure value swaps in the YAML config.",mech:"YAML value patch",how:"Guardian loads the YAML config, modifies the target value using a safe merge, writes to a new versioned config file.",
+ex:'# config v3 (current)\nstep_02:\n  temperature: 0.7\n  max_tokens: 4096\n\n# config v4 (patched)\nstep_02:\n  temperature: 0.3    # changed\n  max_tokens: 4096    # untouched'},
+{title:"Schema edit",risk:"Medium",riskBg:"var(--warn-bg)",riskCol:"var(--warn-text)",desc:"Tighten or relax the JSON Schema that validates output. Affects what Guardian considers valid.",mech:"JSON Schema patch",how:"Guardian applies a JSON Merge Patch (RFC 7396) to the existing schema.",
+ex:'# schema patch for step_02\n{\n  "properties": {\n    "leads": {\n      "type": "array",\n      "minItems": 1\n    }\n  },\n  "required": ["analysis_summary",\n               "leads", "data_date"]\n}'},
+{title:"Guardian rule edit",risk:"Medium",riskBg:"var(--warn-bg)",riskCol:"var(--warn-text)",desc:"Add, remove, or tune Guardian checkpoint rules: score thresholds, retry limits, alert conditions.",mech:"YAML section patch",how:"Guardian modifies only the 'guardian:' section of the step config.",
+ex:'# guardian config patch\nstep_02:\n  guardian:\n    semantic:\n      min_score: 3.5     # was: 3\n    structural:\n      language: "zh"\n      language_tolerance: 0.15\n    actions:\n      max_retries: 3     # was: 2'}
+];
+var h='';
+types.forEach(function(t,i){
+  h+='<div id="ct'+i+'" onclick="window._toggleCT('+i+')" style="background:var(--bg-primary);border:0.5px solid var(--border-color);border-radius:var(--radius-lg);padding:1rem;cursor:pointer;transition:border-color .2s">';
+  h+='<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px"><span style="font-size:14px;font-weight:500">'+t.title+'</span><span style="font-size:11px;padding:2px 8px;border-radius:var(--radius);background:'+t.riskBg+';color:'+t.riskCol+'">'+t.risk+' risk</span></div>';
+  h+='<div style="font-size:12px;color:var(--text-secondary);line-height:1.6">'+t.desc+'</div>';
+  h+='<div id="ctd'+i+'" style="display:none;border-top:0.5px solid var(--border-color);padding-top:10px;margin-top:8px">';
+  h+='<div style="font-size:13px;font-weight:500;margin:8px 0 4px">Mechanism: '+t.mech+'</div>';
+  h+='<div style="font-size:12px;color:var(--text-secondary);line-height:1.6">'+t.how+'</div>';
+  h+='<pre>'+t.ex+'</pre>';
+  h+='</div></div>';
+});
+document.getElementById('change-grid').innerHTML=h;
+window._toggleCT=function(i){
+  var el=document.getElementById('ctd'+i);
+  var showing=el.style.display==='block';
+  document.querySelectorAll('[id^=ctd]').forEach(function(d){d.style.display='none';});
+  if(!showing){el.style.display='block';}
+};
+})();
+
+// ---- Step 5: Backtest Tables ----
+(function(){
+var metrics=[
+{section:"Structural",rows:[{name:"Schema pass rate",old:82,n:96,u:"%"},{name:"Field completeness",old:76,n:88,u:"%"},{name:"Length in range",old:90,n:93,u:"%"},{name:"Language match",old:88,n:97,u:"%"}]},
+{section:"Semantic (1-5)",rows:[{name:"Input-output relevance",old:3.6,n:4.1,u:"",mx:5},{name:"Content quality",old:3.1,n:3.5,u:"",mx:5},{name:"Logical coherence",old:3.4,n:3.9,u:"",mx:5}]},
+{section:"Stability",rows:[{name:"Format consistency",old:72,n:91,u:"%"},{name:"Content consistency",old:65,n:80,u:"%"},{name:"Length consistency",old:80,n:88,u:"%"}]}
+];
+var h='';
+metrics.forEach(function(s){
+h+='<div style="font-size:14px;font-weight:500;margin:16px 0 8px">'+s.section+'</div>';
+h+='<table style="width:100%;border-collapse:collapse;font-size:13px"><thead><tr><th style="text-align:left;padding:8px 6px;border-bottom:0.5px solid var(--border-color);color:var(--text-secondary);font-weight:400;font-size:12px">Metric</th><th style="padding:8px 4px;color:var(--text-secondary);font-weight:400;font-size:12px">v6</th><th style="padding:8px 4px;color:var(--text-secondary);font-weight:400;font-size:12px">v7</th><th style="text-align:right;padding:8px 6px;color:var(--text-secondary);font-weight:400;font-size:12px">Delta</th></tr></thead><tbody>';
+s.rows.forEach(function(r){
+  var mx=r.mx||100;
+  var d=r.mx?((r.n-r.old)).toFixed(1):(r.n-r.old);
+  var sign=d>0?"+":"";
+  var dCol=d>0?"var(--success-text)":"var(--danger-text)";
+  var fmtO=r.mx?r.old.toFixed(1):r.old;
+  var fmtN=r.mx?r.n.toFixed(1):r.n;
+  h+='<tr><td style="padding:8px 6px;border-bottom:0.5px solid var(--border-color)">'+r.name+'</td>';
+  h+='<td style="padding:8px 4px;border-bottom:0.5px solid var(--border-color);color:var(--text-tertiary)">'+fmtO+r.u+'</td>';
+  h+='<td style="padding:8px 4px;border-bottom:0.5px solid var(--border-color);font-weight:500">'+fmtN+r.u+'</td>';
+  h+='<td style="text-align:right;padding:8px 6px;border-bottom:0.5px solid var(--border-color);font-weight:500;color:'+dCol+'">'+sign+d+(r.mx?"":r.u)+'</td></tr>';
+});
+h+='</tbody></table>';
+});
+document.getElementById('backtest-tables').innerHTML=h;
+})();
+
+// ---- Step 6: Timeline ----
+(function(){
+var events=[
+{date:"Mar 14",color:"var(--warn-text)",title:"Weekly eval triggered",desc:"Routine scan detected step_02 composite score at 72%",badge:"72% — below threshold",badgeBg:"var(--warn-bg)",badgeCol:"var(--warn-text)"},
+{date:"Mar 14",color:"var(--info-text)",title:"Optimization cycle started",desc:"Steps 1-4: analyzed risks, quantified deviations, generated 3 proposals, applied changes",badge:"Cycle #1",badgeBg:"var(--info-bg)",badgeCol:"var(--info-text)"},
+{date:"Mar 15",color:"var(--success-text)",title:"v7 deployed",desc:"Backtest passed 2/3 gates. Accepted as improvement, composite at 89%",badge:"89% — above threshold",badgeBg:"var(--success-bg)",badgeCol:"var(--success-text)"},
+{date:"Mar 16",color:"var(--success-text)",title:"Production run #1 on v7",desc:"First live cron run with new config. All Guardians passed.",badge:"91%",badgeBg:"var(--success-bg)",badgeCol:"var(--success-text)"},
+{date:"Mar 17",color:"var(--success-text)",title:"Production run #2",desc:"Stable. Scores consistent with backtest predictions.",badge:"90%",badgeBg:"var(--success-bg)",badgeCol:"var(--success-text)"},
+{date:"Mar 18-20",color:"var(--success-text)",title:"Production runs #3-5",desc:"Holding steady at 88-91% range. No drift detected.",badge:"88-91%",badgeBg:"var(--success-bg)",badgeCol:"var(--success-text)"},
+{date:"Mar 21",color:"var(--warn-text)",title:"Drift signal detected",desc:"step_01 output structure changed — data provider API returned a new field format. step_02 semantic score dropped to 3.0.",badge:"Drift — new cycle pending",badgeBg:"var(--warn-bg)",badgeCol:"var(--warn-text)"},
+{date:"Mar 21",color:"var(--info-text)",title:"New optimization cycle triggered",desc:"Guardian auto-started Step 1: analyzing how the new API format affects downstream steps",badge:"Cycle #2 — in progress",badgeBg:"var(--info-bg)",badgeCol:"var(--info-text)"}
+];
+var h='';
+events.forEach(function(e,i){
+  var isLast=i===events.length-1;
+  h+='<div style="display:flex;align-items:stretch;gap:0;margin-bottom:2px;min-height:44px">';
+  h+='<div style="width:64px;flex-shrink:0;font-size:11px;color:var(--text-tertiary);padding-top:12px;text-align:right;padding-right:12px">'+e.date+'</div>';
+  h+='<div style="width:20px;flex-shrink:0;display:flex;flex-direction:column;align-items:center"><div style="width:10px;height:10px;border-radius:50%;flex-shrink:0;margin-top:14px;background:'+e.color+'"></div>'+(isLast?'':'<div style="flex:1;width:1px;background:var(--border-color)"></div>')+'</div>';
+  h+='<div style="flex:1;padding:8px 0 8px 12px"><div style="font-size:13px;font-weight:500">'+e.title+'</div><div style="font-size:12px;color:var(--text-secondary);margin-top:2px;line-height:1.5">'+e.desc+'</div><span style="display:inline-block;font-size:11px;padding:2px 8px;border-radius:var(--radius);margin-top:4px;background:'+e.badgeBg+';color:'+e.badgeCol+'">'+e.badge+'</span></div>';
+  h+='</div>';
+});
+document.getElementById('timeline').innerHTML=h;
+})();
+</script>
+
+</body>
+</html>
