@@ -364,6 +364,18 @@ def serve(host: str, port: int, db: str) -> None:
     uvicorn.run("guardian.api.server:app", host=host, port=port, log_level="info")
 
 
+@cli.command("mcp")
+def mcp_serve() -> None:
+    """Start the Guardian MCP server (stdio transport).
+
+    Exposes guardian tools via the Model Context Protocol for use
+    with Claude Desktop, Cursor, VS Code, and other MCP clients.
+    """
+    from guardian.mcp_server import main as mcp_main
+
+    mcp_main()
+
+
 def main() -> None:
     """Entry point for the guardian CLI."""
     cli()

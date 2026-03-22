@@ -15,8 +15,12 @@ dependencies = [
     "uvicorn>=0.34",
 ]
 
+[project.optional-dependencies]
+mcp = ["mcp>=1.2.0"]
+
 [project.scripts]
 guardian = "guardian.cli:main"
+guardian-mcp = "guardian.mcp_server:main"
 
 [build-system]
 requires = ["hatchling"]
