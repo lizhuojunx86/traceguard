@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "pipeline-guardian": {
+      "command": "uv",
+      "args": ["--directory", ".", "run", "guardian", "mcp"],
+      "env": {
+        "GUARDIAN_DB_URL": "sqlite:///traces.db"
+      }
+    }
+  }
+}
