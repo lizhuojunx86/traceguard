@@ -543,13 +543,56 @@ async def generate_suggestions(
     return report
 
 
+def _fix_json_strings(text: str) -> str:
+    """Escape unescaped control characters inside JSON string values."""
+    result = []
+    in_string = False
+    i = 0
+    while i < len(text):
+        c = text[i]
+        if c == "\\" and in_string:
+            result.append(c)
+            i += 1
+            if i < len(text):
+                result.append(text[i])
+            i += 1
+            continue
+        if c == '"':
+            in_string = not in_string
+            result.append(c)
+        elif in_string and c == "\n":
+            result.append("\\n")
+        elif in_string and c == "\r":
+            result.append("\\r")
+        elif in_string and c == "\t":
+            result.append("\\t")
+        else:
+            result.append(c)
+        i += 1
+    return "".join(result)
+
+
+def _extract_json(text: str) -> str:
+    """Extract JSON object from text that may contain reasoning blocks or prose."""
+    import re
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    text = re.sub(r"<think>.*$", "", text, flags=re.DOTALL)
+    text = text.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        lines = [l for l in lines if not l.strip().startswith("```")]
+        text = "\n".join(lines).strip()
+    start = text.find("{")
+    end = text.rfind("}")
+    if start != -1 and end != -1 and end > start:
+        text = text[start:end + 1]
+    text = _fix_json_strings(text)
+    return text.strip()
+
+
 def _parse_suggestions(raw: str) -> dict:
     """Parse the LLM's JSON response."""
-    cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
-        cleaned = "\n".join(lines).strip()
+    cleaned = _extract_json(raw)
 
     try:
         return json.loads(cleaned)
