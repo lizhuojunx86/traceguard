@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Step 03 Market Report Output",
+  "type": "object",
+  "properties": {
+    "report_date": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+    "markdown_path": { "type": "string" },
+    "pdf_path": { "type": "string" },
+    "sections": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 4
+    },
+    "source_count": { "type": "integer", "minimum": 3 },
+    "telegram_sent": { "type": "boolean" },
+    "content_hash": { "type": "string" }
+  },
+  "required": ["report_date", "markdown_path", "pdf_path", "telegram_sent"]
+}
