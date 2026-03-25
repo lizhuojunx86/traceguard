@@ -167,7 +167,15 @@ async def _do_probe(
 
 
 def _detect_sandbox() -> bool:
-    """Detect if running inside a container or sandboxed environment."""
+    """Detect if running inside a container or sandboxed environment.
+
+    Set GUARDIAN_FORCE_EXTERNAL=1 to bypass all sandbox checks
+    (useful when running locally with a proxy like Clash/V2Ray).
+    """
+    if os.environ.get("GUARDIAN_FORCE_EXTERNAL", "").strip() == "1":
+        logger.debug("Sandbox check bypassed via GUARDIAN_FORCE_EXTERNAL=1")
+        return False
+
     # Docker
     if Path("/.dockerenv").exists():
         logger.debug("Sandbox indicator: /.dockerenv")
@@ -179,6 +187,7 @@ def _detect_sandbox() -> bool:
         return True
 
     # Proxy pointing to localhost (common in sandboxed VMs)
+    # Skipped if GUARDIAN_FORCE_EXTERNAL is set (handled above)
     for var in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):
         proxy = os.environ.get(var, "")
         if proxy and ("localhost" in proxy or "127.0.0.1" in proxy):
