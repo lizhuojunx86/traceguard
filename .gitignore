@@ -1,13 +1,35 @@
-__pycache__/
-*.pyc
-*.pyo
-.venv/
-*.egg-info/
-dist/
-build/
-.pytest_cache/
+# IDE
+*.code-workspace
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# DB (main + journals + backups + dumps; keep migrations/*.sql if added later)
 *.db
 *.db-journal
 *.db-wal
 *.db-shm
-.DS_Store
+*.db.bak
+traces_dump.sql
+
+# FUSE filesystem temp files
+.fuse_hidden*
+
+# Python / uv
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
