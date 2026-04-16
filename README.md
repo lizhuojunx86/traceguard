@@ -520,6 +520,44 @@ uv run pytest tests/test_structural.py  # Run a specific test file
 
 ---
 
+## Stability for Downstream Integrators
+
+### v0.1.0-huadian-baseline (2026-04-16)
+
+This version is pinned by project **HuaDian** (华典智谱) for task T-TG-002.
+
+**Public API surface** (frozen until v0.2.0):
+
+- `guardian.evaluate_async` — async checkpoint entry
+- `guardian.StepOutput` — step output wrapper
+- `guardian.GuardianConfig` — YAML-loaded config (with `.structural` / `.semantic` / `.actions`)
+- `guardian.GuardianDecision` — result dataclass (`action` / `issues` / `score` / `retry_hint` / `semantic_score` / `semantic_status`)
+
+**Breaking changes** to the above require a major version bump.
+
+**Non-public** (may change without notice in 0.2.0+):
+
+- Everything not listed in `guardian.__all__`, including all submodules under
+  `guardian.core.*`, `guardian.validators.*`, `guardian.store.*`,
+  `guardian.actions.*`, `guardian.optimizer.*`, `guardian.api.*`,
+  `guardian.cli`, `guardian.env`, `guardian.mcp_server`
+- CLI output format
+- Storage schema (`eval_traces` table)
+
+You may import internal symbols, but doing so binds you to TG's internal
+shape and you accept the upgrade risk.
+
+Downstream integrators should pin a specific git SHA or tag, not `main`.
+
+**Note for downstream integrators:** This baseline freezes TG's *own*
+vocabulary (`GuardianDecision`, action literal strings such as `pass` /
+`retry` / `abort` / `alert` / `passthrough`). It does **not** match any
+external protocol (e.g. HuaDian ADR-004 `CheckpointResult` / `ActionType`).
+Translation between TG vocabulary and any downstream protocol is the
+integrator's responsibility.
+
+---
+
 ## License
 
 See [LICENSE](LICENSE) for details.
