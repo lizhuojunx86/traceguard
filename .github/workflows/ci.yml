@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync
+
+      - name: Run tests
+        run: |
+          set +e
+          uv run pytest -q
+          code=$?
+          if [ $code -eq 5 ]; then
+            echo "::warning::No tests collected (pytest exit 5) — acceptable during stability baseline"
+            exit 0
+          fi
+          exit $code
+
+      - name: Ruff lint
+        continue-on-error: true
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        continue-on-error: true
+        run: uv run ruff format --check .
