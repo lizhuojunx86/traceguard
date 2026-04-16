@@ -313,12 +313,21 @@ async def _probe_ollama(
     if response.status_code != 200:
         return None
 
-    # Extract first available model
+    # Extract best available chat model (skip embedding-only models)
     model = "llama3"
+    EMBED_ONLY_PATTERNS = ("embed", "nomic-embed", "bge-", "e5-", "gte-")
     try:
         data = response.json()
         models = data.get("models", [])
-        if models:
+        # Prefer a chat-capable model over embedding-only ones
+        chat_models = [
+            m.get("name", "")
+            for m in models
+            if not any(p in m.get("name", "").lower() for p in EMBED_ONLY_PATTERNS)
+        ]
+        if chat_models:
+            model = chat_models[0]
+        elif models:
             model = models[0].get("name", "llama3")
     except (ValueError, KeyError, IndexError):
         pass
