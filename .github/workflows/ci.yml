@@ -16,8 +16,13 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install dependencies
-        run: uv sync
+      - name: Pin Python 3.12
+        run: |
+          uv python install 3.12
+          uv venv --python 3.12
+
+      - name: Install dependencies (incl. mcp extra)
+        run: uv sync --extra mcp
 
       - name: Run tests
         run: |
@@ -25,7 +30,7 @@ jobs:
           uv run pytest -q
           code=$?
           if [ $code -eq 5 ]; then
-            echo "::warning::No tests collected (pytest exit 5) — acceptable during stability baseline"
+            echo "::warning::No tests collected — acceptable during stability baseline"
             exit 0
           fi
           exit $code
