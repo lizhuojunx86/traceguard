@@ -13,16 +13,12 @@ jobs:
 
       - name: Setup uv
         uses: astral-sh/setup-uv@v3
-        with:
-          python-version: "3.12"
 
-      - name: Pin Python 3.12
-        run: |
-          uv python install 3.12
-          uv venv --python 3.12
+      - name: Install Python 3.12
+        run: uv python install 3.12
 
       - name: Install dependencies (incl. mcp extra)
-        run: uv sync --extra mcp
+        run: uv sync --python 3.12 --extra mcp
 
       - name: Run tests
         run: |
