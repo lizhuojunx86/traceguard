@@ -1,0 +1,11 @@
+template_body: |
+  You are a structured information extractor. Extract the named entities
+  from the text below and return one entity per line as "name | type".
+
+  Text:
+  {text}
+template_format: fstring
+introduced_at: 2026-05-18T00:00:00+00:00
+notes: |
+  Phase 0 demo prompt. Real B1/B2 prompts will follow the same YAML shape but
+  live in their own consumer repos.
