@@ -12,6 +12,74 @@ import yaml
 from pydantic import BaseModel, Field, field_validator
 
 
+class SpecEdge(BaseModel):
+    """A boundary value that a reported metric may be reverse-calculated toward.
+
+    ``type`` documents which side of a specification the edge represents
+    (a lower interval limit, an upper interval limit, or a benchmark target).
+    Detection currently keys off ``value``; ``type`` is retained for directional
+    refinement and reporting.
+    """
+
+    type: Literal["interval_low", "interval_high", "benchmark"]
+    value: float
+
+
+class ReverseCalcConfig(BaseModel):
+    """Generic statistical reverse-calculation check.
+
+    Flags a metric that is *too stable and hugging a boundary* across a
+    rolling window — the signature of values being back-solved to just clear a
+    threshold rather than measured. Domain-agnostic: it operates only on the
+    configured field name, boundary values, and a ground-truth ``sigma_floor``
+    (the natural cross-sample spread, typically established out-of-band, e.g.
+    via interview). Nothing here is specific to any single domain.
+    """
+
+    mode: Literal["sigma_floor"] = Field(
+        default="sigma_floor",
+        description="Detection mode. 'sigma_floor': flattened sigma near an edge.",
+    )
+    target_field: str = Field(
+        description="Name of the numeric output field to analyze",
+    )
+    window_batches: int = Field(
+        default=6,
+        ge=2,
+        description="Number of recent samples (incl. current) to aggregate",
+    )
+    sigma_floor: float = Field(
+        gt=0,
+        description=(
+            "Ground-truth natural spread of the metric (NOT a constant default; "
+            "established out-of-band, e.g. via interview). Observed sigma far "
+            "below this is suspicious."
+        ),
+    )
+    sigma_ratio: float = Field(
+        default=20.0,
+        gt=0,
+        description="Observed sigma must be < sigma_floor / sigma_ratio to flag",
+    )
+    edge_band: float = Field(
+        gt=0,
+        description="Mean within this distance of a spec edge counts as 'hugging'",
+    )
+    group_field: str | None = Field(
+        default=None,
+        description="Output field whose value selects the applicable spec edge",
+    )
+    spec_edges: dict[str, SpecEdge] = Field(
+        default_factory=dict,
+        description="Map of group value -> boundary the metric may hug",
+    )
+    lookback_days: int = Field(
+        default=3650,
+        ge=1,
+        description="History window (days) to pull prior samples from eval_store",
+    )
+
+
 class StructuralCheckConfig(BaseModel):
     """Configuration for structural validation of a step's output."""
 
@@ -35,6 +103,10 @@ class StructuralCheckConfig(BaseModel):
     language: str | None = Field(
         default=None,
         description="Expected primary language code (e.g. 'en', 'zh')",
+    )
+    reverse_calc: ReverseCalcConfig | None = Field(
+        default=None,
+        description="Optional reverse-calculation (audit-flag) check settings",
     )
 
     model_config = {"populate_by_name": True}
