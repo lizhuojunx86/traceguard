@@ -1,0 +1,49 @@
+pipeline:
+  name: "tcm-extraction-qa"
+  description: >-
+    Extraction reverse-calculation suspicion detection (synthetic example:
+    extract-alpha + extract-beta). This is a DOMAIN config. The generic
+    reverse_calc / registry / audit-flag capabilities live in guardian core;
+    only the domain parameters below are case-specific. Values are in
+    percentage points (pp) and are illustrative, not real production data.
+  trigger: "manual"            # triggered after batch-record OCR
+
+  steps:
+    - name: "cross_batch_yield"
+      container: "tcm-batch-aggregator:latest"
+      input_source: "trigger"
+
+      guardian:
+        structural:
+          required_fields: ["product", "batch_id", "yield_pct"]
+
+          # Generic reverse-calculation check (E1). Flags a metric that is too
+          # stable AND hugging a spec boundary across a rolling window — the
+          # signature of values back-solved to just clear a threshold.
+          reverse_calc:
+            mode: "sigma_floor"
+            target_field: "yield_pct"
+            window_batches: 6
+            # ★ A domain-expert estimate (NOT a constant default): the natural
+            #    cross-batch spread of yield is ~0.5 pp.
+            sigma_floor: 0.5
+            # Observed sigma must be < sigma_floor / sigma_ratio to flag.
+            # ~20x flattening (an aggressive flattening threshold).
+            sigma_ratio: 20.0
+            # Mean within this distance (pp) of a spec edge counts as "hugging".
+            edge_band: 1.0
+            # Which output field selects the applicable spec edge.
+            group_field: "product"
+            spec_edges:
+              # extract-alpha: yield spec is a lower interval limit (90%).
+              "extract-alpha": { type: "interval_low", value: 90.0 }
+              # extract-beta: benchmark target used for cross-batch comparison.
+              "extract-beta": { type: "benchmark", value: 88.3 }
+
+        semantic:
+          enabled: false            # reverse-calc needs no LLM; runs in DEGRADED mode
+
+        actions:
+          on_structural_fail: "alert"   # ★ a suspicion is an audit flag, not an abort
+          alert_channel: "telegram"
+          max_retries: 0
