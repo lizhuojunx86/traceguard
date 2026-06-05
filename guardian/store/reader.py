@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import create_engine, distinct, func, select
 from sqlalchemy.orm import Session
 
-from guardian.store.models import Base, EvalTrace
+from guardian.store.models import Base, EvalTrace, ensure_schema
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,7 @@ class TraceReader:
     def __init__(self, database_url: str) -> None:
         self._engine = create_engine(database_url)
         Base.metadata.create_all(self._engine)
+        ensure_schema(self._engine)
 
     def list_pipelines(self) -> list[dict]:
         """List all pipelines that have recorded traces.
@@ -101,7 +102,11 @@ class TraceReader:
             days: Number of days to look back.
 
         Returns:
-            Dict with count, pass_rate, avg_score, action breakdown.
+            Dict with count, pass_rate, avg_score, action breakdown, and
+            suspicion_count. Pass-rate and avg-score are computed over
+            "standard" traces only; advisory "suspicion" flags are counted
+            separately (suspicion_count) and excluded from quality metrics so
+            audit flags never depress the pass rate.
         """
         since = datetime.now(timezone.utc) - timedelta(days=days)
 
@@ -111,9 +116,17 @@ class TraceReader:
                 EvalTrace.step_name == step_name,
                 EvalTrace.created_at >= since,
             ]
+            # Quality metrics exclude advisory suspicion flags.
+            standard_filter = [*base_filter, EvalTrace.flag_type != "suspicion"]
 
             total = session.execute(
                 select(func.count(EvalTrace.id)).where(*base_filter)
+            ).scalar() or 0
+
+            suspicion_count = session.execute(
+                select(func.count(EvalTrace.id)).where(
+                    *base_filter, EvalTrace.flag_type == "suspicion"
+                )
             ).scalar() or 0
 
             if total == 0:
@@ -125,16 +138,21 @@ class TraceReader:
                     "pass_rate": None,
                     "avg_score": None,
                     "action_counts": {},
+                    "suspicion_count": 0,
                 }
+
+            standard_total = session.execute(
+                select(func.count(EvalTrace.id)).where(*standard_filter)
+            ).scalar() or 0
 
             passed = session.execute(
                 select(func.count(EvalTrace.id)).where(
-                    *base_filter, EvalTrace.passed == True  # noqa: E712
+                    *standard_filter, EvalTrace.passed == True  # noqa: E712
                 )
             ).scalar() or 0
 
             avg_score = session.execute(
-                select(func.avg(EvalTrace.score)).where(*base_filter)
+                select(func.avg(EvalTrace.score)).where(*standard_filter)
             ).scalar()
 
             action_rows = session.execute(
@@ -149,9 +167,14 @@ class TraceReader:
                 "step_name": step_name,
                 "days": days,
                 "total": total,
-                "pass_rate": round(passed / total, 4),
+                "pass_rate": (
+                    round(passed / standard_total, 4)
+                    if standard_total
+                    else None
+                ),
                 "avg_score": round(float(avg_score), 4) if avg_score else None,
                 "action_counts": {r.action: r.cnt for r in action_rows},
+                "suspicion_count": suspicion_count,
             }
 
     def get_daily_scores(
@@ -215,4 +238,5 @@ class TraceReader:
             "attempt": trace.attempt,
             "output_preview": trace.output_preview,
             "created_at": trace.created_at.isoformat() if trace.created_at else None,
+            "flag_type": trace.flag_type,
         }

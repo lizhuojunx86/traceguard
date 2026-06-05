@@ -19,6 +19,7 @@ from guardian.actions.alert import send_telegram_alert
 from guardian.core.config import load_pipeline
 from guardian.core.guardian_node import evaluate
 from guardian.core.step import load_step_output
+from guardian.store.reader import TraceReader
 from guardian.store.writer import TraceWriter
 
 
@@ -142,8 +143,17 @@ def check(
     # Load step output
     output = load_step_output(step, input_file)
 
-    # Evaluate
-    decision = evaluate(output, step_config.guardian, attempt=attempt)
+    # Evaluate. History-aware structural checks (e.g. reverse_calc) read prior
+    # traces from the same db; the reader is read-only so the node stays stateless.
+    reader = TraceReader(db) if db else None
+    decision = evaluate(
+        output,
+        step_config.guardian,
+        attempt=attempt,
+        reader=reader,
+        pipeline_name=config.name,
+        step_name=step,
+    )
 
     # Write trace if db is configured
     if db:
@@ -158,6 +168,7 @@ def check(
             issues=decision.issues,
             attempt=attempt,
             output_preview=preview,
+            flag_type=decision.flag_type,
         )
         logger.info("Trace written to %s", db)
 

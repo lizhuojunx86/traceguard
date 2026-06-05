@@ -6,7 +6,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, DateTime, Float, Integer, String, Text
+from sqlalchemy import (
+    Boolean,
+    DateTime,
+    Engine,
+    Float,
+    Integer,
+    String,
+    Text,
+    inspect,
+    text,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -30,6 +40,9 @@ class EvalTrace(Base):
         attempt: Attempt number (1-based).
         output_preview: Optional truncated preview of the step output.
         created_at: Timestamp when this trace was recorded.
+        flag_type: Audit-flag class — "standard" for ordinary pass/fail traces,
+            "suspicion" for advisory flags that are quarantined from pass-rate
+            statistics (data flagged for human review, not declared wrong).
     """
 
     __tablename__ = "eval_traces"
@@ -48,3 +61,33 @@ class EvalTrace(Base):
         nullable=False,
         default=lambda: datetime.now(timezone.utc),
     )
+    flag_type: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="standard",
+        server_default=text("'standard'"),
+    )
+
+
+def ensure_schema(engine: Engine) -> None:
+    """Idempotent, forward-only schema reconciliation for existing databases.
+
+    ``Base.metadata.create_all()`` creates missing tables with their full
+    column set, but does NOT add newly-introduced columns to a table that
+    already exists. Additive columns introduced after a table was first
+    created are applied here via ``ALTER TABLE ... ADD COLUMN`` (forward-only,
+    never DROP/rebuild). Safe to call on every connection.
+    """
+    inspector = inspect(engine)
+    if "eval_traces" not in inspector.get_table_names():
+        return  # create_all will build it fresh with all columns
+    columns = {c["name"] for c in inspector.get_columns("eval_traces")}
+    if "flag_type" not in columns:
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE eval_traces "
+                    "ADD COLUMN flag_type VARCHAR(20) NOT NULL "
+                    "DEFAULT 'standard'"
+                )
+            )

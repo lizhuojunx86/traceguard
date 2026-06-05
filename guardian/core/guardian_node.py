@@ -44,6 +44,7 @@ class GuardianDecision:
         retry_hint: Optional hint message for retry attempts.
         semantic_score: LLM-assigned semantic score (1-5), or None if not evaluated.
         semantic_status: Status of semantic evaluation ('evaluated', 'skipped ...', or None).
+        flag_type: Audit-flag class — "standard" or "suspicion" (advisory).
     """
 
     action: str
@@ -52,12 +53,17 @@ class GuardianDecision:
     retry_hint: str | None = None
     semantic_score: int | None = None
     semantic_status: str | None = None
+    flag_type: str = "standard"
 
 
 def evaluate(
     output: StepOutput,
     config: GuardianConfig,
     attempt: int = 1,
+    *,
+    reader: object | None = None,
+    pipeline_name: str | None = None,
+    step_name: str | None = None,
 ) -> GuardianDecision:
     """Evaluate a step output (sync wrapper).
 
@@ -68,11 +74,20 @@ def evaluate(
         output: The step output to evaluate.
         config: Guardian configuration for this step.
         attempt: Current attempt number (1-based).
+        reader: Optional TraceReader for history-aware structural checks.
+        pipeline_name: Pipeline name (for history-aware checks).
+        step_name: Step name (for history-aware checks).
 
     Returns:
         A GuardianDecision with the action to take.
     """
-    structural_result = validate_structural(output, config.structural)
+    structural_result = validate_structural(
+        output,
+        config.structural,
+        reader=reader,
+        pipeline_name=pipeline_name,
+        step_name=step_name,
+    )
 
     # If structural checks fail, don't bother with semantic evaluation
     if not structural_result.passed:
@@ -86,6 +101,7 @@ def evaluate(
             issues=structural_result.issues,
             score=score,
             retry_hint=retry_hint,
+            flag_type=structural_result.flag_type,
         )
 
     # Structural passed — run semantic if enabled
@@ -145,6 +161,10 @@ async def evaluate_async(
     config: GuardianConfig,
     attempt: int = 1,
     http_client: httpx.AsyncClient | None = None,
+    *,
+    reader: object | None = None,
+    pipeline_name: str | None = None,
+    step_name: str | None = None,
 ) -> GuardianDecision:
     """Evaluate a step output (async version).
 
@@ -156,11 +176,20 @@ async def evaluate_async(
         config: Guardian configuration for this step.
         attempt: Current attempt number (1-based).
         http_client: Optional shared httpx client for LLM calls.
+        reader: Optional TraceReader for history-aware structural checks.
+        pipeline_name: Pipeline name (for history-aware checks).
+        step_name: Step name (for history-aware checks).
 
     Returns:
         A GuardianDecision with the action to take.
     """
-    structural_result = validate_structural(output, config.structural)
+    structural_result = validate_structural(
+        output,
+        config.structural,
+        reader=reader,
+        pipeline_name=pipeline_name,
+        step_name=step_name,
+    )
 
     if not structural_result.passed:
         score = _compute_score(structural_result, semantic_result=None)
@@ -173,6 +202,7 @@ async def evaluate_async(
             issues=structural_result.issues,
             score=score,
             retry_hint=retry_hint,
+            flag_type=structural_result.flag_type,
         )
 
     semantic_result = None

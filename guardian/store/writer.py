@@ -11,7 +11,7 @@ import logging
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
-from guardian.store.models import Base, EvalTrace
+from guardian.store.models import Base, EvalTrace, ensure_schema
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,7 @@ class TraceWriter:
     def __init__(self, database_url: str) -> None:
         self._engine = create_engine(database_url)
         Base.metadata.create_all(self._engine)
+        ensure_schema(self._engine)
 
     def write(
         self,
@@ -37,6 +38,7 @@ class TraceWriter:
         issues: list[str],
         attempt: int,
         output_preview: str | None = None,
+        flag_type: str = "standard",
     ) -> EvalTrace:
         """Write a single evaluation trace to the database.
 
@@ -49,6 +51,7 @@ class TraceWriter:
             issues: List of issue descriptions.
             attempt: Current attempt number.
             output_preview: Optional truncated output preview.
+            flag_type: Audit-flag class ("standard" or "suspicion").
 
         Returns:
             The persisted EvalTrace instance.
@@ -62,6 +65,7 @@ class TraceWriter:
             issues=json.dumps(issues),
             attempt=attempt,
             output_preview=output_preview,
+            flag_type=flag_type,
         )
 
         with Session(self._engine) as session:
