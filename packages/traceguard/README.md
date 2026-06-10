@@ -1,38 +1,84 @@
-# traceguard (Phase 0 MVP)
+# traceguard
 
-New SDK package — see `../../TRACEGUARD_SPEC.md` for the binding contract and
-`../../TRACEGUARD_ROADMAP.md` for the Phase 0 scope.
+**Point-in-time correct LLM instrumentation — tracing, version pinning, and
+look-ahead-bias protection for research pipelines.**
 
-Independent from the existing `guardian/` package at the repo root; no shared
-imports. Existing huadian baseline (`pipeline-guardian v0.1.0-huadian-baseline`)
-is not affected by this package.
+When you run LLMs over historical data — backtesting a signal, replaying a
+pipeline, re-scoring an archive — TraceGuard makes it structurally hard to
+accidentally use a model or prompt that did not yet exist at the point in
+time you are simulating.
 
-## Install (dev)
+- `traceguard.registry.models` — model registry with `released_at` /
+  `available_to_us_at`; `select_model(..., strict=...)` with mandatory
+  explicit mode (no default), so anachronistic choices fail loudly.
+- `traceguard.registry.prompts` — git-tracked YAML prompt templates;
+  `load_prompt` pins the content hash into every trace.
+- `traceguard.sdk.tracer` — `@trace` decorator and `span()` context manager
+  recording input hash, model/prompt versions, output, and perf into
+  SQLAlchemy (SQLite by default).
+- `traceguard.sdk.normalizer` — the single canonical `normalize_input` /
+  `input_hash` (sorted keys, fixed float precision, normalized whitespace).
+- `traceguard.sdk.wrappers.anthropic` — `wrap_anthropic` auto-instruments an
+  Anthropic SDK client (extra: `traceguard[anthropic]`).
+- `traceguard.validators.lookahead` — pure-function invariant validators
+  (`validate_feature_as_of`, `validate_model_timing`,
+  `validate_reference_timing`) that raise `InvariantViolation`; call them in
+  pytest/CI.
 
-```bash
-cd packages/traceguard
-uv sync
-uv run pytest
-```
-
-## Install (downstream consumer)
+## Install
 
 ```toml
 [project]
 dependencies = [
-    "traceguard @ git+https://github.com/<owner>/traceguard.git@<tag>#subdirectory=packages/traceguard",
+    "traceguard @ git+https://github.com/lizhuojunx86/traceguard.git@v0.2.0-phase0#subdirectory=packages/traceguard",
 ]
 ```
 
-## What's in Phase 0
+Requires Python 3.11+.
 
-- `traceguard.sdk.normalizer` — canonical input hashing (SPEC §4.4)
-- `traceguard.sdk.tracer` — @trace decorator + tracer.span() context manager (SPEC §4.1)
-- `traceguard.sdk.wrappers.anthropic` — wrap_anthropic
-- `traceguard.store.models` — traces + model_registry ORM (SPEC §3.1, §3.2)
-- `traceguard.registry.models` — select_model (SPEC §4.2)
-- `traceguard.registry.prompts` — load_prompt from YAML (SPEC §4.3, §3.3 backend = filesystem)
-- `traceguard.validators.lookahead` — invariant validators (SPEC §4.5)
+## Example
 
-Not in Phase 0: drift checks, replay framework, CLI, Postgres/TimescaleDB,
-OpenAI/Voyage wrappers. See ROADMAP §3.2 for the full deferred list.
+```python
+from datetime import datetime, timezone
+from traceguard.registry.models import register_model, select_model
+from traceguard.store.models import make_engine
+
+engine = make_engine("sqlite:///traceguard.db")
+
+register_model("demo-llm-2024", model_family="internal-ml",
+               capability_class="general-llm",
+               released_at=datetime(2024, 1, 10, tzinfo=timezone.utc),
+               available_to_us_at=datetime(2024, 2, 1, tzinfo=timezone.utc),
+               engine=engine)
+
+# Backtesting as of mid-2025: models that arrived later are invisible.
+model_id = select_model("general-llm",
+                        available_at=datetime(2025, 6, 30, tzinfo=timezone.utc),
+                        strict=True, engine=engine)
+```
+
+A complete runnable tour (synthetic data, no API keys) lives in
+[examples/quickstart](https://github.com/lizhuojunx86/traceguard/tree/main/examples/quickstart).
+
+## Contract
+
+The binding interface contract — table schemas, SDK signatures, the four
+look-ahead invariants, SemVer rules — is in
+[docs/SPEC.md](https://github.com/lizhuojunx86/traceguard/blob/main/docs/SPEC.md).
+
+Phase 0 scope: tracer, model/prompt registries, normalizer, invariants 1–3,
+Anthropic wrapper. Not yet: drift checks, replay sets (invariant 4), CLI,
+Postgres/TimescaleDB, OpenAI/Voyage wrappers — see
+[TRACEGUARD_ROADMAP.md](https://github.com/lizhuojunx86/traceguard/blob/main/TRACEGUARD_ROADMAP.md).
+
+## Development
+
+```bash
+cd packages/traceguard
+uv sync
+uv run pytest        # 44 tests
+```
+
+## License
+
+Apache-2.0.

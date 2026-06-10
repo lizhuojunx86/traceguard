@@ -1,0 +1,11 @@
+template_body: |
+  You are a structured information extractor. Extract the named entities
+  from the text below and return one entity per line as "name | type".
+
+  Text:
+  {text}
+template_format: fstring
+introduced_at: 2024-03-01T00:00:00+00:00
+notes: |
+  Synthetic demo prompt for the quickstart. Prompt history = git log of this
+  file; the template hash is pinned into every trace that uses it.

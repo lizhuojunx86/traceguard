@@ -4,15 +4,27 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Pipeline Guardian is a **generic** quality assurance system for multi-agent LLM pipelines. It inserts stateless "Guardian" checkpoints between pipeline steps to validate, evaluate (LLM-as-Judge), score, and auto-correct outputs. All state lives in eval_store (SQLite/TimescaleDB).
+This repo hosts **two independent Python packages** (no shared imports, separate releases):
+
+1. **`traceguard`** (`packages/traceguard/`) — the actively developed SDK: point-in-time correct LLM instrumentation (tracer, model/prompt registries, input normalizer, look-ahead-bias invariant validators). Contract: `TRACEGUARD_SPEC.md` (Chinese, authoritative) / `docs/SPEC.md` (English). Roadmap: `TRACEGUARD_ROADMAP.md`. **All new features land here.**
+2. **`pipeline-guardian`** (import name `guardian`, repo root) — the original checkpoint QA system for multi-agent pipelines (structural checks, LLM-as-Judge, actions, dashboard). **Frozen: bugfixes only.** Its 4-symbol public API (`evaluate_async`, `StepOutput`, `GuardianConfig`, `GuardianDecision`) is pinned by downstream `huadian` (tag `v0.1.0-huadian-baseline`) — breaking it breaks their contract tests. Docs: `docs/pipeline-guardian.md`.
+
+Downstream consumers pin git tags: huadian → `v0.1.0-huadian-baseline` (guardian), quant_alpha_v2 semdiff/chaingraph → `v0.2.0-phase0` (traceguard SDK). Both repos lock specific SHAs — never rewrite published tags.
 
 ## Common Commands
 
 ```bash
+# ── traceguard SDK (packages/traceguard) ──
+cd packages/traceguard
+uv sync
+uv run pytest                    # 44 tests
+uv run python ../../examples/quickstart/run_quickstart.py
+
+# ── pipeline-guardian (repo root) ──
 # Install dependencies
 uv sync
 
-# Run all tests (222 tests, ~0.5s)
+# Run all tests (246 tests, ~1s)
 uv run pytest
 
 # Run a single test file
