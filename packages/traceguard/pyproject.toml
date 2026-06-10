@@ -1,11 +1,32 @@
 [project]
 name = "traceguard"
 version = "0.2.0.dev0"
-description = "Cross-project trace + look-ahead bias protection SDK (Phase 0 MVP)"
+description = "Point-in-time correct LLM instrumentation: tracing, version pinning, and look-ahead-bias protection for research pipelines"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 requires-python = ">=3.11"
+authors = [{ name = "Li Zhuojun" }]
+keywords = [
+    "llm",
+    "observability",
+    "tracing",
+    "backtesting",
+    "look-ahead-bias",
+    "reproducibility",
+    "prompt-versioning",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Software Development :: Quality Assurance",
+    "Operating System :: OS Independent",
+]
 dependencies = [
     "sqlalchemy>=2.0",
     "pydantic>=2.0",
@@ -14,6 +35,11 @@ dependencies = [
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40.0"]
+
+[project.urls]
+Homepage = "https://github.com/lizhuojunx86/traceguard"
+Repository = "https://github.com/lizhuojunx86/traceguard"
+Documentation = "https://github.com/lizhuojunx86/traceguard/blob/main/docs/SPEC.md"
 
 [build-system]
 requires = ["hatchling>=1.27"]
