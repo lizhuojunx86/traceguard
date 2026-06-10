@@ -33,3 +33,11 @@ __pycache__/
 *.egg-info/
 dist/
 build/
+
+# Real business data — never commit actual pipeline outputs / production traces.
+# Synthetic example data is fine; keep it under examples/ or configs/examples/.
+real_traces_export.json
+market_intel_export.json
+*_export.json
+fixtures/case-*/
+docs/case-studies/
