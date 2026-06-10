@@ -580,7 +580,7 @@ def _extract_json(text: str) -> str:
     text = text.strip()
     if text.startswith("```"):
         lines = text.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [ln for ln in lines if not ln.strip().startswith("```")]
         text = "\n".join(lines).strip()
     start = text.find("{")
     end = text.rfind("}")
@@ -616,14 +616,14 @@ def format_suggestion_report(report: SuggestionReport) -> str:
     """
     lines: list[str] = []
     lines.append(f"{'=' * 60}")
-    lines.append(f"  OPTIMIZATION SUGGESTIONS")
+    lines.append("  OPTIMIZATION SUGGESTIONS")
     lines.append(f"  Pipeline: {report.pipeline_name}")
     lines.append(f"  Step: {report.step_name}")
     lines.append(f"{'=' * 60}")
     lines.append("")
 
     if report.root_cause_summary:
-        lines.append(f"Root Cause Summary:")
+        lines.append("Root Cause Summary:")
         lines.append(f"  {report.root_cause_summary}")
         lines.append("")
 
@@ -637,19 +637,19 @@ def format_suggestion_report(report: SuggestionReport) -> str:
 
         # Enhanced format (diagnosis-driven)
         if s.diagnosis:
-            lines.append(f"  Diagnosis:")
+            lines.append("  Diagnosis:")
             for dl in s.diagnosis.split("\n"):
                 lines.append(f"    {dl}")
             lines.append("")
 
         if s.root_cause_hypothesis:
-            lines.append(f"  Root cause hypothesis:")
+            lines.append("  Root cause hypothesis:")
             for rl in s.root_cause_hypothesis.split("\n"):
                 lines.append(f"    {rl}")
             lines.append("")
 
         if s.proposed:
-            lines.append(f"  Recommended change:")
+            lines.append("  Recommended change:")
             for pl in s.proposed.split("\n"):
                 lines.append(f"    + {pl}")
             lines.append("")
@@ -662,10 +662,10 @@ def format_suggestion_report(report: SuggestionReport) -> str:
 
         # Backward-compatible fallback: show Current/Proposed if no diagnosis
         if not s.diagnosis and s.current:
-            lines.append(f"  Current:")
+            lines.append("  Current:")
             for cl in s.current.split("\n"):
                 lines.append(f"    - {cl}")
-            lines.append(f"  Proposed:")
+            lines.append("  Proposed:")
             for pl in s.proposed.split("\n"):
                 lines.append(f"    + {pl}")
             if s.rationale:
@@ -676,7 +676,7 @@ def format_suggestion_report(report: SuggestionReport) -> str:
         lines.append("")
 
     if report.overall_strategy:
-        lines.append(f"Overall Strategy:")
+        lines.append("Overall Strategy:")
         lines.append(f"  {report.overall_strategy}")
         lines.append("")
 

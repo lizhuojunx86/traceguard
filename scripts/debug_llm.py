@@ -1,5 +1,9 @@
 """Debug: call MiniMax and show what's at the failing JSON position."""
-import asyncio, os, httpx, json, re, sys
+import asyncio
+import os
+import httpx
+import json
+import re
 
 API_KEY = os.environ.get("GUARDIAN_LLM_API_KEY", "")
 API_BASE = "https://api.minimaxi.com/v1"

@@ -37,7 +37,7 @@ def format_alert_message(
     score_str = f"{score:.2f}" if score is not None else "N/A"
 
     lines = [
-        f"🚨 Guardian Alert",
+        "🚨 Guardian Alert",
         f"Pipeline: {pipeline_name}",
         f"Step: {step_name}",
         f"Action: {action}",

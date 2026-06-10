@@ -10,7 +10,6 @@ import dataclasses
 import json
 import logging
 import os
-import tempfile
 
 from mcp.server.fastmcp import FastMCP
 

@@ -201,7 +201,7 @@ def _parse_llm_response(raw: str, min_score: int) -> SemanticResult:
     if cleaned.startswith("```"):
         lines = cleaned.split("\n")
         # Remove first line (```json) and last line (```)
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [ln for ln in lines if not ln.strip().startswith("```")]
         cleaned = "\n".join(lines).strip()
 
     try:

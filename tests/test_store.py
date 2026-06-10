@@ -1,7 +1,6 @@
 """Tests for eval trace storage (models + writer)."""
 import os
 import tempfile
-from datetime import datetime, timezone
 
 import pytest
 from sqlalchemy import create_engine, select

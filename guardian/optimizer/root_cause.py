@@ -312,7 +312,7 @@ async def analyze_root_causes(
     ) as e:
         logger.warning("Root cause LLM call failed, falling back to rules: %s", e)
         report.root_causes = _rule_based_root_causes(pattern)
-        report.summary = f"LLM call failed — rule-based analysis only."
+        report.summary = "LLM call failed — rule-based analysis only."
 
     finally:
         if should_close:
@@ -372,7 +372,7 @@ def _extract_json(text: str) -> str:
     # Strip markdown code fences
     if text.startswith("```"):
         lines = text.split("\n")
-        lines = [l for l in lines if not l.strip().startswith("```")]
+        lines = [ln for ln in lines if not ln.strip().startswith("```")]
         text = "\n".join(lines).strip()
     # Extract outermost JSON object: find first { and last }
     start = text.find("{")

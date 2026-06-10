@@ -257,7 +257,6 @@ def suggest(
     from guardian.optimizer.suggestion import format_suggestion_report, generate_suggestions
     from guardian.store.reader import TraceReader
 
-    logger = logging.getLogger("guardian.cli")
 
     # Load pipeline config to get guardian YAML
     config = load_pipeline(pipeline)

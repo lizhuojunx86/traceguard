@@ -10,7 +10,6 @@ market_intel → traceguard trace collector
 import argparse
 import hashlib
 import json
-import os
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -212,7 +211,7 @@ def print_summary(traces: list[dict]):
         key=lambda x: x["created_at"], reverse=True
     )
     if recent_fails:
-        print(f"\n⚠️  最近失败（前5条）:")
+        print("\n⚠️  最近失败（前5条）:")
         for t in recent_fails[:5]:
             issues = json.loads(t["issues"])
             print(f"  [{t['created_at'][:10]}] {t['step_name']} — {', '.join(issues)}")

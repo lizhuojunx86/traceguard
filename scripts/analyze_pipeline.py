@@ -4,7 +4,12 @@ Usage:
   GUARDIAN_LLM_API_KEY=<key> .venv/bin/python analyze_pipeline.py [step_name]
   Default steps: step_04_leads_report and step_03_market_report
 """
-import asyncio, json, os, re, sqlite3, sys
+import asyncio
+import json
+import os
+import re
+import sqlite3
+import sys
 from collections import Counter
 from datetime import datetime, timedelta
 

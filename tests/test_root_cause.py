@@ -13,10 +13,8 @@ from sqlalchemy.orm import Session
 from guardian.env import LLMEndpoint, LLMMode, reset_endpoint
 from guardian.optimizer.root_cause import (
     FailurePattern,
-    RootCauseReport,
     _build_analysis_prompt,
     _parse_analysis,
-    _rule_based_root_causes,
     analyze_root_causes,
     extract_failure_pattern,
 )

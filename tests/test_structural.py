@@ -3,7 +3,6 @@ import json
 import os
 import tempfile
 
-import pytest
 
 from guardian.core.config import StructuralCheckConfig
 from guardian.core.step import StepOutput

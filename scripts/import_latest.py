@@ -3,7 +3,8 @@
 Mac 侧一键导入：将最新的 real_traces_export.json 增量写入 traceguard 数据库。
 在 ~/Desktop/APP/traceguard 目录下直接运行：python3 import_latest.py
 """
-import json, sqlite3
+import json
+import sqlite3
 from pathlib import Path
 
 base = Path(__file__).parent

@@ -1,5 +1,8 @@
 """Import market_intel traces from JSON export into a fresh SQLite database."""
-import json, sqlite3, os, sys
+import json
+import sqlite3
+import os
+import sys
 
 src = os.path.join(os.path.dirname(__file__), "market_intel_export.json")
 dst = os.path.join(os.path.dirname(__file__), "market_intel.db")
