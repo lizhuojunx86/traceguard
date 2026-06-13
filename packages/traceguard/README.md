@@ -27,14 +27,12 @@ time you are simulating.
 
 ## Install
 
-```toml
-[project]
-dependencies = [
-    "traceguard @ git+https://github.com/lizhuojunx86/traceguard.git@v0.2.0-phase0#subdirectory=packages/traceguard",
-]
+```bash
+pip install traceguard
 ```
 
-Requires Python 3.11+.
+Requires Python 3.11+. The Anthropic wrapper is an extra:
+`pip install "traceguard[anthropic]"`.
 
 ## Example
 

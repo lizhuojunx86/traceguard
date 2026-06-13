@@ -1,5 +1,9 @@
 # TraceGuard
 
+[![PyPI](https://img.shields.io/pypi/v/traceguard)](https://pypi.org/project/traceguard/)
+[![Python](https://img.shields.io/pypi/pyversions/traceguard)](https://pypi.org/project/traceguard/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+
 **Point-in-time correct LLM instrumentation — tracing, version pinning, and
 look-ahead-bias protection for research pipelines.**
 
@@ -40,16 +44,22 @@ guarantees those tools don't give you.
 
 ## Install
 
+```bash
+pip install traceguard
+```
+
+Requires Python 3.11+. Core dependencies: SQLAlchemy 2, Pydantic 2, PyYAML.
+The Anthropic wrapper is an extra: `pip install "traceguard[anthropic]"`.
+
+To track the development version instead of PyPI releases:
+
 ```toml
 # pyproject.toml
 [project]
 dependencies = [
-    "traceguard @ git+https://github.com/lizhuojunx86/traceguard.git@v0.2.0-phase0#subdirectory=packages/traceguard",
+    "traceguard @ git+https://github.com/lizhuojunx86/traceguard.git@main#subdirectory=packages/traceguard",
 ]
 ```
-
-Requires Python 3.11+. Core dependencies: SQLAlchemy 2, Pydantic 2, PyYAML.
-The Anthropic wrapper is an extra: `traceguard[anthropic]`.
 
 ## Five-minute tour
 
