@@ -39,6 +39,11 @@ otel = [
     "opentelemetry-api>=1.20",
     "opentelemetry-sdk>=1.20",
 ]
+# Dependency-isolation point for heavier contamination implementations
+# (retrieval / LLM-backed claim verification). The shipped baselines
+# (min_k_prob, performance_decay_across_regimes) are pure standard-library, so
+# this extra currently adds no runtime deps.
+contamination = []
 
 [project.urls]
 Homepage = "https://github.com/lizhuojunx86/traceguard"

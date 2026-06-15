@@ -7,14 +7,13 @@ you "backtest" it on those events it *recalls* the answer instead of reasoning
 to it. No registry or invariant can refuse this structurally; it has to be
 *estimated* statistically.
 
-The groundwork for that estimation ships behind an optional extra:
-
-    pip install "traceguard[contamination]"
-
-and lives in `traceguard.contamination` (min_k_prob, performance decay across
-regimes, claim-level verification). This file is an illustrative STUB: it
-sketches the scenario and points at the real interfaces, which are intentionally
-minimal in 0.3.0 (correct interfaces + baselines, not full coverage).
+The groundwork lives in `traceguard.contamination` (min_k_prob, performance
+decay across regimes, a claim-level verification protocol) — shipped with the
+core package. The optional `traceguard[contamination]` extra reserves the
+dependency-isolation point for heavier future implementations. This file runs a
+real min_k_prob illustration and sketches the rest; the estimators are
+intentionally minimal in 0.3.0 (correct interfaces + baselines, not full
+coverage).
 
 Run (from the repo root)::
 
@@ -50,10 +49,8 @@ def main() -> int:
     except ImportError:
         print(
             "traceguard.contamination is not importable in this environment.\n"
-            "Install the extra to enable the estimators:\n"
-            '    pip install "traceguard[contamination]"\n'
+            "(stub) nothing to compute — see docs/POSITIONING.md for the framing.\n"
         )
-        print("(stub) nothing to compute — see docs/POSITIONING.md for the framing.")
         return 0
 
     # Illustrative only — synthetic, NOT a validated contamination measurement.

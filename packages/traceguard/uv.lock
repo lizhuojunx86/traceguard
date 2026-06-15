@@ -661,7 +661,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "sqlalchemy", specifier = ">=2.0" },
 ]
-provides-extras = ["anthropic", "otel"]
+provides-extras = ["anthropic", "otel", "contamination"]
 
 [package.metadata.requires-dev]
 dev = [

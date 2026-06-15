@@ -24,7 +24,7 @@ uv run python ../../examples/<name>.py
 
 | File | Sketches | Enabled by |
 |------|----------|------------|
-| [training_contamination.py](training_contamination.py) | The model *recalls* resolved events from pretraining — estimated, not refused | `traceguard[contamination]` (P4) |
+| [training_contamination.py](training_contamination.py) | The model *recalls* resolved events from pretraining — runs a real `min_k_prob` illustration, sketches the rest | `traceguard.contamination` (built-in) |
 | [loop_self_contamination.py](loop_self_contamination.py) | A self-improving loop cites its own output as fact; evidence-gating rejects it | `traceguard.loop` (P5) |
 
 See [../docs/POSITIONING.md](../docs/POSITIONING.md) for the two-kinds-of-look-ahead
