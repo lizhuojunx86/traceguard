@@ -1,0 +1,15 @@
+template_body: |
+  You are a structured information extractor. Extract the named entities
+  from the text below and return one JSON object per entity with keys
+  "name", "type", and "confidence" (0.0-1.0).
+
+  Text:
+  {text}
+template_format: fstring
+introduced_at: 2026-06-01T00:00:00+00:00
+notes: |
+  v2 of the extractor prompt: switched output from "name | type" lines to
+  JSON objects and added a confidence field. A different template_body means a
+  different prompt_template_hash — which is exactly what prompt_drift.py shows
+  the tracer catching. introduced_at is later than v1, so using v2 to compute a
+  feature dated before 2026-06-01 is an invariant-3 (reference timing) violation.
