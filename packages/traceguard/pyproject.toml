@@ -35,6 +35,10 @@ dependencies = [
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40.0"]
+otel = [
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+]
 
 [project.urls]
 Homepage = "https://github.com/lizhuojunx86/traceguard"
@@ -53,6 +57,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.6.0,<0.8.0",
+    "opentelemetry-sdk>=1.20",
 ]
 
 [tool.pytest.ini_options]
