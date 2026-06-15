@@ -28,5 +28,5 @@ uv run python ../../examples/<name>.py
 | [loop_self_contamination.py](loop_self_contamination.py) | A self-improving loop cites its own output as fact; evidence-gating rejects it | `traceguard.loop` (P5) |
 
 See [../docs/POSITIONING.md](../docs/POSITIONING.md) for the two-kinds-of-look-ahead
-framing and [../docs/case-studies/fmp-revision.md](../docs/case-studies/fmp-revision.md)
-for a real-world harness-leakage case study.
+framing. A real-world harness-leakage case study is kept locally at
+`docs/case-studies/fmp-revision.md` (out of the published repo per `.gitignore`).

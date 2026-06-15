@@ -42,8 +42,9 @@ backtest then looks brilliant for reasons that will never generalize forward.
 Nobody intentionally fed the model the future. The leakage rides in through
 ordinary pipeline code: a "2023 backtest" that calls a model released in 2025, a
 prompt you quietly rewrote last week, a vendor "actual" that was silently
-revised months after the fact (see
-[case-studies/fmp-revision.md](case-studies/fmp-revision.md)).
+revised months after the fact (worked through in a local case study,
+`docs/case-studies/fmp-revision.md`, kept out of the published repo per
+`.gitignore`).
 
 - **Where it lives:** in your orchestration / harness code — fully under your
   control, and therefore fixable *structurally*.
