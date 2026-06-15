@@ -64,3 +64,30 @@ def test_decorator_blocks_self_contamination():
     # Self-invented (no source) -> blocked, memory untouched.
     assert remember("invented fact", source_as_of=None) is None
     assert memory == ["real fact"]
+
+
+def test_evidence_gated_strict_raises_and_skips_fn():
+    gate = EvidenceGate(cutoff=CUTOFF, strict=True)
+    ran: list[str] = []
+
+    @evidence_gated(
+        gate,
+        claim_from=lambda claim, **kw: claim,
+        source_as_of_from=lambda claim, *, source_as_of: source_as_of,
+    )
+    def remember(claim: str, *, source_as_of):
+        ran.append(claim)
+        return claim
+
+    with pytest.raises(EvidenceRejected):
+        remember("invented", source_as_of=None)
+    assert ran == []  # wrapped fn never ran
+
+
+def test_naive_datetimes_rejected_with_clear_error():
+    naive = datetime(2022, 6, 1)  # no tzinfo
+    with pytest.raises(ValueError):
+        EvidenceGate(cutoff=naive)
+    gate = EvidenceGate(cutoff=CUTOFF)
+    with pytest.raises(ValueError):
+        gate.admit(claim="x", source_as_of=naive)

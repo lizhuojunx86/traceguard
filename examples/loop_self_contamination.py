@@ -1,4 +1,4 @@
-"""Example (STUB): self-contamination in a self-improving loop.
+"""Example (illustrative): self-contamination in a self-improving loop.
 
 A self-improving / agentic loop writes its own freshly generated outputs back
 into a memory store, then reads that memory on the next iteration as if it were

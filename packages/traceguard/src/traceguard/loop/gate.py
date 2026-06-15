@@ -22,6 +22,13 @@ class EvidenceRejected(ValueError):
     """Raised by a strict ``EvidenceGate`` when inadmissible evidence is offered."""
 
 
+def _require_aware(dt: datetime, name: str) -> None:
+    if dt.tzinfo is None:
+        raise ValueError(
+            f"{name} must be tz-aware (e.g. datetime.now(timezone.utc)), got naive"
+        )
+
+
 @dataclass(frozen=True)
 class Evidence:
     """A candidate fact for the loop's memory.
@@ -45,13 +52,21 @@ class EvidenceGate:
     """
 
     def __init__(self, *, cutoff: datetime, strict: bool = False) -> None:
+        _require_aware(cutoff, "cutoff")
         self.cutoff = cutoff
         self.strict = strict
         self._admitted: list[Evidence] = []
 
     def is_admissible(self, evidence: Evidence) -> bool:
-        """True iff the evidence is sourced at or before the cutoff."""
-        return evidence.source_as_of is not None and evidence.source_as_of <= self.cutoff
+        """True iff the evidence is sourced at or before the cutoff.
+
+        Raises ValueError if ``source_as_of`` is a naive datetime (mirroring the
+        tz-awareness the DB layer enforces elsewhere).
+        """
+        if evidence.source_as_of is None:
+            return False
+        _require_aware(evidence.source_as_of, "source_as_of")
+        return evidence.source_as_of <= self.cutoff
 
     def admit(self, *, claim: str, source_as_of: datetime | None) -> bool:
         """Offer one claim to the gate; record and return True if admissible.

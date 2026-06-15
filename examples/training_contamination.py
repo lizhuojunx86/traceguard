@@ -1,4 +1,4 @@
-"""Example (STUB): detecting training contamination — look-ahead *kind 1*.
+"""Example (illustrative): detecting training contamination — look-ahead *kind 1*.
 
 This is the OTHER look-ahead bias (see docs/POSITIONING.md). Here the leakage is
 not in the harness — it is baked into the model weights. The model was

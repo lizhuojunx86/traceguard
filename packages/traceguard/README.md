@@ -82,7 +82,7 @@ Postgres/TimescaleDB, OpenAI/Voyage wrappers — see
 ```bash
 cd packages/traceguard
 uv sync
-uv run pytest        # 44 tests
+uv run pytest        # 70 tests
 ```
 
 ## License

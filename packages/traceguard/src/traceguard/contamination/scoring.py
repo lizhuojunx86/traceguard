@@ -47,12 +47,21 @@ def attach_contamination_score(
 
     Raises:
         LookupError: if no trace with ``trace_id`` exists.
+        TypeError: if ``output_parsed`` is a non-dict JSON value (the function
+            refuses to clobber existing business output).
     """
     with Session(engine) as sess:
         row = sess.get(Trace, trace_id)
         if row is None:
             raise LookupError(f"no trace with trace_id={trace_id}")
-        data = dict(row.output_parsed) if isinstance(row.output_parsed, dict) else {}
+        existing = row.output_parsed
+        if existing is not None and not isinstance(existing, dict):
+            raise TypeError(
+                f"cannot attach a contamination score: output_parsed is a "
+                f"{type(existing).__name__}, not a dict or None — refusing to "
+                f"overwrite business output"
+            )
+        data = dict(existing) if isinstance(existing, dict) else {}
         scores = list(data.get(key, []))
         scores.append(asdict(score))
         data[key] = scores

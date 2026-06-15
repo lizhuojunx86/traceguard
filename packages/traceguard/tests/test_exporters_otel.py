@@ -147,3 +147,42 @@ def test_attributes_omit_none_and_availability_without_engine(engine):
     assert "traceguard.model.available_to_us_at" not in attrs
     # OTel forbids None attribute values.
     assert all(v is not None for v in attrs.values())
+
+
+def test_export_unregistered_model_omits_availability(engine, otel):
+    provider, exporter = otel
+    tracer = Tracer(engine)
+    with tracer.span("p", "c", "llm_complete") as span:
+        span.record_input({"x": 1})
+        span.record_model_prompt(model_id="never-registered")
+        span.record_output(parsed={"ok": True}, parse_status="success")
+    with Session(engine) as sess:
+        trace = sess.execute(select(Trace).order_by(Trace.trace_id)).scalars().all()[-1]
+
+    export_trace(trace, tracer_provider=provider, engine=engine)
+
+    s = exporter.get_finished_spans()[0]
+    assert s.attributes["gen_ai.request.model"] == "never-registered"
+    assert "traceguard.model.available_to_us_at" not in s.attributes
+
+
+def test_export_no_latency_yields_zero_duration(engine, otel):
+    provider, exporter = otel
+    # Insert a row directly so latency_ms stays None (the tracer auto-fills it).
+    with Session(engine) as sess:
+        row = Trace(
+            project="p",
+            component="c",
+            operation="parse",
+            input_hash="0" * 64,
+            parse_status="success",
+            latency_ms=None,
+            invoked_at=datetime(2024, 5, 1, tzinfo=UTC),
+        )
+        sess.add(row)
+        sess.commit()
+        trace = sess.get(Trace, row.trace_id)
+        export_trace(trace, tracer_provider=provider)
+
+    s = exporter.get_finished_spans()[0]
+    assert s.end_time == s.start_time  # unknown latency -> zero-duration span

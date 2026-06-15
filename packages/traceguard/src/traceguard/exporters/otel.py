@@ -146,7 +146,7 @@ def export_trace(
 
     end = trace.invoked_at
     start = end
-    if trace.latency_ms:
+    if trace.latency_ms is not None:
         start = end - timedelta(milliseconds=trace.latency_ms)
 
     span = tracer.start_span(trace.operation, start_time=_to_ns(start), attributes=attrs)

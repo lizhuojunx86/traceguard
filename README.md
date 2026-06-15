@@ -214,7 +214,7 @@ share no imports and release independently.
 ```bash
 # SDK
 cd packages/traceguard
-uv sync && uv run pytest        # 44 tests
+uv sync && uv run pytest        # 70 tests
 
 # Pipeline Guardian (legacy)
 uv sync && uv run pytest        # 246 tests, from repo root

@@ -9,17 +9,29 @@ Run:
 """
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+# Workaround: some Python builds (e.g. Homebrew 3.14) skip _-prefixed .pth files,
+# breaking uv's editable install. Add the SDK source dir so the tour runs
+# regardless of how the env was set up. (pytest uses pythonpath=["src"].)
+_PKG_SRC = Path(__file__).resolve().parent.parent.parent / "packages" / "traceguard" / "src"
+if _PKG_SRC.is_dir() and str(_PKG_SRC) not in sys.path:
+    sys.path.insert(0, str(_PKG_SRC))
 
-from traceguard.registry.models import NoEligibleModelError, register_model, select_model
-from traceguard.registry.prompts import load_prompt
-from traceguard.sdk.tracer import Tracer
-from traceguard.store.models import Trace, make_engine
-from traceguard.validators.lookahead import (
+from sqlalchemy import select  # noqa: E402
+from sqlalchemy.orm import Session  # noqa: E402
+
+from traceguard.registry.models import (  # noqa: E402
+    NoEligibleModelError,
+    register_model,
+    select_model,
+)
+from traceguard.registry.prompts import load_prompt  # noqa: E402
+from traceguard.sdk.tracer import Tracer  # noqa: E402
+from traceguard.store.models import Trace, make_engine  # noqa: E402
+from traceguard.validators.lookahead import (  # noqa: E402
     InvariantViolation,
     validate_feature_as_of,
     validate_model_timing,

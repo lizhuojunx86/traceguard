@@ -48,4 +48,9 @@ def performance_decay_across_regimes(
         if r not in means:
             raise ValueError(f"regime {r!r} missing or has no scores")
     decay = means[baseline_regime] - means[comparison_regime]
-    return RegimeDecay(regime_means=means, decay=decay, flagged=decay > threshold)
+    # Report only the two compared regimes, even if the caller passed extras.
+    compared = {
+        baseline_regime: means[baseline_regime],
+        comparison_regime: means[comparison_regime],
+    }
+    return RegimeDecay(regime_means=compared, decay=decay, flagged=decay > threshold)

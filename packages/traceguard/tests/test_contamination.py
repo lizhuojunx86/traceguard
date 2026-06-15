@@ -121,3 +121,29 @@ def test_claim_verifier_protocol_is_satisfiable():
     verdict = verifier.verify("Acme beat estimates", as_of=datetime(2023, 1, 1, tzinfo=UTC))
     assert verdict.is_contaminated is True
     assert verdict.supported_as_of is None
+
+
+def test_attach_contamination_score_refuses_non_dict_output(engine):
+    # A list/scalar output_parsed is legal; attaching must NOT silently clobber it.
+    tracer = Tracer(engine)
+    with tracer.span("p", "c", "llm_complete") as span:
+        span.record_input({"x": 1})
+        span.record_output(parsed=["a", "b"], parse_status="success")
+    with Session(engine) as sess:
+        trace_id = sess.execute(select(Trace.trace_id)).scalar_one()
+
+    with pytest.raises(TypeError):
+        attach_contamination_score(
+            trace_id, ContaminationScore("min_k_prob", -0.02, True), engine=engine
+        )
+    with Session(engine) as sess:
+        assert sess.get(Trace, trace_id).output_parsed == ["a", "b"]  # untouched
+
+
+def test_performance_decay_reports_only_compared_regimes():
+    res = performance_decay_across_regimes(
+        {"pre": [0.9], "post": [0.6], "mid": [0.7]},
+        baseline_regime="pre",
+        comparison_regime="post",
+    )
+    assert set(res.regime_means) == {"pre", "post"}  # 'mid' excluded
