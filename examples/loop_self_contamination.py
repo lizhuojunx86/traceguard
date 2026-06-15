@@ -9,8 +9,8 @@ traceable to any source available before the simulated cutoff.
 
 The fix is *evidence-gating*: only admit a memory write as fact if it is
 traceable to evidence that existed before the cutoff. That helper lives in
-`traceguard.loop` (see docs/loop-integration.md). This file is an illustrative
-STUB sketching the failure and the gate.
+`traceguard.loop` (see docs/loop-integration.md); this example runs a real
+EvidenceGate illustration of the failure and the gate.
 
 Run (from the repo root)::
 

@@ -20,12 +20,12 @@ uv run python ../../examples/<name>.py
 | [prompt_drift.py](prompt_drift.py) | Two prompt versions → two hashes the tracer records; invariant 3 rejects a prompt used before its `introduced_at` | Harness (kind 2) |
 | [anthropic_call.py](anthropic_call.py) | `wrap_anthropic` around a real-or-fake client; one traced call; invariant 2 | Harness (kind 2) |
 
-## Stubs (illustrative — point at later phases)
+## Illustrative (run a real slice, sketch the rest)
 
 | File | Sketches | Enabled by |
 |------|----------|------------|
 | [training_contamination.py](training_contamination.py) | The model *recalls* resolved events from pretraining — runs a real `min_k_prob` illustration, sketches the rest | `traceguard.contamination` (built-in) |
-| [loop_self_contamination.py](loop_self_contamination.py) | A self-improving loop cites its own output as fact; evidence-gating rejects it | `traceguard.loop` (P5) |
+| [loop_self_contamination.py](loop_self_contamination.py) | A self-improving loop cites its own output as fact; evidence-gating rejects it | `traceguard.loop` (built-in) |
 
 See [../docs/POSITIONING.md](../docs/POSITIONING.md) for the two-kinds-of-look-ahead
 framing. A real-world harness-leakage case study is kept locally at
