@@ -222,7 +222,11 @@ uv sync && uv run pytest        # 246 tests, from repo root
 
 Roadmap: [TRACEGUARD_ROADMAP.md](TRACEGUARD_ROADMAP.md) — Phase 0 (current)
 ships the tracer, registries, normalizer, and invariants 1–3; Phase 1+ adds
-drift checks, replay sets, and more client wrappers.
+drift checks, replay sets, and more client wrappers. 0.3.0 adds opt-in,
+additive extensions: OpenTelemetry export (`traceguard[otel]`),
+training-contamination groundwork (`traceguard.contamination`), and loop
+evidence-gating (`traceguard.loop`) — see
+[CHANGELOG](packages/traceguard/CHANGELOG.md).
 
 ## License
 

@@ -1,10 +1,10 @@
-"""TraceGuard SDK — Phase 0 MVP.
+"""TraceGuard SDK — point-in-time correct LLM instrumentation.
 
 See ../TRACEGUARD_SPEC.md for the binding interface contract.
 """
 from __future__ import annotations
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 __all__ = [
     "__version__",

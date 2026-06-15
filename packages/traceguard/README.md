@@ -37,8 +37,10 @@ competing with them. See
 pip install traceguard
 ```
 
-Requires Python 3.11+. The Anthropic wrapper is an extra:
-`pip install "traceguard[anthropic]"`.
+Requires Python 3.11+. Optional extras:
+`pip install "traceguard[anthropic]"` (Anthropic client wrapper) and
+`pip install "traceguard[otel]"` (OpenTelemetry / OpenInference export to
+Langfuse, Phoenix, or any OTLP backend).
 
 ## Example
 
