@@ -1,21 +1,27 @@
 # traceguard
 
-**Point-in-time correct LLM instrumentation — tracing, version pinning, and
-look-ahead-bias protection for research pipelines.**
+**Point-in-time correct LLM instrumentation — the time-integrity layer for
+LLM pipelines.**
 
 When you run LLMs over historical data — backtesting a signal, replaying a
 pipeline, re-scoring an archive — TraceGuard makes it structurally hard to
 accidentally use a model or prompt that did not yet exist at the point in
 time you are simulating.
 
+It is not a dashboard or a gateway; it is the lower layer that guarantees the
+timeline underneath one. It interoperates with observability stacks
+(Langfuse / Phoenix via the optional `traceguard[otel]` exporter) rather than
+competing with them. See
+[docs/POSITIONING.md](https://github.com/lizhuojunx86/traceguard/blob/main/docs/POSITIONING.md).
+
 - `traceguard.registry.models` — model registry with `released_at` /
   `available_to_us_at`; `select_model(..., strict=...)` with mandatory
   explicit mode (no default), so anachronistic choices fail loudly.
 - `traceguard.registry.prompts` — git-tracked YAML prompt templates;
   `load_prompt` pins the content hash into every trace.
-- `traceguard.sdk.tracer` — `@trace` decorator and `span()` context manager
-  recording input hash, model/prompt versions, output, and perf into
-  SQLAlchemy (SQLite by default).
+- `traceguard.sdk.tracer` — `@tracer.trace` decorator and `tracer.span()`
+  context manager recording input hash, model/prompt versions, output, and
+  perf into SQLAlchemy (SQLite by default).
 - `traceguard.sdk.normalizer` — the single canonical `normalize_input` /
   `input_hash` (sorted keys, fixed float precision, normalized whitespace).
 - `traceguard.sdk.wrappers.anthropic` — `wrap_anthropic` auto-instruments an

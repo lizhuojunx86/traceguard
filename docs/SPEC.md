@@ -9,6 +9,17 @@
 > **MUST / SHOULD / MAY** follow RFC 2119. Changing a MUST item is a
 > constitutional amendment and requires a SemVer major bump.
 
+## 0. Positioning (non-normative)
+
+TraceGuard addresses **harness / pipeline look-ahead leakage**: code that uses a
+model, prompt, or feature that did not exist at the simulated time. That class is
+exactly what this contract makes structurally refusable (§5). A second class —
+**training contamination**, where the model itself was pre-trained on the future
+it predicts — is statistical rather than structural, and is handled by *opt-in
+extensions outside this contract* (see §6.1 and
+[POSITIONING.md](POSITIONING.md)). This section is non-normative; §§3–7 are the
+binding contract.
+
 ## 1. Scope
 
 This spec defines:
@@ -211,6 +222,23 @@ items, guaranteeing comparability of A/B results across time.
 
 Field renames/deletes/retypes require dual-write and a migration window of
 at least one release.
+
+### 6.1 Opt-in extensions (non-normative)
+
+The following ship as optional extras and are **purely additive** — they add no
+MUST fields, change no existing signatures, and do not touch the normalize
+algorithm, so each is a SemVer **minor**:
+
+- `traceguard[otel]` — export traces as OpenTelemetry / OpenInference (OTLP)
+  spans, *in addition to* (never replacing) the SQLite/SQLAlchemy store.
+- `traceguard[contamination]` — training-contamination estimators
+  (membership-inference, regime decay, claim-level checks). Detection only;
+  scores attach to a trace via `output_parsed`, **not** via new MUST columns.
+- `traceguard.loop` — evidence-gating helpers for self-improving loops, so only
+  evidence traceable before a cutoff is admitted as fact.
+
+These are integrator-optional: a project may depend on the core contract above
+without installing any of them.
 
 ## 7. Minimal obligations of an integrating project
 

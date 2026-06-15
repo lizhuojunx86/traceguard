@@ -4,8 +4,13 @@
 [![Python](https://img.shields.io/pypi/pyversions/traceguard)](https://pypi.org/project/traceguard/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-**Point-in-time correct LLM instrumentation — tracing, version pinning, and
-look-ahead-bias protection for research pipelines.**
+**Point-in-time correct LLM instrumentation — the time-integrity layer for
+LLM pipelines.**
+
+TraceGuard makes it *structurally impossible* for a run over historical data to
+use a model, prompt, or feature that did not exist yet. Tracing, version
+pinning, and look-ahead-bias invariants for research pipelines that have to be
+reproducible *in time*, not just in code.
 
 When you run LLMs over historical data — backtesting a trading signal,
 replaying a research pipeline, re-scoring an archive — a normal observability
@@ -27,20 +32,57 @@ structurally hard:
   whitespace) so identical inputs hash identically across runs and machines.
 - **Four look-ahead invariants as pure functions** — call them in pytest/CI;
   violations raise, nothing is silently logged-and-forgotten.
-- **Lightweight tracing** — a `@trace` decorator, a `span()` context manager,
-  and a `wrap_anthropic` client wrapper that record every LLM/embedding/ML
-  call (input hash, model, prompt version, output, latency, tokens, cost)
-  into SQLite/SQLAlchemy.
+- **Lightweight tracing** — a `@tracer.trace` decorator, a `tracer.span()`
+  context manager, and a `wrap_anthropic` client wrapper that record every
+  LLM/embedding/ML call (input hash, model, prompt version, output, latency,
+  tokens, cost) into SQLite/SQLAlchemy.
+
+## Two kinds of look-ahead
+
+"Look-ahead bias" in an LLM pipeline is really two distinct failure modes, and
+they need different tools. Conflating them is how teams fix one and ship the
+other.
+
+| | **(1) Training contamination** | **(2) Harness / pipeline leakage** |
+|---|---|---|
+| What | The model was pre-trained on the future it is predicting — it *recalls* rather than reasons | Your code uses a model, prompt, or feature that did not exist at the simulated time |
+| Lives in | The model weights | Your pipeline / orchestration code |
+| Symptom | Suspiciously good on pre-cutoff data, decays after | A backtest that looks great and means nothing |
+| Tooling | Membership-inference (MIN-K%), performance decay across regimes, claim-level temporal checks | Model/prompt registries, canonical input hashing, look-ahead invariants |
+| TraceGuard today | **Groundwork** — opt-in `traceguard[contamination]` (interfaces + baselines) | **Primary focus** — structurally refused at the registry/validator layer |
+
+TraceGuard's mature surface targets **(2)**: leakage that rides in through
+harness code — a "2023 backtest" calling a 2025 model, a prompt you rewrote
+last week, a vendor "actual" that was silently revised. Detection for **(1)**
+is younger and lives behind an optional extra; see
+[docs/POSITIONING.md](docs/POSITIONING.md).
 
 ## Who this is for
 
-Anyone doing *serious research over historical data with LLMs in the loop*:
-quant researchers backtesting LLM-derived signals, teams replaying extraction
-pipelines over document archives, anyone who must answer "could this result
-have been produced at that point in time?" General-purpose LLM observability
-(dashboards, latency percentiles, prompt playgrounds) is a crowded space —
-TraceGuard deliberately focuses on the reproducibility and time-correctness
-guarantees those tools don't give you.
+The wedge audience is people for whom a wrong-by-one-timestamp result is a
+*correctness* failure, not a cosmetic one:
+
+- **Quant / AI-for-finance researchers** backtesting LLM-derived signals, where
+  a single anachronistic model or revised "actual" inflates a Sharpe ratio.
+- **LLM-eval researchers** measuring contamination and temporal generalization,
+  who need provenance on which model/prompt produced which score, as of when.
+- **Teams replaying extraction pipelines** over document archives who must
+  answer "could this result have been produced at that point in time?"
+
+## Where TraceGuard sits
+
+TraceGuard is **not** a dashboard (Langfuse, Phoenix, LangSmith), **not** a
+proxy/gateway (Helicone), and **not** a general-purpose eval harness
+(Braintrust). Those answer "what happened and how much did it cost?". TraceGuard
+answers a different, lower-level question: **"could this have happened at the
+time you're simulating?"**
+
+It is the *time-integrity layer* that sits underneath those tools — and it aims
+to **interoperate, not compete**. SQLite is the default local store; an
+OpenTelemetry / OpenInference exporter (`traceguard[otel]`) lets the same
+time-correct traces flow up into Langfuse, Phoenix, or any OTLP backend
+unchanged. Use your dashboard for observability; use TraceGuard to guarantee the
+timeline underneath it.
 
 ## Install
 
@@ -137,6 +179,22 @@ validate_model_timing("demo-llm-2026", backtest_date, strict=True, engine=engine
 The full interface contract — table schemas, SDK signatures, semantics, and
 SemVer rules — lives in [docs/SPEC.md](docs/SPEC.md) (English) and
 [TRACEGUARD_SPEC.md](TRACEGUARD_SPEC.md) (Chinese original, authoritative).
+
+## Research anchors
+
+TraceGuard's harness-leakage invariants are the engineering counterpart to a
+growing body of work on temporal validity and contamination in LLMs. The
+contamination groundwork (extra `traceguard[contamination]`) draws on:
+
+<!-- ⚠️ arXiv IDs are placeholders pending verification — confirm before citing. -->
+
+- *A Test of Lookahead Bias in LLM Forecasts* — arXiv 2512.23847 *(ID to verify)*
+- *Look-Ahead-Bench* — arXiv 2601.13770 *(ID to verify)*
+- *All Leaks Count, Some Count More / TimeSPEC / Shapley-DCLR* — arXiv 2602.17234 *(ID to verify)*
+- **MIN-K% PROB** membership-inference for pretraining-data detection — Shi et al., 2024
+
+See [docs/POSITIONING.md](docs/POSITIONING.md) for how these map onto the two
+kinds of look-ahead.
 
 ## Repository layout
 
