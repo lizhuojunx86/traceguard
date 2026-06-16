@@ -7,7 +7,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
-## [0.4.0] - Unreleased
+## [0.4.0] - 2026-06-16
 
 Turns the 0.3.0 contamination *groundwork* into working estimators. **No
 breaking changes** — every addition preserves the 0.2.0/0.3.0 public signatures
