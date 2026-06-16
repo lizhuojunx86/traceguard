@@ -13,16 +13,22 @@ The exporter is exporter-agnostic: pass any configured ``TracerProvider``
 (in-memory/console for tests, OTLP for Langfuse/Phoenix). With no provider it
 uses the global one set via ``opentelemetry.trace.set_tracer_provider``.
 
-Example::
+Example (runnable offline — prints each span to the console)::
 
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
     from traceguard.exporters.otel import export_trace
 
     provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter(endpoint=...)))
+    provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
     export_trace(trace, tracer_provider=provider, engine=engine)
+
+To ship spans to Langfuse / Phoenix / any OTLP collector, swap in the OTLP
+exporter (the ``otel`` extra installs ``opentelemetry-exporter-otlp-proto-http``)::
+
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+    provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter(endpoint="...")))
 """
 from __future__ import annotations
 

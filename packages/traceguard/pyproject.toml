@@ -38,6 +38,9 @@ anthropic = ["anthropic>=0.40.0"]
 otel = [
     "opentelemetry-api>=1.20",
     "opentelemetry-sdk>=1.20",
+    # OTLP/HTTP transport used by the exporter docstring example; without it the
+    # `opentelemetry.exporter.otlp...` import in that example would fail.
+    "opentelemetry-exporter-otlp-proto-http>=1.20",
 ]
 # Dependency-isolation point for heavier contamination implementations
 # (retrieval / LLM-backed claim verification). The shipped estimators

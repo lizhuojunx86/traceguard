@@ -43,6 +43,12 @@ stay behind extras (SPEC §6.1).
   illustration exercising `min_k_prob_for_text`, `regime_decay_test`, and
   `TimelineClaimVerifier` (synthetic, clearly labelled illustrative data).
 
+### Fixed
+
+- The `traceguard[otel]` extra now installs `opentelemetry-exporter-otlp-proto-http`,
+  so the OTLP snippet in the `traceguard.exporters.otel` docstring imports; the
+  primary docstring example now uses a console exporter and runs offline.
+
 ## [0.3.0] - 2026-06-15
 
 Positioning, evidence, and interoperability round. **No breaking changes** —
