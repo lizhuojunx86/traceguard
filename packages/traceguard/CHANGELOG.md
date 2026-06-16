@@ -42,6 +42,17 @@ stay behind extras (SPEC §6.1).
 - `examples/training_contamination.py` upgraded from a sketch to a runnable
   illustration exercising `min_k_prob_for_text`, `regime_decay_test`, and
   `TimelineClaimVerifier` (synthetic, clearly labelled illustrative data).
+- **OTel exporter: vendor model name.** `export_trace(..., model_name=...)` and
+  `export_traces(..., model_name_map=...)` set `gen_ai.request.model` to the
+  vendor model name Phoenix/Langfuse expect; the internal id is preserved under
+  the new `traceguard.model_id` span attribute. With no mapping the field falls
+  back to `model_id` (unchanged default). No trace/registry schema change.
+
+### Changed
+
+- `export_traces` prefetches model availability (`available_to_us_at`) in a
+  single registry query for the whole batch instead of one query per trace
+  (removes an N+1).
 
 ### Fixed
 
