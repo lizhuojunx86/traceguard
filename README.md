@@ -186,12 +186,10 @@ TraceGuard's harness-leakage invariants are the engineering counterpart to a
 growing body of work on temporal validity and contamination in LLMs. The
 contamination groundwork (extra `traceguard[contamination]`) draws on:
 
-<!-- ⚠️ arXiv IDs are placeholders pending verification — confirm before citing. -->
-
-- *A Test of Lookahead Bias in LLM Forecasts* — arXiv 2512.23847 *(ID to verify)*
-- *Look-Ahead-Bench* — arXiv 2601.13770 *(ID to verify)*
-- *All Leaks Count, Some Count More / TimeSPEC / Shapley-DCLR* — arXiv 2602.17234 *(ID to verify)*
-- **MIN-K% PROB** membership-inference for pretraining-data detection — Shi et al., 2024
+- *A Test of Lookahead Bias in LLM Forecasts* — Gao, Jiang & Yan, [arXiv 2512.23847](https://arxiv.org/abs/2512.23847)
+- *Look-Ahead-Bench: a Standardized Benchmark of Look-ahead Bias in Point-in-Time LLMs for Finance* — Benhenda, [arXiv 2601.13770](https://arxiv.org/abs/2601.13770)
+- *All Leaks Count, Some Count More: Interpretable Temporal Contamination Detection in LLM Backtesting* (TimeSPEC / Shapley-DCLR) — Zhang, Chen & Stadie, [arXiv 2602.17234](https://arxiv.org/abs/2602.17234)
+- **MIN-K% PROB** — *Detecting Pretraining Data from Large Language Models*, Shi et al., [arXiv 2310.16789](https://arxiv.org/abs/2310.16789)
 
 See [docs/POSITIONING.md](docs/POSITIONING.md) for how these map onto the two
 kinds of look-ahead.

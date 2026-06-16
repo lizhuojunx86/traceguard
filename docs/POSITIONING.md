@@ -115,17 +115,21 @@ The harness-leakage invariants are the engineering counterpart to a growing
 body of work on temporal validity and contamination. The contamination
 groundwork draws on these in particular:
 
-<!-- ⚠️ arXiv IDs below are placeholders pending verification — confirm before citing. -->
-
-- *A Test of Lookahead Bias in LLM Forecasts* — arXiv 2512.23847 *(ID to verify)*.
-  Evidence that LLM forecasts leak future knowledge; motivates measuring, not
-  assuming, the look-ahead tax.
-- *Look-Ahead-Bench* — arXiv 2601.13770 *(ID to verify)*. Benchmark framing for
-  look-ahead bias evaluation.
-- *All Leaks Count, Some Count More / TimeSPEC / Shapley-DCLR* — arXiv 2602.17234
-  *(ID to verify)*. Attribution of contamination contribution across sources.
-- **MIN-K% PROB** — Shi et al., 2024. Membership-inference baseline for detecting
-  pretraining-data membership; the basis for `contamination.min_k_prob`.
+- *A Test of Lookahead Bias in LLM Forecasts* — Gao, Jiang & Yan,
+  [arXiv 2512.23847](https://arxiv.org/abs/2512.23847). Estimates each prompt's
+  Lookahead Propensity (LAP); a positive LAP–accuracy correlation signals
+  look-ahead bias — motivates measuring, not assuming, the look-ahead tax.
+- *Look-Ahead-Bench: a Standardized Benchmark of Look-ahead Bias in Point-in-Time
+  LLMs for Finance* — Benhenda, [arXiv 2601.13770](https://arxiv.org/abs/2601.13770).
+  Measures performance decay across market regimes to separate genuine prediction
+  from memorization.
+- *All Leaks Count, Some Count More: Interpretable Temporal Contamination Detection
+  in LLM Backtesting* (TimeSPEC / Shapley-DCLR) — Zhang, Chen & Stadie,
+  [arXiv 2602.17234](https://arxiv.org/abs/2602.17234). Claim-level attribution of
+  contamination contribution across sources.
+- **MIN-K% PROB** — *Detecting Pretraining Data from Large Language Models*, Shi
+  et al., [arXiv 2310.16789](https://arxiv.org/abs/2310.16789). Membership-inference
+  baseline; the basis for `contamination.min_k_prob`.
 
 These inform the contamination side (kind 1). The harness-leakage side (kind 2)
 is governed entirely by the invariants in [SPEC.md](SPEC.md) §5.
