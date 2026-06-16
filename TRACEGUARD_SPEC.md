@@ -35,6 +35,15 @@
 - 成本调和、PII 脱敏、批量 backfill 流程
 - CLI 命令名(只约束语义,不约束命名)
 
+### 定位(非规范)
+
+LLM 管线里有**两类** look-ahead bias,需要不同工具,本规范只约束第二类:
+
+1. **训练污染** — 模型预训练时已见过它要预测的未来,于是在"回忆"而非推理。这是统计问题(成员推断、regime decay、claim 级时间验证),由**契约之外的 opt-in 扩展**处理(见 §6.6 与 [POSITIONING.md](docs/POSITIONING.md))。
+2. **Harness / 管线泄漏** — 代码用了在模拟时点不存在的模型/prompt/特征。这正是本契约 §5 让其**结构上可拒绝**的那一类。
+
+本小节为非规范说明;§§3–7 才是约束性契约。
+
 ---
 
 ## 2. 术语
@@ -336,6 +345,16 @@ assert_replay_set_locked(replay_set_id: str) -> None
 - 本 Spec v0.1 不强制对 `pipeline-guardian v0.1.0-huadian-baseline` 做破坏性改动。
 - huadian 项目的现有 `eval_traces` 表 **MAY** 通过 adapter 视图映射进 traces 表的子集,但**不强制**。
 - 何时迁移由 huadian 维护者决定。
+
+### 6.6 opt-in 扩展(非规范)
+
+以下能力以可选 extra 形式发布,**纯新增** — 不加 MUST 字段、不改既有签名、不动 normalize 算法,因此各自为 SemVer **minor**:
+
+- `traceguard[otel]` — 把 trace 额外导出为 OpenTelemetry / OpenInference (OTLP) span,**附加**于(绝不替换)SQLite/SQLAlchemy 存储。
+- `traceguard[contamination]` — 训练污染估计器(成员推断、regime decay、claim 级检查)。**仅检测**;评分通过 `output_parsed` 挂到 trace,**不**新增 MUST 列。
+- `traceguard.loop` — 自我改进循环的 evidence-gating 辅助:只有 cutoff 之前可溯源的证据才被采纳为事实。
+
+均为接入方可选;项目可只依赖上述核心契约而不安装其中任何一个。
 
 ---
 

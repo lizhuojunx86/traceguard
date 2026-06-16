@@ -1,6 +1,6 @@
 [project]
 name = "traceguard"
-version = "0.2.0"
+version = "0.3.0"
 description = "Point-in-time correct LLM instrumentation: tracing, version pinning, and look-ahead-bias protection for research pipelines"
 readme = "README.md"
 license = "Apache-2.0"
@@ -35,6 +35,15 @@ dependencies = [
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40.0"]
+otel = [
+    "opentelemetry-api>=1.20",
+    "opentelemetry-sdk>=1.20",
+]
+# Dependency-isolation point for heavier contamination implementations
+# (retrieval / LLM-backed claim verification). The shipped baselines
+# (min_k_prob, performance_decay_across_regimes) are pure standard-library, so
+# this extra currently adds no runtime deps.
+contamination = []
 
 [project.urls]
 Homepage = "https://github.com/lizhuojunx86/traceguard"
@@ -53,6 +62,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.6.0,<0.8.0",
+    "opentelemetry-sdk>=1.20",
 ]
 
 [tool.pytest.ini_options]
