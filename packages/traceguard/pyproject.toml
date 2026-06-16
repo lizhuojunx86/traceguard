@@ -1,6 +1,6 @@
 [project]
 name = "traceguard"
-version = "0.3.0"
+version = "0.4.0"
 description = "Point-in-time correct LLM instrumentation: tracing, version pinning, and look-ahead-bias protection for research pipelines"
 readme = "README.md"
 license = "Apache-2.0"
@@ -40,10 +40,18 @@ otel = [
     "opentelemetry-sdk>=1.20",
 ]
 # Dependency-isolation point for heavier contamination implementations
-# (retrieval / LLM-backed claim verification). The shipped baselines
-# (min_k_prob, performance_decay_across_regimes) are pure standard-library, so
-# this extra currently adds no runtime deps.
+# (retrieval / LLM-backed claim verification). The shipped estimators
+# (min_k_prob, performance_decay_across_regimes, regime_decay_test/_trend, the
+# claim-verification reference) are pure standard-library, so this extra still
+# adds no runtime deps.
 contamination = []
+# Reference logprob backend for MIN-K% PROB on open-weight models
+# (HFLogprobBackend). Heavy (torch/transformers) and isolated here so neither
+# the core package nor the `contamination` extra ever pulls them in.
+contamination-hf = [
+    "torch>=2.0",
+    "transformers>=4.40",
+]
 
 [project.urls]
 Homepage = "https://github.com/lizhuojunx86/traceguard"

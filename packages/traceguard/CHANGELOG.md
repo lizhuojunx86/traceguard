@@ -7,6 +7,42 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [0.4.0] - Unreleased
+
+Turns the 0.3.0 contamination *groundwork* into working estimators. **No
+breaking changes** — every addition preserves the 0.2.0/0.3.0 public signatures
+(SemVer minor); new behaviour arrives as new functions/params, and heavy deps
+stay behind extras (SPEC §6.1).
+
+### Added
+
+- **Pluggable logprob backend for MIN-K% PROB** (`traceguard.contamination`):
+  the `LogprobBackend` protocol and `min_k_prob_for_text(text, *, backend, k)`
+  let you run MIN-K% on raw text from any model that exposes per-token
+  log-probabilities. `min_k_prob(token_logprobs, *, k)` is unchanged. A
+  reference `HFLogprobBackend` (open-weight causal LM via teacher forcing) ships
+  in `traceguard.contamination.logprobs_hf` behind the new
+  `traceguard[contamination-hf]` extra (`torch`, `transformers`). Anthropic-API
+  users cannot obtain token logprobs and should use `regime_decay_test` /
+  `TimelineClaimVerifier` instead.
+- **Statistical regime-decay tests** (`traceguard.contamination`):
+  `regime_decay_test` (permutation-test p-value, Cliff's-delta effect size, and
+  a bootstrap CI on the decay between two regimes) and `regime_decay_trend`
+  (Spearman monotonic-trend test across ≥2 regimes ordered by distance from the
+  model cutoff), with `RegimeDecayTest` / `RegimeDecayTrend` results. Both are
+  pure standard-library and seeded for determinism.
+  `performance_decay_across_regimes` is unchanged.
+- **Claim-level temporal verification reference** (`traceguard.contamination`):
+  `TimelineClaimVerifier` implements the `ClaimVerifier` protocol over a
+  pluggable `EvidenceSource` (with an `InMemoryEvidenceSource` for tests/demos),
+  flagging a claim as contaminated when its earliest supporting source postdates
+  the simulated cutoff (or no source exists) — the claim-level companion to
+  `loop.EvidenceGate`. Retrieval/LLM claim extraction stays a user-supplied
+  seam.
+- `examples/training_contamination.py` upgraded from a sketch to a runnable
+  illustration exercising `min_k_prob_for_text`, `regime_decay_test`, and
+  `TimelineClaimVerifier` (synthetic, clearly labelled illustrative data).
+
 ## [0.3.0] - 2026-06-15
 
 Positioning, evidence, and interoperability round. **No breaking changes** —
