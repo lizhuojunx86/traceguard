@@ -13,21 +13,27 @@ The exporter is exporter-agnostic: pass any configured ``TracerProvider``
 (in-memory/console for tests, OTLP for Langfuse/Phoenix). With no provider it
 uses the global one set via ``opentelemetry.trace.set_tracer_provider``.
 
-Example::
+Example (runnable offline — prints each span to the console)::
 
     from opentelemetry.sdk.trace import TracerProvider
-    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
-    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+    from opentelemetry.sdk.trace.export import ConsoleSpanExporter, SimpleSpanProcessor
     from traceguard.exporters.otel import export_trace
 
     provider = TracerProvider()
-    provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter(endpoint=...)))
+    provider.add_span_processor(SimpleSpanProcessor(ConsoleSpanExporter()))
     export_trace(trace, tracer_provider=provider, engine=engine)
+
+To ship spans to Langfuse / Phoenix / any OTLP collector, swap in the OTLP
+exporter (the ``otel`` extra installs ``opentelemetry-exporter-otlp-proto-http``)::
+
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+    provider.add_span_processor(SimpleSpanProcessor(OTLPSpanExporter(endpoint="...")))
 """
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable, Mapping
 
 try:
     from opentelemetry import trace as _ot_trace
@@ -38,6 +44,7 @@ except ImportError as exc:  # pragma: no cover - exercised only without the extr
         'pip install "traceguard[otel]"'
     ) from exc
 
+from sqlalchemy import select
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
@@ -82,7 +89,10 @@ def _lookup_available_at(trace: Trace, engine: Engine | None) -> datetime | None
 
 
 def trace_to_attributes(
-    trace: Trace, *, available_to_us_at: datetime | None = None
+    trace: Trace,
+    *,
+    available_to_us_at: datetime | None = None,
+    model_name: str | None = None,
 ) -> dict[str, Any]:
     """Map a ``Trace`` row to OTel/OpenInference span attributes.
 
@@ -91,6 +101,13 @@ def trace_to_attributes(
     semantic conventions (``gen_ai.*``), and ``traceguard.*`` for the
     time-integrity facts that have no standard equivalent (input hash, prompt
     hash, feature_as_of, model availability).
+
+    ``gen_ai.request.model`` follows the GenAI convention, which expects the
+    *vendor* model name (what Phoenix/Langfuse display). The trace stores only
+    the internal ``model_id``, so pass ``model_name`` to populate it with the
+    vendor name; the internal id is always preserved separately under
+    ``traceguard.model_id``. With no ``model_name`` the field falls back to
+    ``model_id`` (unchanged default behaviour).
     """
     attrs: dict[str, Any] = {
         _OPENINFERENCE_SPAN_KIND: "LLM",
@@ -108,7 +125,8 @@ def trace_to_attributes(
 
     put("traceguard.correlation_id", trace.correlation_id)
     put("traceguard.parent_trace_id", trace.parent_trace_id)
-    put("gen_ai.request.model", trace.model_id)
+    put("traceguard.model_id", trace.model_id)
+    put("gen_ai.request.model", model_name if model_name is not None else trace.model_id)
     put("gen_ai.usage.input_tokens", trace.tokens_in)
     put("gen_ai.usage.output_tokens", trace.tokens_out)
     put("traceguard.prompt_template_id", trace.prompt_template_id)
@@ -123,32 +141,43 @@ def trace_to_attributes(
     return attrs
 
 
-def export_trace(
-    trace: Trace,
-    *,
-    tracer_provider: "TracerProvider | None" = None,
-    engine: Engine | None = None,
-    scope_name: str = SCOPE_NAME,
-) -> "Span":
-    """Emit one OpenTelemetry span for a completed ``Trace`` and return it.
+def _prefetch_availability(traces: list[Trace], engine: Engine | None) -> dict[str, datetime]:
+    """One query: ``{model_id: available_to_us_at}`` for the referenced models.
 
-    The span name is the trace's ``operation``. Span start/end times are derived
-    from ``invoked_at`` and ``latency_ms`` so duration reflects the real call.
-    Errors map to ``Status(ERROR)`` plus ``exception.*`` attributes. Pass
-    ``engine`` to enrich the span with the model's ``available_to_us_at``.
+    Replaces the per-trace registry lookup (an N+1) that :func:`export_trace`
+    does standalone; :func:`export_traces` calls this once for the whole batch.
     """
-    provider = tracer_provider if tracer_provider is not None else _ot_trace.get_tracer_provider()
-    tracer = provider.get_tracer(scope_name)
+    if engine is None:
+        return {}
+    model_ids = {t.model_id for t in traces if t.model_id is not None}
+    if not model_ids:
+        return {}
+    with Session(engine) as sess:
+        rows = (
+            sess.execute(
+                select(ModelRegistryEntry).where(ModelRegistryEntry.model_id.in_(model_ids))
+            )
+            .scalars()
+            .all()
+        )
+    return {r.model_id: r.available_to_us_at for r in rows}
 
+
+def _build_span(
+    trace: Trace,
+    tracer: Any,
+    *,
+    available_to_us_at: datetime | None,
+    model_name: str | None,
+) -> "Span":
+    """Emit one span from a trace with pre-resolved availability/model name (no I/O)."""
     attrs = trace_to_attributes(
-        trace, available_to_us_at=_lookup_available_at(trace, engine)
+        trace, available_to_us_at=available_to_us_at, model_name=model_name
     )
-
     end = trace.invoked_at
     start = end
     if trace.latency_ms is not None:
         start = end - timedelta(milliseconds=trace.latency_ms)
-
     span = tracer.start_span(trace.operation, start_time=_to_ns(start), attributes=attrs)
     if trace.error_class:
         span.set_status(Status(StatusCode.ERROR, trace.error_message or trace.error_class))
@@ -161,24 +190,68 @@ def export_trace(
     return span
 
 
+def export_trace(
+    trace: Trace,
+    *,
+    tracer_provider: "TracerProvider | None" = None,
+    engine: Engine | None = None,
+    scope_name: str = SCOPE_NAME,
+    model_name: str | None = None,
+) -> "Span":
+    """Emit one OpenTelemetry span for a completed ``Trace`` and return it.
+
+    The span name is the trace's ``operation``. Span start/end times are derived
+    from ``invoked_at`` and ``latency_ms`` so duration reflects the real call.
+    Errors map to ``Status(ERROR)`` plus ``exception.*`` attributes. Pass
+    ``engine`` to enrich the span with the model's ``available_to_us_at``, and
+    ``model_name`` to set ``gen_ai.request.model`` to the vendor model name (the
+    internal id stays under ``traceguard.model_id``; see
+    :func:`trace_to_attributes`).
+    """
+    provider = tracer_provider if tracer_provider is not None else _ot_trace.get_tracer_provider()
+    tracer = provider.get_tracer(scope_name)
+    return _build_span(
+        trace,
+        tracer,
+        available_to_us_at=_lookup_available_at(trace, engine),
+        model_name=model_name,
+    )
+
+
 def export_traces(
     traces: Iterable[Trace],
     *,
     tracer_provider: "TracerProvider | None" = None,
     engine: Engine | None = None,
     scope_name: str = SCOPE_NAME,
+    model_name_map: "Mapping[str, str] | None" = None,
 ) -> int:
-    """Export many traces; returns the number of spans emitted."""
-    count = 0
+    """Export many traces; returns the number of spans emitted.
+
+    Model availability is prefetched in a single query for the whole batch (not
+    once per trace). ``model_name_map`` maps internal ``model_id`` -> vendor
+    model name for ``gen_ai.request.model``; unmapped models fall back to their
+    ``model_id`` (see :func:`trace_to_attributes`).
+    """
+    traces = list(traces)
+    provider = tracer_provider if tracer_provider is not None else _ot_trace.get_tracer_provider()
+    tracer = provider.get_tracer(scope_name)
+    availability = _prefetch_availability(traces, engine)
     for trace in traces:
-        export_trace(
-            trace,
-            tracer_provider=tracer_provider,
-            engine=engine,
-            scope_name=scope_name,
+        model_name = (
+            model_name_map.get(trace.model_id)
+            if model_name_map is not None and trace.model_id is not None
+            else None
         )
-        count += 1
-    return count
+        _build_span(
+            trace,
+            tracer,
+            available_to_us_at=(
+                availability.get(trace.model_id) if trace.model_id is not None else None
+            ),
+            model_name=model_name,
+        )
+    return len(traces)
 
 
 __all__ = ["trace_to_attributes", "export_trace", "export_traces", "SCOPE_NAME"]
