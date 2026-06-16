@@ -254,4 +254,88 @@ def export_traces(
     return len(traces)
 
 
-__all__ = ["trace_to_attributes", "export_trace", "export_traces", "SCOPE_NAME"]
+class OtelDualWriteSink:
+    """Real-time dual-write sink: emit one OTLP span per trace at close time.
+
+    Constructed by :meth:`traceguard.sdk.tracer.Tracer.enable_otel` (opt-in,
+    additive). It is the live counterpart of :func:`export_trace`: it reuses the
+    same internals (:func:`_build_span`, :func:`trace_to_attributes`,
+    :func:`_lookup_available_at`), so a span emitted live is **byte-identical**
+    to the one :func:`export_trace` would later produce for the same row — same
+    attributes (incl. ``model_name`` mapping and ``traceguard.model_id``), same
+    ``invoked_at - latency_ms`` → ``invoked_at`` timing, same OK/ERROR status.
+
+    The SQLite/SQLAlchemy store stays the source of truth (SPEC §6.1): the tracer
+    runs this sink only *after* the row is committed, and isolates its failures
+    so a broken exporter can never break tracing, the SQLite write, or the
+    business call. If you also batch-export the same rows, dedup downstream on
+    the stable ``traceguard.trace_id`` attribute (each path mints fresh OTel
+    span ids).
+
+    Example (opt in on the default tracer)::
+
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import (
+            BatchSpanProcessor,
+        )
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter,
+        )
+        from traceguard.sdk.tracer import tracer
+
+        provider = TracerProvider()
+        provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint="...")))
+        tracer.enable_otel(tracer_provider=provider, model_name_map={"m-2024": "gpt-4o"})
+        # every tracer.span(...) / @tracer.trace now also emits an OTLP span
+
+    Production note: prefer ``BatchSpanProcessor`` (async/queued). With
+    ``SimpleSpanProcessor`` the OTLP send runs synchronously on the traced call's
+    exit, so a slow collector adds latency (the error is still isolated).
+    """
+
+    def __init__(
+        self,
+        *,
+        tracer_provider: "TracerProvider | None" = None,
+        model_name_map: "Mapping[str, str] | None" = None,
+        scope_name: str = SCOPE_NAME,
+    ) -> None:
+        self._provider = tracer_provider
+        self._model_name_map = dict(model_name_map) if model_name_map else {}
+        self._scope_name = scope_name
+        self._tracer: Any = None
+
+    def emit(self, trace: Trace, *, engine: Engine | None = None) -> None:
+        """Emit one OTLP span for a committed ``trace``; reuses the batch internals.
+
+        The OTel tracer is resolved lazily on first emit (from the configured
+        provider, or the global one via ``opentelemetry.trace`` — matching
+        :func:`export_trace`'s default) and cached thereafter. ``engine`` enables
+        the model ``available_to_us_at`` enrichment. Exceptions are *not* handled
+        here — the caller (:meth:`Span._emit_otel_safe`) owns hot-path isolation.
+        """
+        if self._tracer is None:
+            provider = (
+                self._provider
+                if self._provider is not None
+                else _ot_trace.get_tracer_provider()
+            )
+            self._tracer = provider.get_tracer(self._scope_name)
+        model_name = (
+            self._model_name_map.get(trace.model_id) if trace.model_id is not None else None
+        )
+        _build_span(
+            trace,
+            self._tracer,
+            available_to_us_at=_lookup_available_at(trace, engine),
+            model_name=model_name,
+        )
+
+
+__all__ = [
+    "trace_to_attributes",
+    "export_trace",
+    "export_traces",
+    "OtelDualWriteSink",
+    "SCOPE_NAME",
+]
