@@ -7,12 +7,13 @@ exit (success or failure).
 from __future__ import annotations
 
 import json
+import logging
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from decimal import Decimal
 from functools import wraps
-from typing import Any, Callable, Iterator
+from typing import Any, Callable, Iterator, Mapping, Protocol
 
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
@@ -22,6 +23,21 @@ from traceguard.store.models import Trace, make_engine
 
 
 _INPUT_SUMMARY_MAX = 500
+
+_otel_log = logging.getLogger("traceguard.otel")
+
+
+class _OtelSink(Protocol):
+    """Structural type for the optional real-time OTel dual-write sink.
+
+    Kept as a stdlib :class:`typing.Protocol` so this module never imports
+    ``opentelemetry`` — the concrete implementation
+    (:class:`traceguard.exporters.otel.OtelDualWriteSink`) lives behind the
+    ``traceguard[otel]`` extra and is imported lazily only by
+    :meth:`Tracer.enable_otel`.
+    """
+
+    def emit(self, trace: Trace, *, engine: Engine | None = None) -> None: ...
 
 
 def _summarize(data: Any) -> str | None:
@@ -65,6 +81,7 @@ class Span:
         correlation_id: str | None = None,
         feature_as_of: datetime | None = None,
         parent_trace_id: int | None = None,
+        otel_sink: _OtelSink | None = None,
     ) -> None:
         self.project = project
         self.component = component
@@ -74,6 +91,8 @@ class Span:
         self.parent_trace_id = parent_trace_id
 
         self._engine = engine
+        self._otel_sink = otel_sink
+        self._snapshot: Trace | None = None
         self._start_perf: float = time.perf_counter()
         self._committed = False
 
@@ -147,9 +166,19 @@ class Span:
         if self._parse_status is None:
             self._parse_status = "failed"
 
-    def _flush(self) -> None:
+    def _flush(self) -> Trace | None:
+        """Commit one row to ``traces`` and return a detached snapshot for OTel.
+
+        SQLite is the source of truth and is written here unconditionally. When
+        OTel dual-write is enabled, the committed row is refreshed and expunged
+        into a detached snapshot, so :class:`OtelDualWriteSink` reads exactly the
+        DB-round-tripped values (UTC-normalized datetimes, ``Numeric``-scaled
+        ``cost_usd``) without ``DetachedInstanceError`` — guaranteeing the live
+        span is byte-identical to a later :func:`export_trace` of the same row.
+        Returns ``None`` when no OTel sink is attached (no snapshot needed).
+        """
         if self._committed:
-            return
+            return self._snapshot
         if self._input_hash is None:
             self._input_hash = input_hash(None)
         if self._parse_status is None:
@@ -181,15 +210,50 @@ class Span:
         with Session(self._engine) as sess:
             sess.add(row)
             sess.commit()
+            if self._otel_sink is not None:
+                # Reload the DB-round-tripped values (UTC normalization, Numeric
+                # scale) then detach, so the dual-written span equals a later
+                # export_trace of this row. Only on the opt-in path: the default
+                # path below is byte-for-byte the pre-0.5.0 commit.
+                sess.refresh(row)
+                sess.expunge(row)
+                self._snapshot = row
             self.trace_id = row.trace_id
         self._committed = True
+        return self._snapshot
+
+    def _emit_otel_safe(self, snapshot: Trace | None) -> None:
+        """Best-effort OTel dual-write — runs after the row is committed.
+
+        Hot-path isolation: any exporter failure is swallowed (logged at WARNING)
+        and never propagates, so it cannot break tracing, the durable SQLite
+        write, or the business call. Catches ``Exception`` only, letting
+        ``KeyboardInterrupt``/``SystemExit`` through. A no-op when dual-write is
+        disabled. On the error path this sits between ``_flush`` and the bare
+        ``raise``; because it never re-raises, the original business exception
+        propagates unmasked.
+        """
+        if self._otel_sink is None or snapshot is None:
+            return
+        try:
+            self._otel_sink.emit(snapshot, engine=self._engine)
+        except Exception:  # noqa: BLE001 - emit must never break tracing/SQLite/business call
+            try:
+                _otel_log.warning(
+                    "otel dual-write failed; trace persisted to SQLite (source of truth) is unaffected",
+                    exc_info=True,
+                )
+            except Exception:  # noqa: BLE001 - even the recovery log must not escape the hot path
+                pass
 
 
 class Tracer:
     """Holds the persistence engine and emits ``Span`` objects."""
 
-    def __init__(self, engine: Engine | None = None) -> None:
+    def __init__(self, engine: Engine | None = None, *, _otel_sink: _OtelSink | None = None) -> None:
         self._engine = engine
+        # Private test-injection seam (not a public config path — use enable_otel).
+        self._otel_sink = _otel_sink
 
     @property
     def engine(self) -> Engine:
@@ -200,6 +264,51 @@ class Tracer:
     def configure(self, engine: Engine) -> None:
         """Override the engine — useful for tests."""
         self._engine = engine
+
+    def enable_otel(
+        self,
+        *,
+        tracer_provider: Any = None,
+        model_name_map: Mapping[str, str] | None = None,
+        scope_name: str = "traceguard",
+    ) -> None:
+        """Opt in to real-time OTel dual-write (additive, default OFF).
+
+        After this call every ``span`` / ``trace`` also emits one OTLP span when
+        the trace closes — in *addition to* (never replacing) the SQLite write,
+        which stays the source of truth (SPEC §6.1). The span is identical to
+        what :func:`traceguard.exporters.otel.export_trace` would later produce
+        for the row, so live and batch paths interoperate and dedup downstream on
+        ``traceguard.trace_id``. Emitter failures are isolated and never break
+        tracing or the business call.
+
+        Mirrors :meth:`configure`: it mutates this tracer in place, so the
+        module-level singleton (and any already-bound ``@tracer.trace``
+        decorators) start dual-writing without re-instantiation. Idempotent —
+        call again to reconfigure.
+
+        ``tracer_provider`` is any configured OTel ``TracerProvider`` (None
+        defers to the global one, resolved at first emit). ``model_name_map``
+        maps internal ``model_id`` → vendor name for ``gen_ai.request.model``
+        (Plan A, emit-time; unmapped models fall back to ``model_id``).
+        ``scope_name`` is the OTel instrumentation scope.
+
+        Requires the ``otel`` extra; raises ``ImportError`` pointing to
+        ``traceguard[otel]`` if it is not installed.
+        """
+        # Lazy import: keeps this module opentelemetry-free; surfaces the
+        # canonical traceguard[otel] ImportError exactly when otel is requested.
+        from traceguard.exporters.otel import OtelDualWriteSink
+
+        self._otel_sink = OtelDualWriteSink(
+            tracer_provider=tracer_provider,
+            model_name_map=model_name_map,
+            scope_name=scope_name,
+        )
+
+    def disable_otel(self) -> None:
+        """Turn off real-time OTel dual-write (restores the default-OFF path)."""
+        self._otel_sink = None
 
     @contextmanager
     def span(
@@ -220,15 +329,18 @@ class Tracer:
             correlation_id=correlation_id,
             feature_as_of=feature_as_of,
             parent_trace_id=parent_trace_id,
+            otel_sink=self._otel_sink,
         )
         try:
             yield span
         except BaseException as exc:
             span.record_error(exc)
-            span._flush()
+            snapshot = span._flush()
+            span._emit_otel_safe(snapshot)
             raise
         else:
-            span._flush()
+            snapshot = span._flush()
+            span._emit_otel_safe(snapshot)
 
     def trace(
         self,

@@ -7,6 +7,45 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [0.5.0] - Unreleased
+
+Adds **opt-in real-time OpenTelemetry dual-write**: a tracer can emit one OTLP
+span the moment a trace closes, *in addition to* (never replacing) the SQLite
+write, which stays the source of truth (SPEC §6.1). **No breaking changes** —
+every addition preserves the 0.2.0/0.3.0/0.4.0 public signatures (SemVer minor);
+default behaviour is byte-for-byte unchanged until you opt in; the heavy
+dependency stays behind the existing `traceguard[otel]` extra. No new MUST
+fields, no new schema, no new extra (SPEC §§3–5 untouched).
+
+### Added
+
+- **Real-time OTel dual-write** (`traceguard[otel]`): `Tracer.enable_otel(*,
+  tracer_provider=None, model_name_map=None, scope_name="traceguard")` and
+  `Tracer.disable_otel()`. Once enabled, every `span` / `trace` also emits one
+  OTLP span at close time. Mirrors the existing `configure(engine)` setter, so
+  it configures the module-level singleton (and already-bound `@tracer.trace`
+  decorators) in place.
+- **`OtelDualWriteSink`** (`traceguard.exporters.otel`): the live sink behind
+  `enable_otel`. Reuses the batch exporter internals so a live span is
+  **byte-identical** to what `export_trace` would later produce for the same row
+  — same attributes (incl. the Plan-A `model_name` mapping and
+  `traceguard.model_id`), same `invoked_at - latency_ms` → `invoked_at` timing,
+  same OK/ERROR status. Dedup downstream on `traceguard.trace_id`.
+
+### Notes
+
+- **Default OFF, fully isolated**: not calling `enable_otel` changes nothing.
+  When enabled, any exporter failure is swallowed (logged at WARNING on
+  `traceguard.otel`) and never breaks tracing, the SQLite write, or the business
+  call — including not masking a business exception on the error path.
+- **Optional dependency**: `traceguard.sdk.tracer` never imports
+  `opentelemetry`; `enable_otel` imports the sink lazily and raises the canonical
+  `traceguard[otel]` `ImportError` if the extra is missing.
+- **Batch path unchanged**: `export_trace` / `export_traces` keep their
+  signatures and behaviour; dual-write is a third caller of the shared internals.
+  Production tip: use `BatchSpanProcessor` so the OTLP send does not run
+  synchronously on the traced call's exit.
+
 ## [0.4.0] - 2026-06-16
 
 Turns the 0.3.0 contamination *groundwork* into working estimators. **No
