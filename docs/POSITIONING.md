@@ -130,6 +130,11 @@ groundwork draws on these in particular:
 - **MIN-K% PROB** — *Detecting Pretraining Data from Large Language Models*, Shi
   et al., [arXiv 2310.16789](https://arxiv.org/abs/2310.16789). Membership-inference
   baseline; the basis for `contamination.min_k_prob`.
+- **Min-K%++** — *Improved Baseline for Detecting Pre-Training Data from Large
+  Language Models*, Zhang et al., ICLR'25,
+  [arXiv 2404.02936](https://arxiv.org/abs/2404.02936). Normalizes each token's
+  log-prob against its position's vocabulary distribution; the basis for
+  `contamination.min_k_plus_plus` (0.6.0).
 
 These inform the contamination side (kind 1). The harness-leakage side (kind 2)
 is governed entirely by the invariants in [SPEC.md](SPEC.md) §5.
