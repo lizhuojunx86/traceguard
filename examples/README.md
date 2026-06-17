@@ -25,6 +25,7 @@ uv run python ../../examples/<name>.py
 | File | Sketches | Enabled by |
 |------|----------|------------|
 | [training_contamination.py](training_contamination.py) | The model *recalls* resolved events from pretraining — runs a real `min_k_prob` illustration, sketches the rest | `traceguard.contamination` (built-in) |
+| [contamination_case_study.py](contamination_case_study.py) | End-to-end: MIN-K% vs **Min-K%++**, regime decay, and claim verification combined into one verdict; `--hf` runs Min-K%++ on a real `distilgpt2`. Writeup: [docs/contamination-case-study.md](../docs/contamination-case-study.md) | `traceguard.contamination` (+ `[contamination-hf]` for `--hf`) |
 | [loop_self_contamination.py](loop_self_contamination.py) | A self-improving loop cites its own output as fact; evidence-gating rejects it | `traceguard.loop` (built-in) |
 
 See [../docs/POSITIONING.md](../docs/POSITIONING.md) for the two-kinds-of-look-ahead

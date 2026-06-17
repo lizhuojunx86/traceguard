@@ -40,3 +40,61 @@ jobs:
       - name: Ruff format check
         continue-on-error: true
         run: uv run ruff format --check .
+
+  # The traceguard SDK lives in packages/traceguard with its own uv project, so
+  # the root job above never ran its suite. Run it here.
+  traceguard-sdk:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: packages/traceguard
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Install the traceguard SDK
+        run: uv sync --python 3.12
+
+      - name: Run SDK tests
+        run: uv run pytest -q
+
+      - name: Ruff lint
+        continue-on-error: true
+        run: uv run ruff check .
+
+      - name: Ruff format check
+        continue-on-error: true
+        run: uv run ruff format --check .
+
+  # Real open-weight backend: install the contamination-hf extra (CPU torch) and
+  # run the RUN_HF-gated tests for real, so MIN-K% / Min-K%++ on a tiny model is
+  # actually exercised instead of perpetually skipped. Separate job so a slow or
+  # flaky heavy-dep install never masks the fast SDK signal above.
+  traceguard-contamination-hf:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: packages/traceguard
+    env:
+      UV_TORCH_BACKEND: cpu  # CPU-only torch wheels — far smaller, no CUDA libs
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Install the SDK with the contamination-hf extra
+        run: uv sync --python 3.12 --extra contamination-hf
+
+      - name: Run the HF / Min-K%++ contamination lane (real tiny-gpt2)
+        env:
+          TRACEGUARD_RUN_HF_TESTS: "1"
+        run: uv run pytest -q tests/test_contamination_logprobs.py

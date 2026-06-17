@@ -7,6 +7,44 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [0.6.0] - Unreleased
+
+Adds **Min-K%++**, a stronger membership-inference variant for
+training-contamination detection, and brings the SDK suite (plus a real
+open-weight contamination lane) into CI. **No breaking changes** — every
+addition preserves the 0.2.0–0.5.0 public signatures (SemVer minor):
+`min_k_prob` / `min_k_prob_for_text` / `LogprobBackend` are untouched, heavy
+deps stay behind the existing `traceguard[contamination-hf]` extra, and SPEC
+§§3–5 are unchanged (§6.x opt-in).
+
+### Added
+
+- **Min-K%++** (`traceguard.contamination`): `min_k_plus_plus(token_stats, *, k)`
+  averages the lowest-k% of *normalized* per-token scores
+  `z = (logprob − μ) / σ`, where μ/σ are the mean/std of log-prob over the whole
+  vocabulary at each position (Zhang et al., 2024, arXiv 2404.02936) — a stronger
+  pre-training-data detector than raw MIN-K%. `TokenLogprobStats` carries each
+  token's `(logprob, μ, σ)`; degenerate `σ ≤ 0` positions are skipped.
+- **`CalibratedLogprobBackend`** protocol + `min_k_plus_plus_for_text(text, *,
+  backend, k)`: the calibrated counterpart to `LogprobBackend` /
+  `min_k_prob_for_text`. It needs the full per-position vocabulary distribution
+  (not just the chosen token's logprob), so a backend must expose logits.
+  `HFLogprobBackend` gains `token_logprob_stats`, deriving μ/σ from logits with
+  the same teacher-forcing alignment as `token_logprobs`.
+- **End-to-end contamination case study**:
+  `examples/contamination_case_study.py` (offline by default; `--hf` runs
+  Min-K%++ on a real `distilgpt2`) combines MIN-K% vs Min-K%++, regime decay, and
+  claim verification into one verdict, with a bilingual writeup
+  (`docs/contamination-case-study.md` / `.zh.md`).
+
+### CI
+
+- The `traceguard` SDK suite now runs in CI (`traceguard-sdk` job) — it lives in
+  `packages/traceguard` with its own uv project and had never been run before.
+- New `traceguard-contamination-hf` job installs the `contamination-hf` extra
+  (CPU torch) and runs the `TRACEGUARD_RUN_HF_TESTS=1` lane, so MIN-K% / Min-K%++
+  on a real `tiny-gpt2` is exercised instead of perpetually skipped.
+
 ## [0.5.0] - 2026-06-17
 
 Adds **opt-in real-time OpenTelemetry dual-write**: a tracer can emit one OTLP
