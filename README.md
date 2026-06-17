@@ -3,6 +3,7 @@
 [![PyPI](https://img.shields.io/pypi/v/traceguard)](https://pypi.org/project/traceguard/)
 [![Python](https://img.shields.io/pypi/pyversions/traceguard)](https://pypi.org/project/traceguard/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
+[![CI](https://github.com/lizhuojunx86/traceguard/actions/workflows/ci.yml/badge.svg)](https://github.com/lizhuojunx86/traceguard/actions/workflows/ci.yml)
 
 **Point-in-time correct LLM instrumentation — the time-integrity layer for
 LLM pipelines.**
@@ -82,7 +83,8 @@ to **interoperate, not compete**. SQLite is the default local store; an
 OpenTelemetry / OpenInference exporter (`traceguard[otel]`) lets the same
 time-correct traces flow up into Langfuse, Phoenix, or any OTLP backend
 unchanged. Use your dashboard for observability; use TraceGuard to guarantee the
-timeline underneath it.
+timeline underneath it. Step-by-step:
+[docs/integrations/otel-langfuse-phoenix.md](docs/integrations/otel-langfuse-phoenix.md).
 
 ## Install
 
