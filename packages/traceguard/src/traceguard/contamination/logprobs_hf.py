@@ -119,9 +119,13 @@ class HFLogprobBackend:
         position, over the full next-token distribution ``p``::
 
             mu    = sum_z p(z) * log p(z)
-            sigma = sqrt( sum_z p(z) * log p(z)^2  -  mu^2 )   # clamped to >= 0
+            sigma = sqrt( sum_z p(z) * (log p(z) - mu)^2 )   # clamped to >= 0
 
-        matching the reference Min-K%++ implementation (Zhang et al., 2024).
+        This is the reference Min-K%++ variance (Zhang et al., 2024) in its
+        numerically stable centered form: the algebraically identical
+        ``E[L^2] - mu^2`` loses most of its precision to catastrophic
+        cancellation in float32 (both terms are O(mu^2) while the variance is
+        tiny).
         """
         self._ensure_loaded()
         torch = self._torch
@@ -140,11 +144,13 @@ class HFLogprobBackend:
         # distribution given tokens 0..t.
         log_probs = torch.log_softmax(logits[:, :-1, :], dim=-1)
         probs = log_probs.exp()
-        mu = (probs * log_probs).sum(dim=-1)
-        # Var = E[L^2] - (E[L])^2 over the vocabulary; clamp away negative values
-        # from float round-off before the sqrt.
-        var = (probs * log_probs.square()).sum(dim=-1) - mu.square()
+        mu = (probs * log_probs).sum(dim=-1, keepdim=True)
+        # Var = E[(L - mu)^2] over the vocabulary. The algebraically identical
+        # E[L^2] - mu^2 suffers catastrophic cancellation in float32, so use the
+        # centered form; clamp away residual float round-off before the sqrt.
+        var = (probs * (log_probs - mu).square()).sum(dim=-1)
         sigma = var.clamp_min(0.0).sqrt()
+        mu = mu.squeeze(-1)
         targets = input_ids[:, 1:]
         token_lp = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
         return [

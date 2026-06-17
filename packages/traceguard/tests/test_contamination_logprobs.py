@@ -133,3 +133,39 @@ def test_hf_backend_minkpp_stats_real_tiny_model():
     assert [s.logprob for s in stats] == pytest.approx(plain)
     # The Min-K%++ convenience path runs end-to-end on a real backend.
     assert isinstance(min_k_plus_plus_for_text(text, backend=backend), float)
+
+
+@pytest.mark.skipif(
+    not _RUN_HF, reason="set TRACEGUARD_RUN_HF_TESTS=1 (and install the extra) to run"
+)
+def test_hf_backend_minkpp_stats_match_independent_recompute():
+    # White-box: re-derive mu/sigma for a position straight from the model logits
+    # with the textbook formulas and assert token_logprob_stats agrees. The
+    # bounds-only checks above (mu<=0, sigma>=0) are near-tautological; this guards
+    # the genuinely novel math (mu=E[L], sigma=sqrt(E[L^2]-mu^2)) against a sign
+    # error or a dropped term that a green suite would otherwise miss.
+    import torch
+
+    pytest.importorskip("transformers")
+    from traceguard.contamination.logprobs_hf import HFLogprobBackend
+
+    backend = HFLogprobBackend("sshleifer/tiny-gpt2")
+    text = "The quick brown fox jumps"
+    stats = backend.token_logprob_stats(text)
+
+    enc = backend._tokenizer(text, return_tensors="pt", add_special_tokens=True)
+    input_ids = enc["input_ids"]
+    with torch.no_grad():
+        logits = backend._model(input_ids).logits
+    # stats[t] corresponds to logits[0, t] (position t predicts token t+1).
+    # Recompute in float64 (the variance is a small difference of O(mu^2) terms,
+    # so a float32 reference would itself be ~1% off — see the centered formula).
+    for t in (0, len(stats) - 1):
+        lp = torch.log_softmax(logits[0, t].double(), dim=-1)
+        p = lp.exp()
+        mu_ref = (p * lp).sum()
+        sigma_ref = (p * (lp - mu_ref).square()).sum().clamp_min(0.0).sqrt()
+        target = int(input_ids[0, t + 1])
+        assert stats[t].logprob == pytest.approx(float(lp[target]), rel=1e-3, abs=1e-5)
+        assert stats[t].mu == pytest.approx(float(mu_ref), rel=1e-3, abs=1e-5)
+        assert stats[t].sigma == pytest.approx(float(sigma_ref), rel=1e-3, abs=1e-5)

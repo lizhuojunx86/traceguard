@@ -125,3 +125,15 @@ def test_for_text_composes_backend_and_scorer():
 def test_for_text_propagates_empty_error():
     with pytest.raises(ValueError, match="non-empty"):
         min_k_plus_plus_for_text("t", backend=_FakeCalibratedBackend([]))
+
+
+def test_k_floor_denominator_uses_surviving_token_count():
+    # The k fraction must floor over the tokens that SURVIVE the sigma<=0 skip,
+    # not the original count. 2 valid (z = 1.0, -2.0) + 4 degenerate, k=0.5:
+    #   correct:  n = max(1, int(2 * 0.5)) = 1 -> lowest surviving z = -2.0
+    #   buggy:    n = max(1, int(6 * 0.5)) = 3 -> mean of both survivors = -0.5
+    valid = _stats([(-1.0, -2.0, 1.0), (-4.0, -1.0, 1.5)])
+    degenerate = _stats([(-1.0, -1.0, 0.0)] * 4)
+    score = min_k_plus_plus(valid + degenerate, k=0.5)
+    assert score == pytest.approx(-2.0)
+    assert score != pytest.approx(-0.5)
