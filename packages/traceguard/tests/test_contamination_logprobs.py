@@ -98,3 +98,38 @@ def test_hf_backend_real_tiny_model():
     assert all(x <= 0.0 for x in logprobs)
     # The convenience path should run end-to-end on a real backend too.
     assert min_k_prob_for_text("The quick brown fox jumps", backend=backend) <= 0.0
+
+
+# --- Min-K%++ on the HF reference backend (0.6.0, additive) ----------------
+
+
+def test_hf_backend_satisfies_calibrated_protocol():
+    # Structural check only (no model load): HFLogprobBackend gained
+    # token_logprob_stats, so it now also satisfies CalibratedLogprobBackend.
+    from traceguard.contamination import CalibratedLogprobBackend
+    from traceguard.contamination.logprobs_hf import HFLogprobBackend
+
+    assert isinstance(HFLogprobBackend("sshleifer/tiny-gpt2"), CalibratedLogprobBackend)
+
+
+@pytest.mark.skipif(
+    not _RUN_HF, reason="set TRACEGUARD_RUN_HF_TESTS=1 (and install the extra) to run"
+)
+def test_hf_backend_minkpp_stats_real_tiny_model():
+    pytest.importorskip("transformers")
+    from traceguard.contamination import min_k_plus_plus_for_text
+    from traceguard.contamination.logprobs_hf import HFLogprobBackend
+
+    backend = HFLogprobBackend("sshleifer/tiny-gpt2")
+    text = "The quick brown fox jumps"
+    stats = backend.token_logprob_stats(text)
+    assert len(stats) >= 1
+    for s in stats:
+        assert s.logprob <= 0.0  # actual-token log-prob
+        assert s.mu <= 0.0  # mean log-prob over the vocabulary
+        assert s.sigma >= 0.0  # std, clamped non-negative
+    # Same alignment/length as the plain logprob path, with identical logprobs.
+    plain = list(backend.token_logprobs(text))
+    assert [s.logprob for s in stats] == pytest.approx(plain)
+    # The Min-K%++ convenience path runs end-to-end on a real backend.
+    assert isinstance(min_k_plus_plus_for_text(text, backend=backend), float)

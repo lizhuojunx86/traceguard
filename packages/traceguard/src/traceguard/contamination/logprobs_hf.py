@@ -23,6 +23,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any
 
+from traceguard.contamination.mia import TokenLogprobStats
+
 
 class HFLogprobBackend:
     """:class:`LogprobBackend` backed by a HuggingFace causal language model.
@@ -106,3 +108,48 @@ class HFLogprobBackend:
         targets = input_ids[:, 1:]
         gathered = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
         return [float(x) for x in gathered[0].tolist()]
+
+    def token_logprob_stats(self, text: str) -> Sequence[TokenLogprobStats]:
+        """Teacher-forced per-token stats for Min-K%++: each token's log-prob plus
+        the mean/std of log-prob over the whole vocabulary at that position.
+
+        Uses the same alignment as :meth:`token_logprobs` (the first token has no
+        context and is dropped); returns ``len(tokens) - 1`` entries, or an empty
+        list if the text tokenizes to fewer than two tokens. For each predicted
+        position, over the full next-token distribution ``p``::
+
+            mu    = sum_z p(z) * log p(z)
+            sigma = sqrt( sum_z p(z) * log p(z)^2  -  mu^2 )   # clamped to >= 0
+
+        matching the reference Min-K%++ implementation (Zhang et al., 2024).
+        """
+        self._ensure_loaded()
+        torch = self._torch
+        enc = self._tokenizer(
+            text, return_tensors="pt", add_special_tokens=self._add_special_tokens
+        )
+        input_ids = enc["input_ids"]
+        if self._device is not None:
+            input_ids = input_ids.to(self._device)
+        if input_ids.shape[1] < 2:
+            return []
+        with torch.no_grad():
+            logits = self._model(input_ids).logits
+        # Same alignment as token_logprobs: drop the last position's logits and
+        # the first input id. log_probs[:, t, :] is the full next-token
+        # distribution given tokens 0..t.
+        log_probs = torch.log_softmax(logits[:, :-1, :], dim=-1)
+        probs = log_probs.exp()
+        mu = (probs * log_probs).sum(dim=-1)
+        # Var = E[L^2] - (E[L])^2 over the vocabulary; clamp away negative values
+        # from float round-off before the sqrt.
+        var = (probs * log_probs.square()).sum(dim=-1) - mu.square()
+        sigma = var.clamp_min(0.0).sqrt()
+        targets = input_ids[:, 1:]
+        token_lp = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)
+        return [
+            TokenLogprobStats(logprob=float(lp), mu=float(m), sigma=float(s))
+            for lp, m, s in zip(
+                token_lp[0].tolist(), mu[0].tolist(), sigma[0].tolist()
+            )
+        ]

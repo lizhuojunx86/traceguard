@@ -29,8 +29,17 @@ from traceguard.contamination.decay import (
     regime_decay_test,
     regime_decay_trend,
 )
-from traceguard.contamination.logprobs import LogprobBackend, min_k_prob_for_text
-from traceguard.contamination.mia import min_k_prob
+from traceguard.contamination.logprobs import (
+    CalibratedLogprobBackend,
+    LogprobBackend,
+    min_k_plus_plus_for_text,
+    min_k_prob_for_text,
+)
+from traceguard.contamination.mia import (
+    TokenLogprobStats,
+    min_k_plus_plus,
+    min_k_prob,
+)
 from traceguard.contamination.scoring import (
     CONTAMINATION_KEY,
     ContaminationScore,
@@ -39,8 +48,12 @@ from traceguard.contamination.scoring import (
 
 __all__ = [
     "min_k_prob",
+    "min_k_plus_plus",
     "min_k_prob_for_text",
+    "min_k_plus_plus_for_text",
+    "TokenLogprobStats",
     "LogprobBackend",
+    "CalibratedLogprobBackend",
     "performance_decay_across_regimes",
     "RegimeDecay",
     "regime_decay_test",
