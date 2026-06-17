@@ -7,7 +7,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
-## [0.5.0] - Unreleased
+## [0.5.0] - 2026-06-17
 
 Adds **opt-in real-time OpenTelemetry dual-write**: a tracer can emit one OTLP
 span the moment a trace closes, *in addition to* (never replacing) the SQLite
