@@ -40,4 +40,14 @@ real_traces_export.json
 market_intel_export.json
 *_export.json
 fixtures/case-*/
-docs/case-studies/
+# Ignore case-studies CONTENTS (not the dir itself), so the specific exceptions
+# below can re-include individual files — git cannot re-include a file whose
+# parent DIRECTORY is excluded, so this must be `/*`, not `docs/case-studies/`.
+docs/case-studies/*
+# Exception: the FMP look-ahead case study is cleared for publication (numbers
+# reconciled 2026-06-16, contains no raw vendor data — see the file's editor's
+# note). Everything else under case-studies/ stays local — notably the
+# market-intel retrospective, which is internal pipeline-health material, not a
+# public TraceGuard study.
+!docs/case-studies/fmp-revision.md
+!docs/case-studies/fmp-revision.zh.md
