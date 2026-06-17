@@ -7,6 +7,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [0.6.1] - 2026-06-17
+
+Docs-and-metadata patch — **no code or public-API change** (the integration
+guide below uses `Tracer.enable_otel`, shipped in 0.5.0; SPEC §§3–5 untouched).
+It refreshes the PyPI page so the expanded metadata becomes visible and surfaces
+the OpenTelemetry integration guide to package visitors.
+
+### Changed
+
+- **PyPI metadata**: expanded `keywords` (point-in-time, temporal-integrity,
+  data-contamination, llm-evaluation) and `classifiers` (Financial and Insurance
+  Industry audience; Scientific/Engineering :: Artificial Intelligence). License
+  stays the SPDX `License-Expression: Apache-2.0` form (+ bundled `LICENSE`).
+- **Package README** now links the OpenTelemetry → Langfuse/Phoenix integration
+  guide.
+
+### Docs
+
+- Published the FMP `epsActual` data-revision case study (harness/pipeline
+  leakage, look-ahead kind 2) plus a faithful Chinese translation under
+  `docs/case-studies/`; added `docs/integrations/otel-langfuse-phoenix.md` and a
+  runnable, self-checking `examples/otel_console_export.py`.
+
 ## [0.6.0] - 2026-06-17
 
 Adds **Min-K%++**, a stronger membership-inference variant for
