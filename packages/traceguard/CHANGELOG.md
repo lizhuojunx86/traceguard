@@ -7,7 +7,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
-## [0.6.0] - Unreleased
+## [0.6.0] - 2026-06-17
 
 Adds **Min-K%++**, a stronger membership-inference variant for
 training-contamination detection, and brings the SDK suite (plus a real
