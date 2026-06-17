@@ -11,8 +11,9 @@ time you are simulating.
 It is not a dashboard or a gateway; it is the lower layer that guarantees the
 timeline underneath one. It interoperates with observability stacks
 (Langfuse / Phoenix via the optional `traceguard[otel]` exporter) rather than
-competing with them. See
-[docs/POSITIONING.md](https://github.com/lizhuojunx86/traceguard/blob/main/docs/POSITIONING.md).
+competing with them — see the
+[OpenTelemetry → Langfuse/Phoenix guide](https://github.com/lizhuojunx86/traceguard/blob/main/docs/integrations/otel-langfuse-phoenix.md)
+and [docs/POSITIONING.md](https://github.com/lizhuojunx86/traceguard/blob/main/docs/POSITIONING.md).
 
 - `traceguard.registry.models` — model registry with `released_at` /
   `available_to_us_at`; `select_model(..., strict=...)` with mandatory
