@@ -19,6 +19,7 @@ uv run python ../../examples/<name>.py
 | [model_anachronism.py](model_anachronism.py) | `strict` mode blocks a 2026 model from touching 2021 data; loose mode flags `is_anachronistic` and warns | Harness (kind 2) |
 | [prompt_drift.py](prompt_drift.py) | Two prompt versions → two hashes the tracer records; invariant 3 rejects a prompt used before its `introduced_at` | Harness (kind 2) |
 | [anthropic_call.py](anthropic_call.py) | `wrap_anthropic` around a real-or-fake client; one traced call; invariant 2 | Harness (kind 2) |
+| [otel_console_export.py](otel_console_export.py) | One traced call becomes one OTLP span carrying the point-in-time attributes (`available_to_us_at`, `feature_as_of`, `input_hash`, prompt hash); prints it offline. Guide: [docs/integrations/otel-langfuse-phoenix.md](../docs/integrations/otel-langfuse-phoenix.md) | Harness (kind 2) |
 
 ## Illustrative (run a real slice, sketch the rest)
 
