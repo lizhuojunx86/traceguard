@@ -17,7 +17,7 @@ Downstream consumers pin git tags: huadian → `v0.1.0-huadian-baseline` (guardi
 # ── traceguard SDK (packages/traceguard) ──
 cd packages/traceguard
 uv sync
-uv run pytest                    # 44 tests
+uv run pytest                    # 136 tests
 uv run python ../../examples/quickstart/run_quickstart.py
 
 # ── pipeline-guardian (repo root) ──

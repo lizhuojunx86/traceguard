@@ -34,8 +34,8 @@ structurally hard:
 - **Four look-ahead invariants as pure functions** — call them in pytest/CI;
   violations raise, nothing is silently logged-and-forgotten.
 - **Lightweight tracing** — a `@tracer.trace` decorator, a `tracer.span()`
-  context manager, and a `wrap_anthropic` client wrapper that record every
-  LLM/embedding/ML call (input hash, model, prompt version, output, latency,
+  context manager, and `wrap_anthropic` / `wrap_openai` client wrappers that
+  record every LLM/embedding/ML call (input hash, model, prompt version, output, latency,
   tokens, cost) into SQLite/SQLAlchemy.
 
 ## Two kinds of look-ahead
@@ -93,7 +93,8 @@ pip install traceguard
 ```
 
 Requires Python 3.11+. Core dependencies: SQLAlchemy 2, Pydantic 2, PyYAML.
-The Anthropic wrapper is an extra: `pip install "traceguard[anthropic]"`.
+The Anthropic and OpenAI wrappers are extras:
+`pip install "traceguard[anthropic]"` / `pip install "traceguard[openai]"`.
 
 To track the development version instead of PyPI releases:
 
@@ -214,7 +215,7 @@ share no imports and release independently.
 ```bash
 # SDK
 cd packages/traceguard
-uv sync && uv run pytest        # 70 tests
+uv sync && uv run pytest        # 136 tests
 
 # Pipeline Guardian (legacy)
 uv sync && uv run pytest        # 246 tests, from repo root
