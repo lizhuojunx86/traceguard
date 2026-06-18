@@ -7,6 +7,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [0.7.0] - 2026-06-18
+
+Adds an **OpenAI client wrapper**, bringing auto-instrumentation parity with
+`wrap_anthropic`. **No breaking changes** — purely additive, so every
+0.2.0–0.6.1 public signature is unchanged (SemVer minor): no existing
+function or extra is touched, the heavy `openai` dependency stays behind a new
+opt-in extra, and SPEC §§3–5 are untouched.
+
+### Added
+
+- **`wrap_openai`** (`traceguard.sdk.wrappers.openai`): wraps an
+  `openai.OpenAI` client so `chat.completions.create(...)` — and
+  `responses.create(...)` when the installed SDK exposes the Responses API —
+  each produce one `traces` row (input hash, model, output text/id,
+  prompt+completion tokens, latency). Mirrors `wrap_anthropic`: the response
+  object is returned untouched, every other attribute passes through, and an
+  un-wrapped client is unaffected. The heavy dependency is isolated behind the
+  new `traceguard[openai]` = `["openai>=1.0"]` extra; core dependencies
+  unchanged.
+- `examples/openai_call.py`: synthetic, no-key demo (fake or real client)
+  making one `chat.completions` and one `responses` call and reading back both
+  traces.
+
 ## [0.6.1] - 2026-06-17
 
 Docs-and-metadata patch — **no code or public-API change** (the integration
