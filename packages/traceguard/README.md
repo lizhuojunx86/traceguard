@@ -27,6 +27,9 @@ and [docs/POSITIONING.md](https://github.com/lizhuojunx86/traceguard/blob/main/d
   `input_hash` (sorted keys, fixed float precision, normalized whitespace).
 - `traceguard.sdk.wrappers.anthropic` — `wrap_anthropic` auto-instruments an
   Anthropic SDK client (extra: `traceguard[anthropic]`).
+- `traceguard.sdk.wrappers.openai` — `wrap_openai` auto-instruments an OpenAI
+  SDK client's `chat.completions` and `responses` calls (extra:
+  `traceguard[openai]`).
 - `traceguard.validators.lookahead` — pure-function invariant validators
   (`validate_feature_as_of`, `validate_model_timing`,
   `validate_reference_timing`) that raise `InvariantViolation`; call them in
@@ -39,7 +42,8 @@ pip install traceguard
 ```
 
 Requires Python 3.11+. Optional extras:
-`pip install "traceguard[anthropic]"` (Anthropic client wrapper) and
+`pip install "traceguard[anthropic]"` / `pip install "traceguard[openai]"`
+(Anthropic / OpenAI client wrappers) and
 `pip install "traceguard[otel]"` (OpenTelemetry / OpenInference export to
 Langfuse, Phoenix, or any OTLP backend).
 
@@ -74,8 +78,8 @@ look-ahead invariants, SemVer rules — is in
 [docs/SPEC.md](https://github.com/lizhuojunx86/traceguard/blob/main/docs/SPEC.md).
 
 Phase 0 scope: tracer, model/prompt registries, normalizer, invariants 1–3,
-Anthropic wrapper. Not yet: drift checks, replay sets (invariant 4), CLI,
-Postgres/TimescaleDB, OpenAI/Voyage wrappers — see
+Anthropic + OpenAI wrappers. Not yet: drift checks, replay sets (invariant 4),
+CLI, Postgres/TimescaleDB, Voyage wrapper — see
 [TRACEGUARD_ROADMAP.md](https://github.com/lizhuojunx86/traceguard/blob/main/TRACEGUARD_ROADMAP.md).
 
 ## Development
@@ -83,7 +87,7 @@ Postgres/TimescaleDB, OpenAI/Voyage wrappers — see
 ```bash
 cd packages/traceguard
 uv sync
-uv run pytest        # 70 tests
+uv run pytest        # 136 tests
 ```
 
 ## License

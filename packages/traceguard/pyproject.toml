@@ -1,6 +1,6 @@
 [project]
 name = "traceguard"
-version = "0.6.1"
+version = "0.7.0"
 description = "Point-in-time correct LLM instrumentation: tracing, version pinning, and look-ahead-bias protection for research pipelines"
 readme = "README.md"
 license = "Apache-2.0"
@@ -41,6 +41,7 @@ dependencies = [
 
 [project.optional-dependencies]
 anthropic = ["anthropic>=0.40.0"]
+openai = ["openai>=1.0"]
 otel = [
     "opentelemetry-api>=1.20",
     "opentelemetry-sdk>=1.20",
