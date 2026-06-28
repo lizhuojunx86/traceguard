@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -25,6 +26,11 @@ from traceguard.store.models import Trace, make_engine
 _INPUT_SUMMARY_MAX = 500
 
 _otel_log = logging.getLogger("traceguard.otel")
+_persist_log = logging.getLogger("traceguard.tracer")
+
+
+def _env_truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 class _OtelSink(Protocol):
@@ -82,6 +88,7 @@ class Span:
         feature_as_of: datetime | None = None,
         parent_trace_id: int | None = None,
         otel_sink: _OtelSink | None = None,
+        strict_persistence: bool = False,
     ) -> None:
         self.project = project
         self.component = component
@@ -92,6 +99,7 @@ class Span:
 
         self._engine = engine
         self._otel_sink = otel_sink
+        self._strict_persistence = strict_persistence
         self._snapshot: Trace | None = None
         self._start_perf: float = time.perf_counter()
         self._committed = False
@@ -222,6 +230,40 @@ class Span:
         self._committed = True
         return self._snapshot
 
+    def _flush_safe(self) -> Trace | None:
+        """Persist the row fail-open by default (SPEC §4.1 failure-mode MUST).
+
+        Tracing MUST NOT break the instrumented call. A persistence failure
+        (locked / full / missing-table DB, etc.) is logged at WARNING on
+        ``traceguard.tracer`` and swallowed, so it never breaks the business call
+        and — critically, on the error path — never *replaces* the original
+        business exception (the caller still sees their own error, unmasked).
+
+        Set ``strict_persistence=True`` (tracer-level, or
+        ``TRACEGUARD_STRICT_PERSISTENCE=1``) to fail closed instead: persistence
+        failures then propagate. That is the right mode for backtests where a
+        silently-missing trace could hide an undetected look-ahead anachronism.
+
+        Catches ``Exception`` only, letting ``KeyboardInterrupt`` / ``SystemExit``
+        through. Returns ``None`` on a swallowed failure (so the downstream OTel
+        dual-write is skipped — there is no committed row to mirror).
+        """
+        try:
+            return self._flush()
+        except Exception:  # noqa: BLE001 - persistence must never break the business call
+            if self._strict_persistence:
+                raise
+            try:
+                _persist_log.warning(
+                    "trace persistence failed; the business call is unaffected "
+                    "(set strict_persistence=True / TRACEGUARD_STRICT_PERSISTENCE=1 "
+                    "to fail closed)",
+                    exc_info=True,
+                )
+            except Exception:  # noqa: BLE001 - even the recovery log must not escape the hot path
+                pass
+            return None
+
     def _emit_otel_safe(self, snapshot: Trace | None) -> None:
         """Best-effort OTel dual-write — runs after the row is committed.
 
@@ -250,8 +292,19 @@ class Span:
 class Tracer:
     """Holds the persistence engine and emits ``Span`` objects."""
 
-    def __init__(self, engine: Engine | None = None, *, _otel_sink: _OtelSink | None = None) -> None:
+    def __init__(
+        self,
+        engine: Engine | None = None,
+        *,
+        strict_persistence: bool = False,
+        _otel_sink: _OtelSink | None = None,
+    ) -> None:
         self._engine = engine
+        # Fail-open by default (SPEC §4.1): a persistence failure is swallowed so
+        # it never breaks/masks the business call. Set True (or env
+        # TRACEGUARD_STRICT_PERSISTENCE=1) to fail closed. Public + settable at
+        # runtime; read per-span when a span is created.
+        self.strict_persistence = strict_persistence
         # Private test-injection seam (not a public config path — use enable_otel).
         self._otel_sink = _otel_sink
 
@@ -330,16 +383,22 @@ class Tracer:
             feature_as_of=feature_as_of,
             parent_trace_id=parent_trace_id,
             otel_sink=self._otel_sink,
+            strict_persistence=self.strict_persistence,
         )
         try:
             yield span
         except BaseException as exc:
             span.record_error(exc)
-            snapshot = span._flush()
+            # Fail-open: on the error path _flush_safe must never replace the
+            # original business exception (exc), so the bare `raise` below always
+            # propagates the caller's own error. In strict mode a persistence
+            # failure surfaces instead (fail-closed); exc stays reachable via
+            # Python's implicit exception chaining.
+            snapshot = span._flush_safe()
             span._emit_otel_safe(snapshot)
             raise
         else:
-            snapshot = span._flush()
+            snapshot = span._flush_safe()
             span._emit_otel_safe(snapshot)
 
     def trace(
@@ -376,6 +435,8 @@ class Tracer:
         return decorator
 
 
-tracer = Tracer()
+tracer = Tracer(strict_persistence=_env_truthy("TRACEGUARD_STRICT_PERSISTENCE"))
 """Module-level default tracer. Configure via ``TRACEGUARD_DB_URL`` env var,
-or call ``tracer.configure(engine)`` to inject a custom engine."""
+or call ``tracer.configure(engine)`` to inject a custom engine. Persistence is
+fail-open by default; set ``TRACEGUARD_STRICT_PERSISTENCE=1`` (or
+``tracer.strict_persistence = True``) to fail closed."""
