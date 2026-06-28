@@ -38,18 +38,31 @@ _PKG_SRC = Path(__file__).resolve().parent.parent.parent / "packages" / "tracegu
 if _PKG_SRC.is_dir() and str(_PKG_SRC) not in sys.path:
     sys.path.insert(0, str(_PKG_SRC))
 
+from datetime import datetime, timezone  # noqa: E402
+
 from sqlalchemy import func, select  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
+from traceguard.registry.models import register_model  # noqa: E402
 from traceguard.sdk.wrappers.openai import wrap_openai  # noqa: E402
 from traceguard.sdk.tracer import Tracer  # noqa: E402
 from traceguard.store.models import Trace, make_engine  # noqa: E402
+from traceguard.validators.lookahead import (  # noqa: E402
+    InvariantViolation,
+    validate_model_timing,
+)
 
 PROJECT = "dogfood"
 COMPONENT = "headline-classifier"
 MODEL_ID = os.environ.get("DOGFOOD_MODEL", "gpt-4o-mini")
 N = int(os.environ.get("DOGFOOD_N", "120"))
 DB = Path(os.environ.get("DOGFOOD_DB", str(Path(__file__).parent / "dogfood_traces.db")))
+
+# Point-in-time setup for the look-ahead demo. We simulate running the
+# classifier "as of" AS_OF; the model must have been available by then.
+AS_OF = datetime(2025, 6, 1, tzinfo=timezone.utc)  # the moment we simulate
+MODEL_AVAILABLE = datetime(2024, 7, 18, tzinfo=timezone.utc)  # gpt-4o-mini's real release
+TOO_EARLY = datetime(2024, 1, 1, tzinfo=timezone.utc)  # before the model existed
 
 LABELS = ("bullish", "bearish", "neutral")
 
@@ -162,8 +175,24 @@ def main() -> int:
         DB.unlink()
     engine = make_engine(f"sqlite:///{DB}")
     tracer = Tracer(engine=engine)
+
+    # Register the model so its traces become look-ahead checkable. (Date is
+    # gpt-4o-mini's real availability; illustrative if DOGFOOD_MODEL is overridden.)
+    register_model(
+        MODEL_ID,
+        model_family="gpt",
+        capability_class="chat",
+        released_at=MODEL_AVAILABLE,
+        available_to_us_at=MODEL_AVAILABLE,
+        engine=engine,
+    )
+
     raw, backend = _build_client()
-    client = wrap_openai(raw, project=PROJECT, component=COMPONENT, tracer=tracer)
+    # feature_as_of stamps every call with the point in time we simulate, turning
+    # each trace from "tracing only" into one the look-ahead invariants can check.
+    client = wrap_openai(
+        raw, project=PROJECT, component=COMPONENT, tracer=tracer, feature_as_of=AS_OF
+    )
 
     print(f"[dogfood] running {N} classifications (model={MODEL_ID}, backend={backend})")
     errors = 0
@@ -184,6 +213,7 @@ def main() -> int:
         ok = sess.scalar(select(func.count()).where(Trace.parse_status == "success"))
         failed = sess.scalar(select(func.count()).where(Trace.parse_status == "failed"))
         with_hash = sess.scalar(select(func.count()).where(Trace.input_hash.is_not(None)))
+        with_asof = sess.scalar(select(func.count()).where(Trace.feature_as_of.is_not(None)))
         with_model = sess.scalar(select(func.count()).where(Trace.model_id == MODEL_ID))
         tokens_in = sess.scalar(select(func.coalesce(func.sum(Trace.tokens_in), 0)))
         tokens_out = sess.scalar(select(func.coalesce(func.sum(Trace.tokens_out), 0)))
@@ -194,6 +224,7 @@ def main() -> int:
     print(f"  parse success  : {ok}")
     print(f"  parse failed   : {failed}")
     print(f"  has input_hash : {with_hash}")
+    print(f"  has feature_as_of: {with_asof} (@ {AS_OF.date()})")
     print(f"  model={MODEL_ID}: {with_model}")
     print(f"  tokens in/out  : {tokens_in} / {tokens_out}")
     for r in sample:
@@ -204,9 +235,33 @@ def main() -> int:
     # ---- self-checks (Phase 0 acceptance #7) ----
     assert total >= 100, f"need >=100 traces, got {total}"
     assert with_hash == total, "every trace must carry a point-in-time input_hash"
+    assert with_asof == total, "every trace must carry a feature_as_of (PIT-checkable)"
     assert with_model == total, "every trace must record the model_id"
     print(f"\n[dogfood] PASS — {total} traces written by a real consumer via wrap_openai "
           f"({errors} call errors).")
+
+    # ---- look-ahead invariants (the differentiator, not just tracing) ----
+    with Session(engine) as sess:
+        rows = sess.scalars(select(Trace)).all()
+    clean = 0
+    for r in rows:
+        try:
+            validate_model_timing(r.model_id, r.feature_as_of, strict=True, engine=engine)
+            clean += 1
+        except InvariantViolation:
+            pass
+    print("\n[dogfood] ===== look-ahead invariants =====")
+    print(f"  invariant 2 (model timing) clean: {clean}/{len(rows)} "
+          f"@ as_of={AS_OF.date()} (model available {MODEL_AVAILABLE.date()})")
+    assert clean == total, "every stamped trace should pass invariant 2 at a valid as-of"
+
+    # The payoff: rerun the SAME model against an as-of *before* it existed —
+    # traceguard flags it as look-ahead bias instead of silently letting it through.
+    try:
+        validate_model_timing(MODEL_ID, TOO_EARLY, strict=True, engine=engine)
+        print(f"  [!] expected a look-ahead violation at {TOO_EARLY.date()} but none raised")
+    except InvariantViolation as e:
+        print(f"  ✋ blocked: {MODEL_ID} as-of {TOO_EARLY.date()} is look-ahead — {str(e)[:64]}")
 
     # ---- adoption note: framework copy transparency (the 0.8.1 fix in the wild) ----
     def _probe(label, fn):
