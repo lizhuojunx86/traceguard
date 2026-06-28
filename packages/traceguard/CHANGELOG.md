@@ -7,6 +7,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [0.8.1] - 2026-06-28
+
+Patch release: one adoption-blocking bugfix in the SDK wrappers. **No API
+changes** — the public surface (`__all__`, 28 symbols) and all signatures are
+unchanged; this is a strict behavioural fix (SemVer patch).
+
+### Fixed
+
+- **Wrapped clients are now transparent to `copy.deepcopy` / `copy.copy`.** A
+  client returned by `wrap_openai` / `wrap_anthropic` previously raised
+  `RecursionError` when copied (and `TypeError` on the engine-backed tracer once
+  past it). The delegating `__getattr__` forwarded the `__setstate__` /
+  `__reduce_ex__` dunders the copy/pickle protocol probes on a half-constructed
+  (`cls.__new__`) instance to a not-yet-set delegate attribute, recursing
+  forever. Frameworks such as LangChain / LlamaIndex deep-copy LLM clients, so a
+  wrapped client crashed where the raw client would not. Delegation is now
+  factored into a private `_DelegatingWrapper` mixin that (1) raises
+  `AttributeError` for any private/dunder lookup, so the copy/pickle protocol
+  falls back cleanly, and (2) implements `__deepcopy__` sharing the process-level
+  `Tracer` by reference (a sink, never copied) while deep-copying the wrapped
+  client. The wrapper no longer *adds* a copy-time failure the underlying client
+  didn't already have.
+
 ## [0.8.0] - 2026-06-28
 
 The **contract-close** release on the road to 1.0: every SPEC §3–5 MUST is now
