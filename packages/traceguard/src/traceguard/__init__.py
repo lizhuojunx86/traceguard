@@ -18,7 +18,7 @@ this frozen surface — import them from their submodule paths:
 """
 from __future__ import annotations
 
-__version__ = "0.8.0"
+__version__ = "0.8.1"
 
 from traceguard.registry.models import NoEligibleModelError, register_model, select_model
 from traceguard.registry.prompts import PromptTemplate, load_prompt
