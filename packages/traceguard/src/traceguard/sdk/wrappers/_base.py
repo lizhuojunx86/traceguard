@@ -45,23 +45,31 @@ FeatureAsOf = Union[datetime, Callable[[], Optional[datetime]], None]
 
 
 def _resolve_feature_as_of(value: FeatureAsOf) -> Optional[datetime]:
-    """Resolve a :data:`FeatureAsOf` to a concrete datetime (or ``None``) per call.
+    """Resolve a :data:`FeatureAsOf` to a tz-aware datetime (or ``None``) per call.
 
-    Fail-open (SPEC §4.1): a callable that raises must never break the host LLM
-    call. On error we log and record ``feature_as_of=None`` — an honest missing
-    stamp that the consumer's invariant check will surface, rather than a wrong
-    timestamp or a broken business call.
+    Fail-open (SPEC §4.1): instrumentation must never break the host LLM call. So
+    a callable that raises, or a naive (tz-less) datetime — which the store would
+    reject (``UTCDateTime`` requires tz-aware), silently dropping the whole trace
+    under the default fail-open tracer — is downgraded to ``feature_as_of=None``
+    with a warning. That keeps the trace (an honest missing stamp the consumer's
+    invariant check will surface) instead of a wrong timestamp or a lost row.
     """
-    if not callable(value):
-        return value
-    try:
-        return value()
-    except Exception:  # noqa: BLE001 - fail-open: instrumentation never breaks the host call
+    if callable(value):
+        try:
+            value = value()
+        except Exception:  # noqa: BLE001 - fail-open: never break the host call
+            _log.warning(
+                "feature_as_of callable raised; recording trace with feature_as_of=None",
+                exc_info=True,
+            )
+            return None
+    if value is not None and getattr(value, "tzinfo", None) is None:
         _log.warning(
-            "feature_as_of callable raised; recording trace with feature_as_of=None",
-            exc_info=True,
+            "feature_as_of is a naive datetime (no tzinfo); recording feature_as_of=None "
+            "— pass a tz-aware datetime, e.g. datetime.now(timezone.utc)",
         )
         return None
+    return value
 
 
 class _DelegatingWrapper:

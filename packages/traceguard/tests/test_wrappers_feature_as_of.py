@@ -142,3 +142,26 @@ def test_anthropic_static_and_callable(tg, engine):
     )
     w.messages.create(model="claude-x", messages=[])
     assert _traces(engine)[0].feature_as_of == AS_OF
+
+
+def test_naive_datetime_is_downgraded_to_none_not_a_dropped_trace(tg, engine):
+    # The store (UTCDateTime) rejects naive datetimes; under the default fail-open
+    # tracer that would silently drop the whole trace. Instead we downgrade a naive
+    # feature_as_of to None (with a warning) so the trace survives with an honest
+    # NULL stamp. Both a static naive value and a callable returning one are covered.
+    naive = datetime(2024, 6, 1)  # no tzinfo
+
+    w_static = wrap_openai(_openai_client(), project="p", component="c", tracer=tg, feature_as_of=naive)
+    out = w_static.chat.completions.create(model="gpt-x", messages=[])
+    assert out is not None  # host call unaffected
+    rows = _traces(engine)
+    assert len(rows) == 1 and rows[0].feature_as_of is None  # trace kept, stamp dropped
+
+
+def test_callable_returning_naive_is_also_downgraded(tg, engine):
+    w = wrap_openai(
+        _openai_client(), project="p", component="c", tracer=tg,
+        feature_as_of=lambda: datetime(2024, 6, 1),  # naive
+    )
+    w.chat.completions.create(model="gpt-x", messages=[])
+    assert _traces(engine)[0].feature_as_of is None
