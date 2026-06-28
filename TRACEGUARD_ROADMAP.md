@@ -1,8 +1,19 @@
 # TraceGuard 实施路线 (Roadmap)
 
-> **状态**: Draft v0.1 (2026-05-18)
+> **状态**: Draft v0.1 (2026-05-18),含 2026-06-28 状态更新(见下)
 > **关系**: 本文档是 `TRACEGUARD_SPEC.md` 的实施配套。SPEC 是宪法(稳定),Roadmap 是路线(可演进)。两者冲突时,**SPEC 优先**。
 > **承诺等级**: Phase 0 是承诺,Phase 1+ 是规划,Phase 3+ 是愿景。
+
+---
+
+## ⚠️ 状态更新 (2026-06-28) — 取代本文档若干过时表述
+
+实施实际偏离了本路线,且这是**有意为之的正确选择**,本节据实更新,下文 Phase 描述保留作历史:
+
+- **实际走向**:0.3.0–0.7.0 没有按 Phase 1(drift/告警)→ Phase 2(replay)推进,而是建了差异化/opt-in 能力——OTel 导出 + 实时双写、训练污染检测(MIN-K%/Min-K%++/regime-decay/claim-verifier)、loop evidence-gating、`wrap_openai`。这些是 SPEC §6.6 的契约外可选扩展,是产品的真实拳头。
+- **1.0 的定义已修订**:下方 §1.1 表格"Phase 2 完成时冻结 v1.0.0"**作废**。1.0 不再等于"走完 Phase 2 工具链",而是 = **① SPEC §3–5 每条 MUST 真正实现并强制(含不变量 4)+ ② 公开 import 面 curated 并在 SemVer 下冻结 + ③ 插桩永不破坏/掩盖宿主调用(fail-open)**。Phase 1(drift/告警)与完整 Phase 2 工具链(replay executor / 对比报告 / A-B promotion / YAML→DB)被显式降级为 **post-1.0**(SPEC §1/§6 划在契约外)。
+- **0.8.0 收口契约核心**:已实现 fail-open 隔离(B1)、replay_sets/replay_set_items 表 + 物理拒写(B2)、`assert_replay_set_locked`/不变量 4 + 写路径(B3)、curated 顶层 API + py.typed(B4)、streaming 不再假成功(B5)、SPEC/ROADMAP 对账(B6)。SPEC 随之升 v0.3。
+- **后续真实路线由采纳驱动**:最高优先是让一个真实消费者上 traceguard 并写入 ≥100 trace(Phase 0 验收 #7 至今未满足,huadian 仍用 guardian),而非继续堆功能。
 
 ---
 
@@ -22,7 +33,7 @@
 | Python 包 | 角色 | 起始版本 | 何时冻结 |
 |---|---|---|---|
 | `pipeline-guardian` | huadian 当前消费者使用 | `v0.1.0-huadian-baseline`(已冻结) | 已冻结 |
-| `traceguard` | 新 SDK + 存储,服务未来接入 | `v0.2.0`(本路线第一个 release) | Phase 2 完成时冻结 v1.0.0 |
+| `traceguard` | 新 SDK + 存储,服务未来接入 | `v0.2.0`(本路线第一个 release) | ~~Phase 2 完成时冻结 v1.0.0~~ → 见顶部 2026-06-28 状态更新(改为契约核心 + 冻面 + fail-open) |
 
 **关键约束:**
 
@@ -143,8 +154,8 @@ traceguard/                          # repo root
 
 ### 4.1 范围内
 
-- `drift_alerts` 表(SPEC 已定义)
-- 标准 check 库(从 SPEC §5.1 候选中**只挑业务真需要的**,不全做):
+- `drift_alerts` 表(**勘误**:SPEC 并未定义此表——drift/告警在 SPEC §1/§6 明确划在契约外。此表为本 Phase 自定义,字段由实施者定,不进 SPEC MUST)
+- 标准 check 库(从候选中**只挑业务真需要的**,不全做;注:SPEC 不枚举 check,§5 是不变量章节而非 check 清单):
   - `parse_failure_rate`
   - `latency_p95`
   - `cost_daily_total`

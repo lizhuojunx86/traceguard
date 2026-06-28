@@ -17,6 +17,12 @@ from typing import Any
 from traceguard.sdk.tracer import Tracer
 from traceguard.sdk.tracer import tracer as default_tracer
 
+# A streaming call returns an iterator, not a materialized response: text/usage
+# are unavailable until the caller drains the stream, which this wrapper does
+# not do. We record an honest 'partial' rather than a false 'success' with empty
+# text and zero tokens, which would corrupt the trace dataset.
+_STREAM_NOTE = "streaming response body not captured by wrap_openai"
+
 
 def _chat_text(response: Any) -> str | None:
     """Best-effort extraction of the assistant text from a Chat Completions response."""
@@ -86,6 +92,13 @@ class _WrappedCompletions:
             # The tracer.span context manager records the error + flushes + re-raises
             # if this call fails, so no explicit try/except is needed here.
             response = self._original.create(**kwargs)
+
+            if kwargs.get("stream"):
+                span.record_output(
+                    parsed={"streaming": True, "note": _STREAM_NOTE},
+                    parse_status="partial",
+                )
+                return response
 
             span.record_output(
                 parsed={
@@ -161,6 +174,13 @@ class _WrappedResponses:
                 span.record_model_prompt(model_id=str(model))
             # See note in _WrappedCompletions.create — span records error + re-raises.
             response = self._original.create(**kwargs)
+
+            if kwargs.get("stream"):
+                span.record_output(
+                    parsed={"streaming": True, "note": _STREAM_NOTE},
+                    parse_status="partial",
+                )
+                return response
 
             span.record_output(
                 parsed={

@@ -41,11 +41,24 @@ class _WrappedMessages:
             span.record_input({"messages": messages, "model": model, "params": extra})
             if model is not None:
                 span.record_model_prompt(model_id=str(model))
-            try:
-                response = self._original.create(**kwargs)
-            except BaseException:
-                # tracer.span will record_error + flush, then re-raise
-                raise
+            # tracer.span records the error + flushes + re-raises on failure.
+            response = self._original.create(**kwargs)
+
+            if kwargs.get("stream"):
+                # A streaming call returns an iterator, not a materialized
+                # message: text/usage are not available until the caller drains
+                # the stream, which this wrapper does not do. Record an honest
+                # 'partial' instead of a false 'success' with empty text and
+                # zero tokens (which would corrupt the trace dataset).
+                span.record_output(
+                    parsed={
+                        "id": getattr(response, "id", None),
+                        "streaming": True,
+                        "note": "streaming response body not captured by wrap_anthropic",
+                    },
+                    parse_status="partial",
+                )
+                return response
 
             content_text = _extract_text(response)
             response_id = getattr(response, "id", None)

@@ -7,6 +7,73 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [0.8.0] - 2026-06-28
+
+The **contract-close** release on the road to 1.0: every SPEC §3–5 MUST is now
+implemented and enforced, the public import surface is curated and ready to
+freeze, and instrumentation can no longer break the host call. **No breaking
+changes** — every 0.2.0–0.7.0 public signature is unchanged (SemVer minor): all
+additions are new tables/symbols/keyword params, the default happy path is
+preserved, and the two behavioural fixes (fail-open persistence, no streaming
+false-success) strictly improve correctness. 1.0 itself will be a freeze-only
+flip (no new features) once this has soaked.
+
+### Added
+
+- **Replay sets + invariant 4** (SPEC §3.4/§4.5/§5.4): `replay_sets` /
+  `replay_set_items` ORM tables with **physical lock rejection** — once a set is
+  locked, ORM flush-layer events reject any item add/modify/delete, any mutation
+  or unlock of the set, and deletion, raising `ReplaySetLockedError`. The
+  read-side validator `assert_replay_set_locked(replay_set_id, *, engine=None)`
+  completes the four look-ahead invariants so consumers can satisfy SPEC §7.4
+  ("call invariants 1–4 in CI"); an un-migrated DB surfaces a clear
+  invariant-4 error instead of a raw `OperationalError`. The sanctioned
+  write-path ships in `traceguard.registry.replay`: `create_replay_set`,
+  `add_replay_item`, `lock_replay_set`, and the `build_locked_replay_set`
+  convenience.
+- **Curated top-level public API**: `traceguard/__init__` now re-exports the
+  stable contract surface behind a real `__all__` (Tracer/Span/tracer,
+  normalize_input/input_hash, wrap_anthropic/wrap_openai, the model/prompt
+  registries, the replay write-path, all four validators, and the ORM). Deep
+  submodule paths remain importable as aliases, so pinned consumers do not
+  break. Opt-in non-contract extras (otel/contamination/loop) stay off the
+  frozen surface.
+- **`py.typed`** (PEP 561): the fully-annotated package now advertises its
+  types, so downstream type-checkers see them — including the `Literal`-typed
+  `select_model(..., strict=...)` safety story. Verified it ships in the wheel.
+- **Opt-in fail-closed persistence**: `Tracer(strict_persistence=...)` /
+  `TRACEGUARD_STRICT_PERSISTENCE=1` make a persistence failure propagate, for
+  backtests where a silently-missing trace could hide an anachronism.
+- **Tests**: a frozen golden-hash table for `normalize_input` (the highest-
+  blast-radius function) and an API-surface snapshot test, so canonicalization
+  drift and accidental surface changes fail CI rather than slipping through.
+
+### Fixed
+
+- **Instrumentation is now fail-open** (SPEC §4.1 failure-mode MUST): the SQLite
+  source-of-truth write was unguarded while only the opt-in OTel path was
+  isolated — backwards. A locked/full/missing-table DB propagated to the caller,
+  and on the error path the flush ran before `raise`, so a persistence error
+  *replaced* the original business exception. Persistence is now swallowed +
+  logged by default and never masks the business call.
+- **No more streaming false-success traces**: a `stream=True` call returns an
+  iterator the wrappers don't drain, yet they recorded `parse_status='success'`
+  with empty text, null tokens, and ~0 latency — corrupting the dataset
+  TraceGuard exists to make trustworthy. All three entry points (Anthropic
+  messages, OpenAI chat.completions, OpenAI responses) now record an honest
+  `parse_status='partial'`. (Full stream accumulation is deferred post-1.0.)
+
+### Changed
+
+- **SPEC v0.2 → v0.3**: adds the §4.1 fail-open MUST, corrects the §4.5
+  "pure function" wording (invariants 2 and 4 read the store and take
+  `engine=`), and records that invariant 4 / `replay_sets` are now implemented.
+  `validate_model_timing` / `assert_replay_set_locked` are documented as
+  store-reading. `TRACEGUARD_ROADMAP.md` carries a 2026-06-28 status update that
+  supersedes "1.0 = Phase 2 complete" with the real 1.0 definition (contract
+  honored + frozen surface + fail-open) and fixes a false "drift_alerts table is
+  SPEC-defined" claim.
+
 ## [0.7.0] - 2026-06-18
 
 Adds an **OpenAI client wrapper**, bringing auto-instrumentation parity with
