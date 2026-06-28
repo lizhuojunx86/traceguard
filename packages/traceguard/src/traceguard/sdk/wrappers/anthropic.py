@@ -13,9 +13,10 @@ from typing import Any
 
 from traceguard.sdk.tracer import Tracer
 from traceguard.sdk.tracer import tracer as default_tracer
+from traceguard.sdk.wrappers._base import _DelegatingWrapper
 
 
-class _WrappedMessages:
+class _WrappedMessages(_DelegatingWrapper):
     def __init__(
         self,
         original: Any,
@@ -80,9 +81,6 @@ class _WrappedMessages:
                 )
             return response
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._original, name)
-
 
 def _extract_text(response: Any) -> str | None:
     """Best-effort extraction of the assistant text from a Messages API response."""
@@ -100,10 +98,12 @@ def _extract_text(response: Any) -> str | None:
     return "".join(parts) if parts else None
 
 
-class WrappedAnthropicClient:
+class WrappedAnthropicClient(_DelegatingWrapper):
     """Delegating wrapper. ``messages.create`` is instrumented; every other
     attribute access pass-through to the original client.
     """
+
+    _delegate_attr = "_client"
 
     def __init__(
         self,
@@ -120,9 +120,6 @@ class WrappedAnthropicClient:
             project=project,
             component=component,
         )
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._client, name)
 
 
 def wrap_anthropic(
