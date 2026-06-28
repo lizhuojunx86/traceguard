@@ -16,6 +16,7 @@ from typing import Any
 
 from traceguard.sdk.tracer import Tracer
 from traceguard.sdk.tracer import tracer as default_tracer
+from traceguard.sdk.wrappers._base import _DelegatingWrapper
 
 # A streaming call returns an iterator, not a materialized response: text/usage
 # are unavailable until the caller drains the stream, which this wrapper does
@@ -61,7 +62,7 @@ def _responses_text(response: Any) -> str | None:
     return text if isinstance(text, str) else None
 
 
-class _WrappedCompletions:
+class _WrappedCompletions(_DelegatingWrapper):
     """Instruments ``client.chat.completions.create``."""
 
     def __init__(
@@ -117,11 +118,8 @@ class _WrappedCompletions:
                 )
             return response
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._original, name)
 
-
-class _WrappedChat:
+class _WrappedChat(_DelegatingWrapper):
     """Exposes an instrumented ``completions``; passes everything else through."""
 
     def __init__(
@@ -140,11 +138,8 @@ class _WrappedChat:
             component=component,
         )
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._original, name)
 
-
-class _WrappedResponses:
+class _WrappedResponses(_DelegatingWrapper):
     """Instruments ``client.responses.create`` (OpenAI Responses API)."""
 
     def __init__(
@@ -199,15 +194,14 @@ class _WrappedResponses:
                 )
             return response
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._original, name)
 
-
-class WrappedOpenAIClient:
+class WrappedOpenAIClient(_DelegatingWrapper):
     """Delegating wrapper. ``chat.completions.create`` — and ``responses.create``
     when the underlying client exposes it — are instrumented; every other
     attribute access passes through to the original client.
     """
+
+    _delegate_attr = "_client"
 
     def __init__(
         self,
@@ -234,9 +228,6 @@ class WrappedOpenAIClient:
                 project=project,
                 component=component,
             )
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._client, name)
 
 
 def wrap_openai(
