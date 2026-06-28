@@ -1,6 +1,6 @@
 # TraceGuard 集成规范 (Spec)
 
-> **状态**: Draft v0.2 (2026-05-18)
+> **状态**: Draft v0.3 (2026-06-28)
 > **类型**: 接口契约 / "宪法"
 > **范围**: 任何接入 TraceGuard 的项目都必须遵守本文档定义的数据模型、SDK 接口签名、不变量。
 > **非范围**: 实现路线、Phase 计划、具体业务的 check 清单、运维细节,统一搬到 `TRACEGUARD_ROADMAP.md` 和各业务方的 `<project>_TRACEGUARD_INTEGRATION.md`。
@@ -205,6 +205,10 @@ with tracer.span(
 
 手动 API、客户端 wrapper(`wrap_anthropic` 等)为可选实现,不在本规范约束。
 
+**失败语义 (MUST)：** 插桩 **MUST NOT** 破坏被插桩的业务调用。trace 持久化失败默认 **fail-open**——吞掉并记 WARNING,绝不向调用方传播;且在错误路径上**绝不替换**原始业务异常(调用方始终看到自己的异常)。实现 **MUST** 同时提供 opt-in 的 **fail-closed** 模式(如 `strict_persistence` 标志 / `TRACEGUARD_STRICT_PERSISTENCE` 环境变量),用于"宁可中断也不能静默丢 trace"的回测场景。
+
+> 动机:崩溃的 guardian 比没有 guardian 更糟。look-ahead 防护依赖 trace 数据集可信,但这一可信性 **MUST NOT** 以默认牺牲宿主调用为代价强加;是否 fail-closed 由业务方显式选择。
+
 ### 4.2 Model registry 查询
 
 ```python
@@ -275,7 +279,9 @@ assert_replay_set_locked(replay_set_id: str) -> None
 
 > `validate_reference_timing` 是不变量 3 的通用 validator。业务方在调用点指定 `kind` 以便错误消息可定位。Prompt 时间性是其中一个实例 (`kind="prompt_template"`),业务方专有引用数据(如 B2 的 `entity_alias`)用同一函数 + 自定义 `kind`。
 
-均为**纯函数**,无副作用,业务方在 pytest 中可直接调用。
+`validate_feature_as_of` 与 `validate_reference_timing` 为**纯函数**。`validate_model_timing`(不变量 2)与 `assert_replay_set_locked`(不变量 4)**必然读取 model_registry / replay_sets 存储**,因此各接受一个可选 keyword-only `engine` 参数(无默认值时回退到默认 engine),并非字面纯函数;其约束是"除 raise 与读取存储外无副作用"。四者均可在 pytest/CI 中直接调用。
+
+> SPEC v0.2 曾笼统称"均为纯函数"——这对依赖 registry 的不变量 2/4 是理想化措辞。v0.3 据实修正:绑定保证是"无副作用(读取存储除外)",而非字面纯函数。
 
 ---
 
@@ -422,6 +428,12 @@ assert_replay_set_locked(replay_set_id: str) -> None
 ---
 
 ## 附录 D: 修订历史
+
+### v0.3 (2026-06-28)
+
+- §4.1 增补**失败语义 MUST**:插桩 MUST NOT 破坏业务调用;持久化默认 fail-open + opt-in fail-closed(`strict_persistence` / `TRACEGUARD_STRICT_PERSISTENCE`)。reference implementation 在 traceguard 0.8.0 落地。
+- §4.5 修正"均为纯函数"措辞:不变量 2(`validate_model_timing`)与不变量 4(`assert_replay_set_locked`)必然读取存储,接受可选 `engine`,约束改为"无副作用(读取存储除外)"。
+- 备注:不变量 4 与 §3.4 replay_sets/replay_set_items 在 traceguard 0.8.0 完整实现(物理拒写 + `assert_replay_set_locked`),§3.4/§4.5/§5.4 由"已定义未实现"转为"已实现"。本次为 SemVer **minor**(新增 MUST 行为,实现已满足;无既有签名/字段破坏)。
 
 ### v0.2 (2026-05-18)
 
