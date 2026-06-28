@@ -27,6 +27,7 @@ there is no pickle-dumps regression to guard. The reconstruct-side recursion
 from __future__ import annotations
 
 import copy
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -188,3 +189,27 @@ def test_getattr_guard_does_not_recurse_on_half_constructed_instance(cls, delega
         half.__setstate__  # noqa: B018 — the dunder the copy/pickle protocol probes
     with pytest.raises(AttributeError):
         getattr(half, delegate_attr)  # the delegate attr lookup must not recurse either
+
+
+def test_deepcopy_of_undeepcopyable_client_fails_like_raw_not_recursion(tg_tracer):
+    # The 0.8.1 transparency guarantee against the *real* httpx failure class: a
+    # real openai.OpenAI / anthropic.Anthropic embeds an httpx client holding a
+    # _thread.RLock, which is not deep-copyable. The wrapper must fail identically
+    # to the raw client (a clean TypeError) — never the RecursionError it raised
+    # pre-0.8.1. Reproduced with a stdlib RLock so this runs in CI without the SDKs.
+    raw = SimpleNamespace(
+        chat=SimpleNamespace(completions=SimpleNamespace(create=lambda **k: None)),
+        _lock=threading.RLock(),  # like httpx.Client — not deep-copyable
+        api_key="sk-test",
+    )
+    # Baseline: deep-copying the raw client raises a non-RecursionError exception.
+    with pytest.raises(Exception) as raw_exc:  # noqa: PT011 - we assert on the type below
+        copy.deepcopy(raw)
+    assert not isinstance(raw_exc.value, RecursionError)
+
+    wrapped = wrap_openai(raw, project="p", component="c", tracer=tg_tracer)
+    # The wrapper fails the SAME way (transparent), never RecursionError.
+    with pytest.raises(type(raw_exc.value)):
+        copy.deepcopy(wrapped)
+    # Shallow copy still works, matching the raw client.
+    copy.copy(wrapped)

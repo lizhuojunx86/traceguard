@@ -63,13 +63,46 @@ jobs:
       - name: Run SDK tests
         run: uv run pytest -q
 
+      # Blocking (no continue-on-error): the SDK is lint-clean and stays that way.
       - name: Ruff lint
-        continue-on-error: true
         run: uv run ruff check .
 
+      # Informational: the tree is not ruff-format-clean (52 files would change);
+      # enforcing format is a separate, deliberate reformat, not this gate.
       - name: Ruff format check
         continue-on-error: true
         run: uv run ruff format --check .
+
+  # Freeze guard: the tests that mechanically enforce the 1.0 contract — the
+  # frozen public surface (__all__, 28 symbols), the normalizer golden hashes,
+  # and the four look-ahead invariants. Fast and zero-tolerance; intended to be a
+  # REQUIRED status check on main so the freeze is enforced by mechanism, not
+  # convention. A change that needs to touch these must do so deliberately (and,
+  # for __all__ / golden, accept it is a major break).
+  contract-guard:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: packages/traceguard
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Install the traceguard SDK
+        run: uv sync --python 3.12
+
+      - name: Enforce the frozen contract (public surface + golden hashes + invariants)
+        run: >
+          uv run pytest -q
+          tests/test_public_api_surface.py
+          tests/test_normalizer_golden.py
+          tests/test_validators_lookahead.py
+          tests/test_validators_replay_lock.py
 
   # Real open-weight backend: install the contamination-hf extra (CPU torch) and
   # run the RUN_HF-gated tests for real, so MIN-K% / Min-K%++ on a tiny model is
