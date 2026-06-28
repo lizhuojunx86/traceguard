@@ -29,7 +29,39 @@ here so all six wrapper classes inherit them identically.
 from __future__ import annotations
 
 import copy
-from typing import Any
+import logging
+from datetime import datetime
+from typing import Any, Callable, Optional, Union
+
+_log = logging.getLogger("traceguard.wrappers")
+
+# Point-in-time stamp for instrumented calls. A fixed ``datetime`` is stamped on
+# every call; a zero-arg callable is resolved at *each* call (e.g. it reads a
+# contextvar a backtest loop sets, so successive calls can simulate different
+# moments without changing the ``create()`` call site); ``None`` records no
+# ``feature_as_of`` (the default — fully backward compatible). Once stamped, the
+# resulting trace becomes checkable by the look-ahead invariants (SPEC §3).
+FeatureAsOf = Union[datetime, Callable[[], Optional[datetime]], None]
+
+
+def _resolve_feature_as_of(value: FeatureAsOf) -> Optional[datetime]:
+    """Resolve a :data:`FeatureAsOf` to a concrete datetime (or ``None``) per call.
+
+    Fail-open (SPEC §4.1): a callable that raises must never break the host LLM
+    call. On error we log and record ``feature_as_of=None`` — an honest missing
+    stamp that the consumer's invariant check will surface, rather than a wrong
+    timestamp or a broken business call.
+    """
+    if not callable(value):
+        return value
+    try:
+        return value()
+    except Exception:  # noqa: BLE001 - fail-open: instrumentation never breaks the host call
+        _log.warning(
+            "feature_as_of callable raised; recording trace with feature_as_of=None",
+            exc_info=True,
+        )
+        return None
 
 
 class _DelegatingWrapper:

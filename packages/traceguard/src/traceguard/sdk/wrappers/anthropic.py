@@ -13,7 +13,11 @@ from typing import Any
 
 from traceguard.sdk.tracer import Tracer
 from traceguard.sdk.tracer import tracer as default_tracer
-from traceguard.sdk.wrappers._base import _DelegatingWrapper
+from traceguard.sdk.wrappers._base import (
+    FeatureAsOf,
+    _DelegatingWrapper,
+    _resolve_feature_as_of,
+)
 
 
 class _WrappedMessages(_DelegatingWrapper):
@@ -24,11 +28,13 @@ class _WrappedMessages(_DelegatingWrapper):
         tracer: Tracer,
         project: str,
         component: str,
+        feature_as_of: FeatureAsOf = None,
     ) -> None:
         self._original = original
         self._tracer = tracer
         self._project = project
         self._component = component
+        self._feature_as_of = feature_as_of
 
     def create(self, **kwargs: Any) -> Any:
         model = kwargs.get("model")
@@ -37,6 +43,7 @@ class _WrappedMessages(_DelegatingWrapper):
             self._project,
             self._component,
             operation="llm_complete",
+            feature_as_of=_resolve_feature_as_of(self._feature_as_of),
         ) as span:
             extra = {k: v for k, v in kwargs.items() if k not in {"model", "messages"}}
             span.record_input({"messages": messages, "model": model, "params": extra})
@@ -112,6 +119,7 @@ class WrappedAnthropicClient(_DelegatingWrapper):
         tracer: Tracer,
         project: str,
         component: str,
+        feature_as_of: FeatureAsOf = None,
     ) -> None:
         self._client = client
         self.messages = _WrappedMessages(
@@ -119,6 +127,7 @@ class WrappedAnthropicClient(_DelegatingWrapper):
             tracer=tracer,
             project=project,
             component=component,
+            feature_as_of=feature_as_of,
         )
 
 
@@ -128,11 +137,20 @@ def wrap_anthropic(
     project: str,
     component: str,
     tracer: Tracer | None = None,
+    feature_as_of: FeatureAsOf = None,
 ) -> WrappedAnthropicClient:
-    """Return ``client`` wrapped so ``messages.create()`` produces traces."""
+    """Return ``client`` wrapped so ``messages.create()`` produces traces.
+
+    ``feature_as_of`` stamps a point-in-time on every instrumented call — a fixed
+    ``datetime``, a zero-arg callable resolved at each call, or ``None`` (default)
+    to record no stamp. Stamping makes the resulting traces checkable by the
+    look-ahead invariants (SPEC §3); a callable that raises is swallowed
+    (fail-open) and that trace records ``feature_as_of=None``.
+    """
     return WrappedAnthropicClient(
         client,
         tracer=tracer or default_tracer,
         project=project,
         component=component,
+        feature_as_of=feature_as_of,
     )
