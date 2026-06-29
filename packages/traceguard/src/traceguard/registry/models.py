@@ -24,13 +24,22 @@ def register_model(
     available_to_us_at: datetime,
     deprecated_at: datetime | None = None,
     engine: Engine | None = None,
+    if_exists: str = "error",
 ) -> None:
     """Insert a new model registry entry.
 
     Per SPEC §3.2, ``model_id`` is the stable primary key and entries are
     insert-only — re-registering the same id with different metadata is
     rejected. To "upgrade" a model, register a new ``model_id``.
+
+    ``if_exists`` controls what happens when ``model_id`` is already registered:
+    ``"error"`` (default) raises — the entry is never modified; ``"ignore"``
+    leaves the existing entry untouched and returns, so a setup step that runs a
+    fixed set of ``register_model`` calls is idempotent across re-runs (it does
+    not update the existing row — to change metadata, use a new ``model_id``).
     """
+    if if_exists not in ("error", "ignore"):
+        raise ValueError(f"if_exists must be 'error' or 'ignore', got {if_exists!r}")
     if released_at > available_to_us_at:
         raise ValueError(
             "released_at MUST be <= available_to_us_at "
@@ -40,6 +49,8 @@ def register_model(
     with Session(eng) as sess:
         existing = sess.get(ModelRegistryEntry, model_id)
         if existing is not None:
+            if if_exists == "ignore":
+                return
             raise ValueError(
                 f"model_id {model_id!r} already registered; "
                 "register a new model_id instead of modifying existing entries"

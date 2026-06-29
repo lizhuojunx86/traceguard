@@ -30,6 +30,7 @@ from traceguard.registry.replay import (
 )
 from traceguard.sdk.normalizer import input_hash, normalize_input
 from traceguard.sdk.tracer import Span, Tracer, tracer
+from traceguard.sdk.wrappers._base import resolve_feature_as_of
 from traceguard.sdk.wrappers.anthropic import wrap_anthropic
 from traceguard.sdk.wrappers.openai import wrap_openai
 from traceguard.store.models import (
@@ -58,6 +59,7 @@ __all__ = [
     "input_hash",
     "wrap_anthropic",
     "wrap_openai",
+    "resolve_feature_as_of",
     # Model + prompt registries (SPEC §4.2, §4.3)
     "select_model",
     "register_model",

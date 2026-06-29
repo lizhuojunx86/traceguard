@@ -25,7 +25,7 @@ from typing import Any, Optional
 
 from traceguard.sdk.tracer import Tracer
 from traceguard.sdk.tracer import tracer as default_tracer
-from traceguard.sdk.wrappers._base import FeatureAsOf, _resolve_feature_as_of
+from traceguard.sdk.wrappers._base import FeatureAsOf, resolve_feature_as_of
 
 _log = logging.getLogger("traceguard.bridges.guardian")
 
@@ -112,7 +112,7 @@ def write_trace_from_guardian(
         # mid-body would otherwise flush a spurious error trace.
         input_payload = _output_payload(output)
         decision_payload = _decision_payload(decision)
-        resolved_as_of = _resolve_feature_as_of(as_of)
+        resolved_as_of = resolve_feature_as_of(as_of)
 
         with tr.span(
             project,

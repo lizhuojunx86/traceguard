@@ -22,6 +22,7 @@ EXPECTED_PUBLIC_API = {
     "input_hash",
     "wrap_anthropic",
     "wrap_openai",
+    "resolve_feature_as_of",
     # Registries
     "select_model",
     "register_model",

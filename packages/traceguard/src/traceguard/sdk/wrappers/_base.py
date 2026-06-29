@@ -44,8 +44,13 @@ _log = logging.getLogger("traceguard.wrappers")
 FeatureAsOf = Union[datetime, Callable[[], Optional[datetime]], None]
 
 
-def _resolve_feature_as_of(value: FeatureAsOf) -> Optional[datetime]:
+def resolve_feature_as_of(value: FeatureAsOf) -> Optional[datetime]:
     """Resolve a :data:`FeatureAsOf` to a tz-aware datetime (or ``None``) per call.
+
+    Public so consumers that instrument by hand — opening their own
+    ``Tracer.span`` (e.g. a custom/no-SDK client that ``wrap_openai`` cannot
+    attach to) — get the same point-in-time semantics as the wrappers instead of
+    re-implementing them (and drifting).
 
     Fail-open (SPEC §4.1): instrumentation must never break the host LLM call. So
     a callable that raises, or a naive (tz-less) datetime — which the store would
