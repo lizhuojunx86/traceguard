@@ -16,7 +16,7 @@ from traceguard.sdk.tracer import tracer as default_tracer
 from traceguard.sdk.wrappers._base import (
     FeatureAsOf,
     _DelegatingWrapper,
-    _resolve_feature_as_of,
+    resolve_feature_as_of,
 )
 
 
@@ -43,7 +43,7 @@ class _WrappedMessages(_DelegatingWrapper):
             self._project,
             self._component,
             operation="llm_complete",
-            feature_as_of=_resolve_feature_as_of(self._feature_as_of),
+            feature_as_of=resolve_feature_as_of(self._feature_as_of),
         ) as span:
             extra = {k: v for k, v in kwargs.items() if k not in {"model", "messages"}}
             span.record_input({"messages": messages, "model": model, "params": extra})

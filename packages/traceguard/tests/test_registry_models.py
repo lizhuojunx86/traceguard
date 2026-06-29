@@ -170,3 +170,27 @@ def test_strict_excludes_deprecated_models(engine):
         engine=engine,
     )
     assert chosen == "claude-deprecated"
+
+
+def test_register_model_if_exists_ignore_is_idempotent(engine):
+    # Re-running a fixed set of register_model calls (e.g. a setup step) must not
+    # blow up; if_exists="ignore" leaves the existing entry untouched.
+    _register(engine, "m1", "general-llm",
+              datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 1, 1, tzinfo=UTC))
+    # default -> raises on duplicate
+    with pytest.raises(ValueError, match="already registered"):
+        _register(engine, "m1", "general-llm",
+                  datetime(2024, 1, 1, tzinfo=UTC), datetime(2024, 1, 1, tzinfo=UTC))
+    # if_exists="ignore" -> no error, second call is a no-op
+    register_model("m1", model_family="anthropic", capability_class="general-llm",
+                   released_at=datetime(2024, 1, 1, tzinfo=UTC),
+                   available_to_us_at=datetime(2024, 1, 1, tzinfo=UTC),
+                   engine=engine, if_exists="ignore")
+
+
+def test_register_model_rejects_bad_if_exists(engine):
+    with pytest.raises(ValueError, match="if_exists must be"):
+        register_model("m2", model_family="anthropic", capability_class="general-llm",
+                       released_at=datetime(2024, 1, 1, tzinfo=UTC),
+                       available_to_us_at=datetime(2024, 1, 1, tzinfo=UTC),
+                       engine=engine, if_exists="bogus")
