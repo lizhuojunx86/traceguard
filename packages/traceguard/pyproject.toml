@@ -1,6 +1,6 @@
 [project]
 name = "traceguard"
-version = "0.8.1"
+version = "0.9.0"
 description = "Point-in-time correct LLM instrumentation: tracing, version pinning, and look-ahead-bias protection for research pipelines"
 readme = "README.md"
 license = "Apache-2.0"
@@ -71,6 +71,12 @@ Documentation = "https://github.com/lizhuojunx86/traceguard/blob/main/docs/SPEC.
 [build-system]
 requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build]
+# Defensive: never package editor/cloud-sync conflict copies (e.g. "foo 2.py")
+# — these are not valid modules and once bit a release (0.8.1 shipped stray
+# "* 2.py" files into the wheel/sdist before they were caught).
+exclude = ["* 2.py"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/traceguard"]
