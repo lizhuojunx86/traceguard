@@ -7,6 +7,52 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [0.9.0] - 2026-06-29
+
+Point-in-time instrumentation reaches the wrappers, plus a guardian bridge — the
+release that turned on traceguard's first **external** adoption (Phase 0
+acceptance #7): `huadian` (via the bridge) and `quant_alpha_v2` (via manual
+spans) now write real traces, the latter catching **206 look-ahead violations**
+in a 2016–2026 backtest scan. **No breaking changes** — every 0.2.0–0.8.1 public
+signature is unchanged; all additions are new keyword params, one new symbol, and
+a new off-surface submodule (SemVer minor).
+
+### Added
+
+- **`feature_as_of` on `wrap_openai` / `wrap_anthropic`** — a `datetime`, a
+  zero-arg callable resolved per call (to replay many points in time without
+  touching the `create()` call site), or `None` (default, unchanged behaviour).
+  Stamping it makes wrapper traces checkable by the look-ahead invariants
+  (SPEC §3) — turning "tracing" into "look-ahead protection". Fail-open: a
+  callable that raises, or a naive (tz-less) datetime, downgrades to
+  `feature_as_of=None` with a warning rather than breaking the host call or
+  silently dropping the trace.
+- **`resolve_feature_as_of`** (new public symbol) — the wrappers' point-in-time
+  resolution, exposed so consumers instrumenting by hand (their own
+  `Tracer.span`, e.g. a no-SDK / bare-httpx client the wrappers cannot attach to)
+  get identical fail-open semantics instead of re-implementing them.
+- **`traceguard.bridges.guardian.write_trace_from_guardian`** — an opt-in,
+  off-the-frozen-surface bridge that writes one trace from a `pipeline-guardian`
+  `StepOutput` + `GuardianDecision`. Duck-types guardian (never imports it), is
+  fully fail-open, and carries `feature_as_of`, so a project already running
+  guardian adopts traceguard with ~5 lines at its existing decision seam —
+  without changing its pinned guardian dependency.
+- **`register_model(if_exists="error" | "ignore")`** — `"ignore"` makes a fixed
+  set of registrations idempotent across re-runs; default `"error"` preserves the
+  insert-only contract (SPEC §3.2).
+- `examples/manual_span.py` — the bare-client manual-instrumentation recipe and
+  the sanctioned sync-context-manager / async-body pattern.
+
+### Changed
+
+- CI gained a **required `contract-guard`** job (frozen public surface +
+  normalizer golden hashes + the four look-ahead invariants) and `main` is now
+  branch-protected, so the 1.0 freeze is enforced by mechanism, not convention.
+
+The public import surface is now **29 symbols** (added `resolve_feature_as_of`).
+1.0 remains a freeze-only flip — now gated on soak, with genuine external
+adoption already in hand.
+
 ## [0.8.1] - 2026-06-28
 
 Patch release: one adoption-blocking bugfix in the SDK wrappers. **No API
