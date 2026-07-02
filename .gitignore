@@ -11,6 +11,9 @@
 .LSOverride
 
 # DB (main + journals + backups + dumps; keep migrations/*.sql if added later)
+# traces_routing_audit.db = local Claude Code session backfill (private usage
+# data — covered by *.db below, listed explicitly because it must never ship).
+traces_routing_audit.db
 *.db
 *.db-journal
 *.db-wal
