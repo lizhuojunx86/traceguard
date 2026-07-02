@@ -13,7 +13,9 @@
 # DB (main + journals + backups + dumps; keep migrations/*.sql if added later)
 # traces_routing_audit.db = local Claude Code session backfill (private usage
 # data — covered by *.db below, listed explicitly because it must never ship).
+# The task-tag review CSV carries redacted prompt summaries — never commit.
 traces_routing_audit.db
+routing_audit_task_tags*.csv
 *.db
 *.db-journal
 *.db-wal

@@ -57,6 +57,33 @@ class RoutingAuditIngestLog(RoutingAuditBase):
     ingested_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
 
 
+class RoutingAuditTaskTag(RoutingAuditBase):
+    """task_type label for one tagging unit of a main-thread session.
+
+    A unit is an idle-gap segment of a session's human turns (see
+    ``task_tags.iter_session_units``): ``unit_id = <session_id>#s<NN>`` with
+    the half-open time window ``[ts_start, ts_end)`` (``ts_end`` NULL = until
+    session end). Traces join by session_id + invoked_at window at report
+    time — the contract ``traces`` table is not touched. No prompt content
+    is stored here; summaries exist only in the export CSV.
+    """
+
+    __tablename__ = "routing_audit_task_tags"
+
+    unit_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    project: Mapped[str] = mapped_column(String(128), nullable=False)
+    ts_start: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    ts_end: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+    n_turns: Mapped[int] = mapped_column(Integer, nullable=False)
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    # "heuristic" (keyword classifier) or "manual" (CSV re-import; never
+    # overwritten by later heuristic runs).
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    batch_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
+
+
 def ensure_tables(engine: Engine) -> None:
     """Create the routing_audit tables if missing (idempotent, additive-only)."""
     RoutingAuditBase.metadata.create_all(engine)

@@ -354,8 +354,9 @@ def test_model_auto_registration(source_root: Path, db_url: str) -> None:
     assert entries[MODEL_PRICED_B].available_to_us_at == datetime(
         2026, 5, 31, 9, 0, 0, tzinfo=timezone.utc
     )
-    # Known release date is used when present; unknown models fall back to
-    # first-seen (documented TODO in pricing.py).
+    # Known release dates are used when present; unknown models fall back to
+    # first-seen (see pricing.py docstring).
+    assert entries[MODEL_PRICED_A].released_at == KNOWN_RELEASED_AT[MODEL_PRICED_A]
     assert entries[MODEL_PRICED_B].released_at == KNOWN_RELEASED_AT[MODEL_PRICED_B]
     assert entries[MODEL_UNPRICED].released_at == entries[MODEL_UNPRICED].available_to_us_at
 
@@ -460,3 +461,22 @@ def test_compute_cost_without_nested_split_treats_all_as_5m() -> None:
     assert compute_cost_usd(MODEL_PRICED_A, usage) == expected.quantize(Decimal("0.000001"))
     assert compute_cost_usd("no-such-model", usage) is None
     assert compute_cost_usd(MODEL_PRICED_A, None) is None
+
+
+def test_compute_cost_fast_tier() -> None:
+    # fast bills at fast_multiplier x the standard sheet across all token
+    # kinds (recomputed from the price table, not frozen constants).
+    p = PRICES[MODEL_PRICED_A]
+    assert p.fast_multiplier is not None
+    standard = compute_cost_usd(MODEL_PRICED_A, USAGE_CACHED)
+    fast = compute_cost_usd(MODEL_PRICED_A, dict(USAGE_CACHED, speed="fast"))
+    assert fast == (standard * p.fast_multiplier).quantize(Decimal("0.000001"))
+
+    # Models without a published fast price refuse to guess...
+    assert PRICES[MODEL_PRICED_B].fast_multiplier is None
+    assert compute_cost_usd(MODEL_PRICED_B, dict(USAGE_SIMPLE, speed="fast")) is None
+    # ...as do unknown future tiers; absent/standard speed bills as standard.
+    assert compute_cost_usd(MODEL_PRICED_A, dict(USAGE_SIMPLE, speed="turbo")) is None
+    assert compute_cost_usd(MODEL_PRICED_A, USAGE_SIMPLE) == compute_cost_usd(
+        MODEL_PRICED_A, {k: v for k, v in USAGE_SIMPLE.items() if k != "speed"}
+    )
