@@ -1,0 +1,44 @@
+# routing_policy.yaml — declarative tiered routing policy (contract-external).
+#
+# The routing_decisions audit compares each observed (unit, component) against
+# this policy and flags a deviation ONLY when the actual model's TIER differs
+# from the expected tier. Same-tier substitutions (e.g. opus-4-8 <-> fable-5,
+# both "frontier") are NOT deviations — the policy is about tiers, not exact
+# models. `expected_model` is advisory (shown in the report), never the
+# deviation trigger.
+#
+# TODO(lizhuojun): 这是依据当前路由现状起草的初版，请按你的真实分层意图修改。
+#   规则匹配：一条规则可指定 project / component / task_type 中任意子集；只有
+#   全部指定项都相等才适用。适用规则里"指定项最多"的胜出，平局取本文件中靠前的
+#   一条。都不适用则用 default_tier。
+
+tiers:
+  frontier: [claude-opus-4-8, claude-opus-4-7, claude-opus-4-6, claude-opus-4-5, claude-fable-5]
+  mid: [claude-sonnet-5, claude-sonnet-4-6, claude-sonnet-4-5]
+  cheap: [claude-haiku-4-5-20251001, claude-haiku-4-5]
+
+default_tier: frontier
+
+rules:
+  # ── Mechanical subagents: should run cheap/mid, not on a frontier model ──
+  - component: Explore
+    expected_tier: cheap
+    expected_model: claude-haiku-4-5-20251001
+  - component: general-purpose
+    expected_tier: cheap
+  - component: workflow-subagent
+    expected_tier: mid
+
+  # ── Decision / advisory work: frontier judgment (Fable 5) ──
+  - task_type: decision-advisor
+    expected_tier: frontier
+    expected_model: claude-fable-5
+
+  # ── Exploratory research: can drop to cheap ──
+  - task_type: research-explore
+    expected_tier: cheap
+
+  # ── Main thread default: frontier (Opus 4.8) ──
+  - component: main
+    expected_tier: frontier
+    expected_model: claude-opus-4-8

@@ -14,8 +14,9 @@ schemas to be created together.
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from decimal import Decimal
 
-from sqlalchemy import Integer, String
+from sqlalchemy import Boolean, Integer, Numeric, String, Text
 from sqlalchemy.engine import Engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -80,6 +81,51 @@ class RoutingAuditTaskTag(RoutingAuditBase):
     # "heuristic" (keyword classifier) or "manual" (CSV re-import; never
     # overwritten by later heuristic runs).
     source: Mapped[str] = mapped_column(String(16), nullable=False)
+    batch_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
+
+
+class RoutingDecision(RoutingAuditBase):
+    """One policy-vs-actual verdict per (tagging unit, component).
+
+    A *policy deviation audit* row, not a diary entry: the declarable routing
+    policy (``routing_policy.yaml``) says which tier each
+    (project, component, task_type) should use; this table records where the
+    observed traces landed and whether that crossed a tier boundary.
+
+    Grain = ``(unit_id, component)`` → ``decision_id = <unit_id>#<component>``.
+    Within a unit's time window a component may run several models; the
+    dominant one (most traces) is the ``actual_model``. ``deviation`` is a
+    tier mismatch (same-tier substitutions, e.g. opus↔fable, are not
+    deviations). ``reason`` / ``outcome`` start empty and are filled by the
+    manual CSV round-trip; ``source="manual"`` rows are never regenerated.
+    """
+
+    __tablename__ = "routing_decisions"
+
+    decision_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    ts: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False)
+    unit_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    session_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    project: Mapped[str] = mapped_column(String(128), nullable=False)
+    component: Mapped[str] = mapped_column(String(128), nullable=False)
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+
+    expected_tier: Mapped[str] = mapped_column(String(16), nullable=False)
+    expected_model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    actual_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    actual_tier: Mapped[str] = mapped_column(String(16), nullable=False)
+    deviation: Mapped[bool] = mapped_column(Boolean, nullable=False, index=True)
+
+    n_traces: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+
+    # Filled by the manual CSV round-trip (default NULL / "unknown").
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    outcome: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
+    # "generated" (policy vs actual) or "manual" (reason/outcome supplied).
+    source: Mapped[str] = mapped_column(String(16), nullable=False, default="generated")
+
     batch_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
 

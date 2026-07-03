@@ -426,6 +426,45 @@ def _cache_fields(output_parsed: Any) -> tuple[int, int, int]:
     )
 
 
+@dataclass
+class UnitIndex:
+    """Maps a trace (session_id, invoked_at) → its tagging unit.
+
+    Shared by the pivot, the decisions audit, and the counterfactual engine so
+    all three attribute traces to units identically. Built from the persisted
+    ``routing_audit_task_tags`` windows (see :func:`load_unit_index`).
+    """
+
+    # session_id -> sorted [(ts_start, ts_end, unit_id, task_type, project)]
+    spans: dict[str, list[tuple[datetime, datetime | None, str, str, str]]]
+
+    def lookup(
+        self, session_id: str | None, invoked_at: datetime
+    ) -> tuple[str, str, str] | None:
+        """Return (unit_id, task_type, project) for a trace, or None if untagged."""
+        spans = self.spans.get(session_id or "")
+        if not spans:
+            return None
+        idx = bisect_right([s[0] for s in spans], invoked_at) - 1
+        if idx < 0:
+            return None
+        ts_start, ts_end, unit_id, task_type, project = spans[idx]
+        if ts_end is not None and invoked_at >= ts_end:
+            return None
+        return unit_id, task_type, project
+
+
+def load_unit_index(engine: Any) -> UnitIndex:
+    """Build a :class:`UnitIndex` from the persisted task_tags rows."""
+    spans: dict[str, list[tuple[datetime, datetime | None, str, str, str]]] = defaultdict(list)
+    with Session(engine) as sess:
+        for t in sess.scalars(select(RoutingAuditTaskTag)):
+            spans[t.session_id].append((t.ts_start, t.ts_end, t.unit_id, t.task_type, t.project))
+    for lst in spans.values():
+        lst.sort(key=lambda s: s[0])
+    return UnitIndex(spans=dict(spans))
+
+
 def format_pivot(db_url: str | None = None) -> str:
     """task_type × model pivot: traces, cost, and per-type cache-hit share.
 
@@ -436,39 +475,21 @@ def format_pivot(db_url: str | None = None) -> str:
     """
     engine = make_engine(db_url)
     ensure_tables(engine)
+    index = load_unit_index(engine)
     with Session(engine) as sess:
-        tags = list(sess.scalars(select(RoutingAuditTaskTag)))
         traces = list(
             sess.execute(
                 select(Trace.output_parsed, Trace.invoked_at, Trace.model_id, Trace.cost_usd)
             )
         )
 
-    # session_id -> sorted [(ts_start, ts_end, task_type)]
-    windows: dict[str, list[tuple[datetime, datetime | None, str]]] = defaultdict(list)
-    for t in tags:
-        windows[t.session_id].append((t.ts_start, t.ts_end, t.task_type))
-    for spans in windows.values():
-        spans.sort(key=lambda s: s[0])
-
-    def lookup(session_id: str | None, invoked_at: datetime) -> str:
-        spans = windows.get(session_id or "")
-        if not spans:
-            return "(untagged)"
-        idx = bisect_right([s[0] for s in spans], invoked_at) - 1
-        if idx < 0:
-            return "(untagged)"
-        ts_start, ts_end, task_type = spans[idx]
-        if ts_end is not None and invoked_at >= ts_end:
-            return "(untagged)"
-        return task_type
-
     # (task_type, model) -> [traces, cost]; task_type -> token sums
     cells: dict[tuple[str, str], list[Any]] = defaultdict(lambda: [0, Decimal("0")])
     token_sums: dict[str, list[int]] = defaultdict(lambda: [0, 0, 0])
     for output_parsed, invoked_at, model_id, cost_usd in traces:
         session_id = (output_parsed or {}).get("session_id")
-        task_type = lookup(session_id, invoked_at)
+        hit = index.lookup(session_id, invoked_at)
+        task_type = hit[1] if hit is not None else "(untagged)"
         cell = cells[(task_type, model_id or "(api-error)")]
         cell[0] += 1
         cell[1] += cost_usd or Decimal("0")
