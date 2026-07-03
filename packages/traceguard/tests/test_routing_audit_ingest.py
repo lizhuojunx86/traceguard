@@ -7,7 +7,8 @@ session data is used or committed.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+import os
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 
@@ -16,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from traceguard.routing_audit.ingest_claude_code import (
+    append_run_log,
     collect_records,
     ingest,
     map_project,
@@ -480,3 +482,73 @@ def test_compute_cost_fast_tier() -> None:
     assert compute_cost_usd(MODEL_PRICED_A, USAGE_SIMPLE) == compute_cost_usd(
         MODEL_PRICED_A, {k: v for k, v in USAGE_SIMPLE.items() if k != "speed"}
     )
+
+
+def test_since_skips_files_older_than_cutoff(source_root: Path) -> None:
+    # Backdate one main transcript; --since between then and now must skip it.
+    old_file = source_root / "-Users-test-Desktop-APP-huadian" / f"{SESS_MAIN}.jsonl"
+    old_epoch = (datetime(2026, 1, 1, tzinfo=timezone.utc)).timestamp()
+    os.utime(old_file, (old_epoch, old_epoch))
+
+    cutoff = datetime(2026, 5, 1, tzinfo=timezone.utc)
+    records, stats = collect_records(source_root, since=cutoff)
+    assert stats.files_skipped_mtime >= 1
+    # The backdated MAIN file's messages are gone; its (fresh) subagent file
+    # and the other project remain.
+    assert "msg_001" not in records and "msg_002" not in records
+    assert "msg_101" in records  # subagent transcript was not backdated
+    assert "msg_201" in records  # other project untouched
+
+    # No cutoff → full scan sees the backdated file again.
+    records_full, _ = collect_records(source_root)
+    assert "msg_001" in records_full
+
+
+def test_written_cost_sums_persisted_rows(source_root: Path, db_url: str) -> None:
+    stats = ingest(source_root, db_url, write=True)
+    engine = make_engine(db_url)
+    with Session(engine) as sess:
+        db_total = sum(
+            (t.cost_usd for t in sess.scalars(select(Trace)) if t.cost_usd is not None),
+            Decimal("0"),
+        )
+    assert stats.written_cost == db_total
+    assert stats.written_cost > 0
+
+
+def test_since_days_string_via_cli(source_root: Path, db_url: str, tmp_path: Path) -> None:
+    from traceguard.routing_audit.ingest import main as cli_main
+
+    log = tmp_path / "run.log"
+    # Everything is fresh, so --since 1d keeps all files; a JSON line is logged.
+    rc = cli_main(
+        ["--source", str(source_root), "--db", db_url, "--write", "--since", "1d",
+         "--log-file", str(log)]
+    )
+    assert rc == 0
+    entry = json.loads(log.read_text(encoding="utf-8").strip().splitlines()[-1])
+    assert entry["wrote"] is True
+    assert entry["written"] == 6
+    assert entry["files_skipped_mtime"] == 0
+    assert Decimal(entry["new_cost_usd"]) > 0
+
+
+def test_append_run_log_never_raises(tmp_path: Path) -> None:
+    from traceguard.routing_audit.ingest_claude_code import IngestStats
+
+    log = tmp_path / "sub" / "run.log"  # parent dir does not exist yet
+    stats = IngestStats(records=3, written=2, written_cost=Decimal("1.5"))
+    stats.batch_id = "cc-test"
+    append_run_log(log, stats, wrote=True, error=None)
+    entry = json.loads(log.read_text(encoding="utf-8").strip())
+    assert entry["batch_id"] == "cc-test"
+    assert entry["new_cost_usd"] == "1.500000"
+
+
+def test_since_future_cutoff_skips_everything(source_root: Path) -> None:
+    future = datetime.now(timezone.utc) + timedelta(days=1)
+    records, stats = collect_records(source_root, since=future)
+    assert records == {}
+    assert stats.records == 0
+    assert stats.files_main == 0 and stats.files_subagent == 0
+    assert stats.files_skipped_mtime >= 3  # every fixture file was skipped
