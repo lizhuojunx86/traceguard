@@ -97,9 +97,12 @@ class RerunStats:
     rejected: bool = False
     written: int = 0
     executed: int = 0
+    failed: int = 0
+    skipped_completed: int = 0
     actual_total: Decimal = Decimal("0")
     stopped_at_cap: bool = False
     estimates: list[RerunEstimate] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
 
 def _batch_id() -> str:
@@ -426,32 +429,43 @@ def execute_reruns(
         for e in estimates:
             if e.prompt is None:
                 continue
+            rerun_id = f"{e.cand.unit_id}#{target_model}"
+            prior = sess.get(RerunResult, rerun_id)
+            if prior is not None and prior.status == "completed":
+                stats.skipped_completed += 1  # idempotent: don't re-call the API
+                continue
             if spent + e.est_cost_usd > max_cost:
                 stats.stopped_at_cap = True
                 break  # hard cap: stop before exceeding
             # self-audit: the rerun's own call is a traceguard/rerun-harness trace
-            with tracer.span(
-                project="traceguard", component="rerun-harness", operation="llm_complete"
-            ) as span:
-                span.record_input(
-                    {"source": "routing_audit_rerun", "unit_id": e.cand.unit_id,
-                     "target_model": target_model}
-                )
-                span.record_model_prompt(model_id=target_model)
-                answer, usage = caller(e.prompt, target_model)
-                tin = (
-                    int(usage.get("input_tokens") or 0)
-                    + int(usage.get("cache_read_input_tokens") or 0)
-                    + int(usage.get("cache_creation_input_tokens") or 0)
-                )
-                tout = int(usage.get("output_tokens") or 0)
-                actual_cost = compute_cost_usd(target_model, dict(usage)) or Decimal("0")
-                span.record_output(parsed={"answer_chars": len(answer)}, parse_status="success")
-                span.record_perf(tokens_in=tin, tokens_out=tout, cost_usd=actual_cost)
+            try:
+                with tracer.span(
+                    project="traceguard", component="rerun-harness", operation="llm_complete"
+                ) as span:
+                    span.record_input(
+                        {"source": "routing_audit_rerun", "unit_id": e.cand.unit_id,
+                         "target_model": target_model}
+                    )
+                    span.record_model_prompt(model_id=target_model)
+                    answer, usage = caller(e.prompt, target_model)
+                    tin = (
+                        int(usage.get("input_tokens") or 0)
+                        + int(usage.get("cache_read_input_tokens") or 0)
+                        + int(usage.get("cache_creation_input_tokens") or 0)
+                    )
+                    tout = int(usage.get("output_tokens") or 0)
+                    actual_cost = compute_cost_usd(target_model, dict(usage)) or Decimal("0")
+                    span.record_output(
+                        parsed={"answer_chars": len(answer)}, parse_status="success"
+                    )
+                    span.record_perf(tokens_in=tin, tokens_out=tout, cost_usd=actual_cost)
+            except Exception as exc:  # one call failing must not abort the batch
+                stats.failed += 1
+                stats.errors.append(f"{e.cand.unit_id}: {type(exc).__name__}: {exc}")
+                continue
             spent += actual_cost
 
-            rerun_id = f"{e.cand.unit_id}#{target_model}"
-            rr = sess.get(RerunResult, rerun_id)
+            rr = prior
             if rr is None:  # execute without a prior dry-run plan → insert fresh
                 rr = RerunResult(
                     rerun_id=rerun_id,
@@ -548,14 +562,17 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 2
         cap_note = " (stopped at cap)" if stats.stopped_at_cap else ""
+        fail_note = f" | failed: {stats.failed}" if stats.failed else ""
         print(
             f"== rerun EXECUTED — batch {stats.batch_id} ==\n"
-            f"executed {stats.executed} reruns on {stats.target_model}{cap_note}\n"
+            f"executed {stats.executed} reruns on {stats.target_model}{cap_note}{fail_note}\n"
             f"actual total: ${stats.actual_total:.4f}  vs  estimate: ${stats.est_total:.4f} "
             f"(Δ ${stats.actual_total - stats.est_total:+.4f})\n"
             f"answers stored locally in routing_audit_rerun_results; "
             "export the blind sheet next."
         )
+        for err in stats.errors:
+            print(f"  FAILED {err}")
         return 0
 
     stats = plan_reruns(
