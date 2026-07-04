@@ -38,16 +38,25 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+
 from traceguard.routing_audit.counterfactual import (
     CANDIDATE_PRICES,
     quality_candidates,
 )
 from traceguard.routing_audit.ingest_claude_code import DEFAULT_SOURCE, _parse_ts
-from traceguard.routing_audit.models import RerunResult, ensure_tables
-from traceguard.routing_audit.pricing import PRICES
+from traceguard.routing_audit.models import (
+    RerunResult,
+    RoutingAuditIngestLog,
+    ensure_tables,
+)
+from traceguard.routing_audit.pricing import PRICES, compute_cost_usd
 from traceguard.routing_audit.task_tags import _human_prompt, load_unit_index, redact_summary
 from traceguard.sdk.normalizer import input_hash
 from traceguard.store.models import make_engine
+
+_ANTHROPIC_URL = "https://api.anthropic.com/v1/messages"
+_ANTHROPIC_VERSION = "2023-06-01"
+_MAX_TOKENS = 8192
 
 DEFAULT_DB = "sqlite:///traces_routing_audit.db"
 DEFAULT_TARGET = "claude-opus-4-8"
@@ -87,7 +96,13 @@ class RerunStats:
     max_cost: Decimal = DEFAULT_MAX_COST
     rejected: bool = False
     written: int = 0
+    executed: int = 0
+    failed: int = 0
+    skipped_completed: int = 0
+    actual_total: Decimal = Decimal("0")
+    stopped_at_cap: bool = False
     estimates: list[RerunEstimate] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
 
 
 def _batch_id() -> str:
@@ -339,9 +354,154 @@ def plan_reruns(
             stats.written += 1
         sess.commit()
     return stats
-    # NOTE: the routing_audit_ingest_log audit row (message_id → trace_id) is
-    # written per rerun at EXECUTE time, alongside the self-instrumented
-    # traceguard/rerun-harness trace — not during this dry-run plan.
+
+
+def _call_anthropic(prompt: str, model: str, *, max_tokens: int = _MAX_TOKENS) -> tuple[str, dict]:
+    """Single-turn Messages API call via stdlib urllib (no SDK dependency).
+
+    Returns (answer_text, usage_dict). Raises on missing key or HTTP error.
+    """
+    import json
+    import os
+    import urllib.request
+
+    key = os.environ.get("ANTHROPIC_API_KEY")
+    if not key:
+        raise RuntimeError("ANTHROPIC_API_KEY not set — cannot execute reruns")
+    body = json.dumps(
+        {"model": model, "max_tokens": max_tokens,
+         "messages": [{"role": "user", "content": prompt}]}
+    ).encode("utf-8")
+    req = urllib.request.Request(
+        _ANTHROPIC_URL, data=body,
+        headers={
+            "x-api-key": key,
+            "anthropic-version": _ANTHROPIC_VERSION,
+            "content-type": "application/json",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=180) as resp:
+        data = json.load(resp)
+    answer = "".join(
+        b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"
+    )
+    return answer, data.get("usage", {})
+
+
+def execute_reruns(
+    db_url: str | None = None,
+    source: Path | str = DEFAULT_SOURCE,
+    *,
+    target_model: str = DEFAULT_TARGET,
+    max_cost: Decimal = DEFAULT_MAX_COST,
+    caller=_call_anthropic,
+) -> RerunStats:
+    """ACTUALLY replay each consult on the target model. Makes real API calls.
+
+    Safety: if the estimated batch total exceeds ``max_cost`` nothing runs
+    (batch rejected). During the run, actual spend is tracked and the loop
+    STOPS before a call that would push the running actual total past
+    ``max_cost`` (hard cap, never widened). Each call self-instruments as
+    ``project="traceguard", component="rerun-harness"`` and gets a
+    routing_audit_ingest_log audit row. ``caller`` is injectable for testing.
+    """
+    from traceguard import Tracer
+
+    source_root = Path(source).expanduser()
+    candidates = select_candidates(db_url, source_root)
+    estimates = estimate_costs(candidates, target_model, db_url, source_root)
+    stats = RerunStats(
+        target_model=target_model, max_cost=max_cost, estimates=estimates,
+        candidates=len(candidates),
+        with_prompt=sum(1 for e in estimates if e.prompt is not None),
+        est_total=sum((e.est_cost_usd for e in estimates), Decimal("0")),
+    )
+    if stats.est_total > max_cost:
+        stats.rejected = True
+        return stats  # refuse the whole batch, no calls
+
+    engine = make_engine(db_url)
+    ensure_tables(engine)
+    tracer = Tracer(engine=engine)
+    stats.batch_id = _batch_id()
+    spent = Decimal("0")
+    with Session(engine) as sess:
+        for e in estimates:
+            if e.prompt is None:
+                continue
+            rerun_id = f"{e.cand.unit_id}#{target_model}"
+            prior = sess.get(RerunResult, rerun_id)
+            if prior is not None and prior.status == "completed":
+                stats.skipped_completed += 1  # idempotent: don't re-call the API
+                continue
+            if spent + e.est_cost_usd > max_cost:
+                stats.stopped_at_cap = True
+                break  # hard cap: stop before exceeding
+            # self-audit: the rerun's own call is a traceguard/rerun-harness trace
+            try:
+                with tracer.span(
+                    project="traceguard", component="rerun-harness", operation="llm_complete"
+                ) as span:
+                    span.record_input(
+                        {"source": "routing_audit_rerun", "unit_id": e.cand.unit_id,
+                         "target_model": target_model}
+                    )
+                    span.record_model_prompt(model_id=target_model)
+                    answer, usage = caller(e.prompt, target_model)
+                    tin = (
+                        int(usage.get("input_tokens") or 0)
+                        + int(usage.get("cache_read_input_tokens") or 0)
+                        + int(usage.get("cache_creation_input_tokens") or 0)
+                    )
+                    tout = int(usage.get("output_tokens") or 0)
+                    actual_cost = compute_cost_usd(target_model, dict(usage)) or Decimal("0")
+                    span.record_output(
+                        parsed={"answer_chars": len(answer)}, parse_status="success"
+                    )
+                    span.record_perf(tokens_in=tin, tokens_out=tout, cost_usd=actual_cost)
+            except Exception as exc:  # one call failing must not abort the batch
+                stats.failed += 1
+                stats.errors.append(f"{e.cand.unit_id}: {type(exc).__name__}: {exc}")
+                continue
+            spent += actual_cost
+
+            rr = prior
+            if rr is None:  # execute without a prior dry-run plan → insert fresh
+                rr = RerunResult(
+                    rerun_id=rerun_id,
+                    batch_id=stats.batch_id,
+                    unit_id=e.cand.unit_id,
+                    project=e.cand.project,
+                    task_type=e.cand.task_type,
+                    source_model=e.cand.source_model,
+                    target_model=target_model,
+                    prompt_hash=input_hash(e.prompt),
+                    prompt_summary=redact_summary(e.prompt, limit=100),
+                    est_cost_usd=e.est_cost_usd,
+                    original_answer=e.original_answer,  # local-only
+                )
+                sess.add(rr)
+            rr.status = "completed"
+            rr.rerun_answer = answer  # local-only
+            rr.actual_cost_usd = actual_cost
+            rr.tokens_in = tin
+            rr.tokens_out = tout
+            rr.batch_id = stats.batch_id
+            sess.add(
+                RoutingAuditIngestLog(
+                    batch_id=stats.batch_id,
+                    source_message_id=f"rerun:{rerun_id}:{stats.batch_id}",
+                    source_session_id=e.cand.session_id,
+                    source_uuid=None,
+                    source_file=None,
+                    agent_id=None,
+                    trace_id=span.trace_id if span.trace_id is not None else -1,
+                )
+            )
+            stats.executed += 1
+            sess.commit()
+    stats.actual_total = spent
+    return stats
 
 
 def format_estimate_table(stats: RerunStats) -> str:
@@ -386,17 +546,34 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--execute",
         action="store_true",
-        help="ACTUALLY call the API (requires an Anthropic key). Not the default; "
+        help="ACTUALLY call the API (requires ANTHROPIC_API_KEY). Not the default; "
         "run only after confirming the candidate list.",
     )
     args = parser.parse_args(argv)
 
     if args.execute:
-        print(
-            "refusing to execute: real reruns are gated to a separate, "
-            "explicitly-confirmed step. This build ships the dry-run plan only."
+        stats = execute_reruns(
+            args.db, args.source, target_model=args.model, max_cost=args.max_cost
         )
-        return 2
+        if stats.rejected:
+            print(
+                f"REJECTED: est batch ${stats.est_total:.2f} > cap ${stats.max_cost:.2f} — "
+                "no API calls made."
+            )
+            return 2
+        cap_note = " (stopped at cap)" if stats.stopped_at_cap else ""
+        fail_note = f" | failed: {stats.failed}" if stats.failed else ""
+        print(
+            f"== rerun EXECUTED — batch {stats.batch_id} ==\n"
+            f"executed {stats.executed} reruns on {stats.target_model}{cap_note}{fail_note}\n"
+            f"actual total: ${stats.actual_total:.4f}  vs  estimate: ${stats.est_total:.4f} "
+            f"(Δ ${stats.actual_total - stats.est_total:+.4f})\n"
+            f"answers stored locally in routing_audit_rerun_results; "
+            "export the blind sheet next."
+        )
+        for err in stats.errors:
+            print(f"  FAILED {err}")
+        return 0
 
     stats = plan_reruns(
         args.db, args.source, target_model=args.model, max_cost=args.max_cost, write=True

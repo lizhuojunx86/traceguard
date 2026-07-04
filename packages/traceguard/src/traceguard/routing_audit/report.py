@@ -336,7 +336,15 @@ def render(data: ReportData, *, lang: str, audience: str, alias: dict[str, str])
             "",
             "## §6 政策修订建议与预计影响",
             f"- {_PENDING_POLICY} 待你改 routing_policy.yaml + 校正标签后，本节自动重算。",
-            "- 处方分**三类**（与 routing_decisions 的 `reason`/`outcome` 字段打通——"
+            "",
+            "  **⚑ 一号处方（已验证，非推定）——子代理未钉 model 继承主线程**：",
+            "  本审计 **19/19** 的 fable-on-workflow-subagent 偏差，回查父会话主线程当时"
+            "均为 fable（0 反例）。root cause 是子代理定义缺 `model` 字段，随主线程继承 —— "
+            "属**配置泄漏**，非路由决策失误。修复：**agent 定义加一行 pin `model`**（如 "
+            "sonnet），一处改动即消除该类偏差。（general-purpose 的继承同形但本次未逐一回查，"
+            "其 reason 仍标\"推定\"。）",
+            "",
+            "- 其余处方分**三类**（与 routing_decisions 的 `reason`/`outcome` 字段打通——"
             "每条偏差在导出的 routing_deviations.csv 里填 reason 后归入其一）：",
             "",
             "  **A. 换档（model swap）** — 同任务换更便宜档位：",
@@ -358,8 +366,20 @@ def render(data: ReportData, *, lang: str, audience: str, alias: dict[str, str])
             "",
             "## §6 Policy-revision proposals & projected impact",
             f"- {_PENDING_POLICY} recomputes once you edit routing_policy.yaml + correct tags.",
-            "- Prescriptions fall in **three classes** (wired to routing_decisions' "
-            "`reason`/`outcome` — each deviation is filed into one via routing_deviations.csv):",
+            "",
+            "  **⚑ Lead prescription (VERIFIED, not presumed) — subagents inherit the "
+            "main thread's model when unpinned**:",
+            "  All **19/19** fable-on-workflow-subagent deviations had their parent session's "
+            "main thread on fable at the time (0 counterexamples). Root cause is a missing "
+            "`model` field in the agent definition, inherited from the main thread — a "
+            "**config leak**, not a routing decision error. Fix: **pin `model` in the agent "
+            "definition** (e.g. sonnet), one line clears the whole class. (general-purpose "
+            "inheritance is the same shape but was not individually re-checked here; its "
+            "reasons still say \"presumed\".)",
+            "",
+            "- The remaining prescriptions fall in **three classes** (wired to "
+            "routing_decisions' `reason`/`outcome` — each deviation filed into one via "
+            "routing_deviations.csv):",
             "",
             "  **A. Model swap** — same task, cheaper tier:",
             "  - [ ] Converge mechanical workflow-subagents to the mid tier.",
