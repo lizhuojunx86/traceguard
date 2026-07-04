@@ -184,6 +184,10 @@ class BlindEval(RoutingAuditBase):
     # a_better | b_better | tie  (NULL until imported)
     verdict: Mapped[str | None] = mapped_column(String(16), nullable=True)
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Reviewer-added: any external facts the answer relied on (local note), and
+    # whether the reviewer recognised the original: none | soft | hard.
+    external_facts: Mapped[str | None] = mapped_column(Text, nullable=True)
+    recognition: Mapped[str | None] = mapped_column(String(8), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
 
 
