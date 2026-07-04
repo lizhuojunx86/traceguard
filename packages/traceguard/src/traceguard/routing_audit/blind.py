@@ -213,6 +213,9 @@ def import_blind(csv_path: Path | str, db_url: str | None = None) -> BlindStats:
                 continue
             existing.verdict = verdict
             existing.reason = (row.get("reason") or "").strip()[:200] or None
+            existing.external_facts = (row.get("external_facts") or "").strip() or None
+            rec = (row.get("recognition") or "").strip().lower()
+            existing.recognition = rec if rec in ("none", "soft", "hard") else None
             stats.imported += 1
         sess.commit()
     return stats

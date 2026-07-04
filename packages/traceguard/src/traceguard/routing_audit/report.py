@@ -35,8 +35,13 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from traceguard.routing_audit.blind import intra_tier_premium
-from traceguard.routing_audit.models import RoutingDecision, ensure_tables
+from traceguard.routing_audit.blind import FABLE, intra_tier_premium
+from traceguard.routing_audit.models import (
+    BlindEval,
+    RerunResult,
+    RoutingDecision,
+    ensure_tables,
+)
 from traceguard.routing_audit.routing_decisions import load_policy
 from traceguard.routing_audit.task_tags import load_unit_index
 from traceguard.store.models import Trace, make_engine
@@ -92,10 +97,21 @@ class ReportData:
     premium_total: Decimal = Decimal("0")
     premium_fable_cost: Decimal = Decimal("0")
     premium_units: int = 0
-    blind_verdicts: int = 0
     # self-audit: cost of building the audit tool itself
     self_audit_cost: Decimal = Decimal("0")
     self_audit_traces: int = 0
+    # blind eval (unblinded), layered by recognition
+    blind_total: int = 0
+    blind_leak: int = 0  # recognition != none
+    blind_none: int = 0
+    none_original: int = 0  # of the recognition=none pairs
+    none_replay: int = 0
+    none_tie: int = 0
+    fable_pos_a: int = 0  # original(fable) placed in position A
+    fable_pos_b: int = 0
+    b_better_picked_original: int = 0
+    rerun_est_total: Decimal = Decimal("0")
+    rerun_actual_total: Decimal = Decimal("0")
 
 
 def gather(db_url: str | None = None, *, as_of: datetime | None = None) -> ReportData:
@@ -154,6 +170,39 @@ def gather(db_url: str | None = None, *, as_of: datetime | None = None) -> Repor
     data.premium_total = sum((p.premium for p in prem), Decimal("0"))
     data.premium_fable_cost = sum((p.fable_actual for p in prem), Decimal("0"))
     data.premium_units = sum(p.units for p in prem)
+
+    # ── blind eval (unblinded), layered by recognition ──
+    with Session(engine) as sess:
+        evals = [e for e in sess.scalars(select(BlindEval)) if e.verdict is not None]
+        reruns = {r.rerun_id: r for r in sess.scalars(select(RerunResult))}
+    for e in evals:
+        data.blind_total += 1
+        if e.position_a_model == FABLE:
+            data.fable_pos_a += 1
+        else:
+            data.fable_pos_b += 1
+        fable_in_a = e.position_a_model == FABLE
+        if e.verdict == "tie":
+            winner = "tie"
+        else:
+            winner = "original" if ((e.verdict == "a_better") == fable_in_a) else "replay"
+        if e.verdict == "b_better" and winner == "original":
+            data.b_better_picked_original += 1
+        rec = e.recognition or "none"
+        if rec != "none":
+            data.blind_leak += 1
+        else:
+            data.blind_none += 1
+            if winner == "original":
+                data.none_original += 1
+            elif winner == "replay":
+                data.none_replay += 1
+            else:
+                data.none_tie += 1
+    for r in reruns.values():
+        if r.status == "completed" and r.target_model == "claude-opus-4-8":
+            data.rerun_est_total += r.est_cost_usd or Decimal("0")
+            data.rerun_actual_total += r.actual_cost_usd or Decimal("0")
     return data
 
 
@@ -200,6 +249,18 @@ def render(data: ReportData, *, lang: str, audience: str, alias: dict[str, str])
             f"{(data.self_audit_cost / data.total_cost if data.total_cost else 0):.1%}）；"
             "解读花钱结构时应意识到这部分是工具自建成本，非被审计的生产用量。",
             f"- 标签状态：{tags_note or '已含人工校正'}（启发式打标，人工校正后 §3 数字重算）。",
+            "- **方法学诚实项（三条，均为本审计自身的缺陷/教训）**：",
+            f"  1. **盲评识别泄漏 {data.blind_leak}/{data.blind_total}≈"
+            f"{(data.blind_leak / data.blind_total if data.blind_total else 0):.0%}**："
+            "评审是本人、审的是自己近期对话，认出了部分原答案。§5b 已把认出的对剔出主结论；"
+            "未来协议改为**拉长间隔**或**第三方评审**。",
+            f"  2. **盲评位置不均衡**：原答案 {data.fable_pos_b}/{data.blind_total} 落 B 位"
+            "（确定性 hash 分配偏斜），与「原版效应」共线，§5b 结论因此只能弱声称。",
+            f"  3. **估算 100× 教训**：重跑成本预估 **{_money(data.rerun_est_total)}** vs 实际 "
+            f"**${data.rerun_actual_total:.2f}**（≈"
+            f"{(data.rerun_est_total / data.rerun_actual_total if data.rerun_actual_total else 0):.0f}"
+            "×）。错因=用原咨询的完整上下文规模估重放，而自包含重放冷启动、无 cache、只发 prompt "
+            "正文；estimate_costs 已改按重放载荷估算。",
             "",
             "## §2 花钱结构（task_type × 档位）",
             f"{'task_type':<20}｜ frontier ｜ mid ｜ cheap ｜ 小计",
@@ -228,6 +289,21 @@ def render(data: ReportData, *, lang: str, audience: str, alias: dict[str, str])
             "audited production usage.",
             f"- Tag status: {tags_note or 'manual-corrected'} (heuristic tags; §3 recomputes "
             "after manual correction).",
+            "- **Methodology honesty (three items, all flaws/lessons of this audit itself)**:",
+            f"  1. **Blind-eval recognition leak {data.blind_leak}/{data.blind_total}≈"
+            f"{(data.blind_leak / data.blind_total if data.blind_total else 0):.0%}**: the "
+            "reviewer was the author judging their own recent conversations and recognised some "
+            "originals. §5b drops recognised pairs from the main conclusion; future protocol: "
+            "**longer interval** or a **third-party reviewer**.",
+            f"  2. **Blind-eval position imbalance**: {data.fable_pos_b}/{data.blind_total} "
+            "originals landed in slot B (skewed deterministic-hash assignment), collinear with "
+            "the 'original-answer' effect — hence §5b can only claim weakly.",
+            f"  3. **100× estimate lesson**: rerun cost estimate **{_money(data.rerun_est_total)}** "
+            f"vs actual **${data.rerun_actual_total:.2f}** (≈"
+            f"{(data.rerun_est_total / data.rerun_actual_total if data.rerun_actual_total else 0):.0f}"
+            "×). Cause: sizing the replay by the original consult's full context footprint; a "
+            "self-contained replay is cold, no cache, prompt body only. estimate_costs now sizes "
+            "by the replay payload.",
             "",
             "## §2 Spend structure (task_type × tier)",
             f"{'task_type':<20}| frontier | mid | cheap | subtotal",
@@ -310,8 +386,22 @@ def render(data: ReportData, *, lang: str, audience: str, alias: dict[str, str])
             "比例（opus 是 fable 半价 → 严格 50%），**不是经验测得的差距**，只是上界。",
             "  - 真正的经验问题——**质量是否受损**、以及**换模型后 token 量本身会变**"
             "（不同模型对同任务的输出长度/思考量不同）——由 §5b 盲评与后续在线数据回答。",
-            f"### §5b 盲评版：{_PENDING_BLIND} 需先执行重跑（另行下令，key-gated）并导入盲评裁决；"
-            "产出 fable 胜率/平手率/每次「fable 确实更好」的平均溢价美元。",
+            f"### §5b 盲评版（{data.blind_total} 对已判，揭盲后按 recognition 分层）：",
+            f"  **主结果只用 recognition=none 的 {data.blind_none} 对**（评审未认出原答案）："
+            f"original(fable+完整上下文) 胜 **{data.none_original}**，replay(opus 冷启动) 胜 "
+            f"**{data.none_replay}**，平手 {data.none_tie}。",
+            "  **按不对称规则解读（不得反向过度声称）**：",
+            f"  - replay 胜或平 = {data.none_replay + data.none_tie}/{data.blind_none} —— "
+            "这才是「降档不劣」的证据方向；本轮该比例低，**不构成降档强证据**。",
+            f"  - original 胜 = {data.none_original}/{data.blind_none} —— "
+            "**不能据此写「fable 溢价合理」**：replay 是冷启动、无原对话上下文，劣势可能来自"
+            "**上下文缺失而非模型质量**，本设计未排除该混淆，只能记「上下文混淆未排除」。",
+            f"  - ⚠️ **位置/原版效应共线**：原答案 12 对中 {data.fable_pos_b} 落 B 位、"
+            f"{data.fable_pos_a} 落 A 位（确定性 hash 分配不均衡）；{data.b_better_picked_original} "
+            "个 b_better 恰好选中 B 位原答案 —— 胜负与「B 位」「原版」高度共线，**无法从本轮数据"
+            "分离三者**。",
+            f"  - 旁证层：另有 {data.blind_leak} 对评审认出了原答案（见 §1 泄漏率），"
+            "单独列示、不进主结论。",
         ]
     else:
         L += [
@@ -326,8 +416,27 @@ def render(data: ReportData, *, lang: str, audience: str, alias: dict[str, str])
             "  - The real empirical questions — **did quality hold**, and **does the token "
             "count itself change** on a different model (different output length/thinking "
             "per task) — are answered by §5b blind eval + later online data.",
-            f"### §5b Blind: {_PENDING_BLIND} needs a rerun (separate, key-gated) + imported "
-            "verdicts; yields fable win/tie rate and avg $ premium per 'fable actually better'.",
+            f"### §5b Blind ({data.blind_total} pairs judged, unblinded, layered by recognition):",
+            f"  **Main result uses only the recognition=none {data.blind_none} pairs** (reviewer "
+            f"did NOT recognise the original): original (fable + full context) wins "
+            f"**{data.none_original}**, replay (opus cold-start) wins **{data.none_replay}**, "
+            f"tie {data.none_tie}.",
+            "  **Asymmetric reading (no reverse over-claim)**:",
+            f"  - replay wins-or-ties = {data.none_replay + data.none_tie}/{data.blind_none} — "
+            "this is the 'downgrade is not worse' evidence direction; the ratio is low here, so "
+            "**NOT strong evidence for downgrading**.",
+            f"  - original wins = {data.none_original}/{data.blind_none} — "
+            "**cannot be read as 'the fable premium is justified'**: the replay is cold, without "
+            "the original conversation context, so its disadvantage may be **missing context, "
+            "not model quality**. This design does not rule that out — recorded as 'context "
+            "confound not excluded'.",
+            f"  - ⚠️ **position/original-answer confound**: of the 12 originals, {data.fable_pos_b} "
+            f"landed in slot B and {data.fable_pos_a} in slot A (deterministic-hash assignment was "
+            f"unbalanced); {data.b_better_picked_original} of the b_better verdicts picked the "
+            "slot-B original — winner is collinear with 'slot B' and 'original', **not separable** "
+            "from this round.",
+            f"  - Side layer: another {data.blind_leak} pairs were recognised (see §1 leak rate), "
+            "listed separately and excluded from the main conclusion.",
         ]
 
     # §6

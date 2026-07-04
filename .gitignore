@@ -71,3 +71,11 @@ docs/case-studies/*
 # personal positioning/dev-prompt doc. Kept out of every commit.
 launch/
 /traceguard_定位与CC开发Prompt.md
+
+# iCloud/file-sync duplicates: "<name> 2.<ext>" — never commit (mirrors the
+# pyproject build `exclude = ["* 2.py"]` and conftest collect_ignore_glob).
+* 2.py
+* 2.md
+* 2.yaml
+* 2.sh
+* 2.plist

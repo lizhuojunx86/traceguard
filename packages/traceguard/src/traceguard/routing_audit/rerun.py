@@ -255,28 +255,23 @@ def _est_tokens(text: str | None) -> int:
 def estimate_costs(
     candidates: list[RerunCandidate], target_model: str, db_url: str | None, source_root: Path
 ) -> list[RerunEstimate]:
-    """Dry-run per-consult cost: a fresh single call on the target model.
+    """Dry-run per-consult cost sized from the REPLAY PAYLOAD, not the origin.
 
-    Sized from the original consult's real usage (input incl. the context the
-    consult needed to be self-contained, output = its answer), billed at
-    target rates with NO cache (a cold replay). Falls back to a char estimate
-    of prompt+answer when the source usage is gone. Magnitude only — the true
-    count is known after execution.
+    A self-contained replay is a fresh single call: it sends only the consult
+    prompt body, cold — NO cache, NO accumulated conversation context. So the
+    input is ~the prompt, the output ~the original answer's length, both at
+    standard (non-cache) rates. (An earlier version sized this from the
+    original consult's full usage incl. its accumulated context/cache — that
+    over-estimated the real replay by ~100× ($22.81 est vs $0.21 actual for 12
+    consults). See report §1.) Magnitude only; the true count comes from
+    ``--execute``.
     """
     price = CANDIDATE_PRICES.get(target_model) or PRICES.get(target_model)
     estimates: list[RerunEstimate] = []
     for cand in candidates:
-        prompt, answer, usage = extract_consult(cand, source_root)
-        if usage is not None:
-            tin = (
-                int(usage.get("input_tokens") or 0)
-                + int(usage.get("cache_read_input_tokens") or 0)
-                + int(usage.get("cache_creation_input_tokens") or 0)
-            )
-            tout = int(usage.get("output_tokens") or 0)
-        else:
-            tin = _est_tokens(prompt)
-            tout = _est_tokens(answer) or 1500
+        prompt, answer, _usage = extract_consult(cand, source_root)
+        tin = _est_tokens(prompt)
+        tout = _est_tokens(answer) or 1500  # default when the answer is gone
         if price is None:
             est_cost = Decimal("0")
         else:
