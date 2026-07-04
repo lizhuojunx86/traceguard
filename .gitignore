@@ -17,7 +17,12 @@
 traces_routing_audit.db
 routing_audit_task_tags*.csv
 routing_audit_candidates*.csv
+routing_audit_blind*.csv
 routing_deviations*.csv
+routing_audit_alias_map.json
+# Generated report skeletons carry real aggregate figures — local only.
+report_zh.md
+report_en.md
 # Scheduled-ingest run logs (project names, costs, warnings — private metadata).
 routing_audit_ingest.log
 routing_audit_launchd.*.log

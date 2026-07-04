@@ -130,6 +130,63 @@ class RoutingDecision(RoutingAuditBase):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
 
 
+class RerunResult(RoutingAuditBase):
+    """One rerun of a self-contained consult on a target model (harness output).
+
+    ``est_cost_usd`` is the dry-run list-price estimate (target-model
+    re-pricing of the unit's tokens); the ``actual_*`` / ``*_answer`` columns
+    stay NULL until a real execution fills them. ``original_answer`` and
+    ``rerun_answer`` are LOCAL-ONLY (DB is gitignored) and are NEVER written to
+    any export/CSV/report — only hashes and costs leave the DB.
+    """
+
+    __tablename__ = "routing_audit_rerun_results"
+
+    rerun_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    batch_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    unit_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    project: Mapped[str] = mapped_column(String(128), nullable=False)
+    task_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    target_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    prompt_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Redacted ≤100-char question label for the blind sheet (local-only).
+    prompt_summary: Mapped[str | None] = mapped_column(String(120), nullable=True)
+
+    est_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    actual_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    tokens_in: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    tokens_out: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # LOCAL-ONLY answer bodies — never leave the DB.
+    original_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+    rerun_answer: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # "estimated" (dry-run) | "completed" | "failed" | "skipped"
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="estimated")
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
+
+
+class BlindEval(RoutingAuditBase):
+    """Blind A/B verdict for one rerun; the position→model map lives in-DB only.
+
+    The exported blind sheet shows answer A / answer B in a fixed but
+    label-free order; ``position_a_model`` / ``position_b_model`` are the
+    unblinding key kept here, revealed only after ``verdict`` is imported.
+    """
+
+    __tablename__ = "routing_audit_blind_eval"
+
+    blind_id: Mapped[str] = mapped_column(String(200), primary_key=True)
+    unit_id: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    position_a_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    position_b_model: Mapped[str] = mapped_column(String(128), nullable=False)
+    # a_better | b_better | tie  (NULL until imported)
+    verdict: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
+
+
 def ensure_tables(engine: Engine) -> None:
     """Create the routing_audit tables if missing (idempotent, additive-only)."""
     RoutingAuditBase.metadata.create_all(engine)
