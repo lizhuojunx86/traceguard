@@ -214,3 +214,25 @@ def test_refresh_chain_idempotent(source_root: Path, db_url: str, tmp_path: Path
     log2 = refresh_chain(db_url, out_dir=tmp_path)
     assert any("decisions generate" in s for s in log1)
     assert any("reports:" in s for s in log2)
+
+
+def test_as_of_freezes_snapshot(source_root: Path, db_url: str) -> None:
+    from traceguard.routing_audit.counterfactual import parse_as_of
+
+    ingest(source_root, db_url, write=True)
+    _tags(db_url)
+    full = gather(db_url)
+    # fable trace is 2026-06-05, huadian trace is 2026-06-06.
+    frozen = gather(db_url, as_of=parse_as_of("2026-06-05"))
+    assert full.total_traces == 2
+    assert frozen.total_traces == 1  # only the 06-05 fable trace survives the freeze
+    assert frozen.total_cost < full.total_cost
+
+
+def test_parse_as_of_date_is_end_of_day() -> None:
+    from traceguard.routing_audit.counterfactual import parse_as_of
+
+    d = parse_as_of("2026-06-15")
+    assert d is not None
+    assert (d.hour, d.minute) == (23, 59)  # a bare date means through end of day
+    assert parse_as_of(None) is None

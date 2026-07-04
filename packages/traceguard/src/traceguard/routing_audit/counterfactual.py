@@ -52,6 +52,7 @@ import re
 import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -85,6 +86,24 @@ CANDIDATE_PRICES: dict[str, ModelPrice] = {
     "claude-opus-4-8": PRICES["claude-opus-4-8"],
 }
 _ALWAYS = ("claude-sonnet-5-intro", "claude-sonnet-5-standard", "claude-haiku-4-5-20251001")
+
+
+def parse_as_of(value: str | None) -> datetime | None:
+    """Parse an ``--as-of`` freeze point: ISO date (→ end of that UTC day) or datetime."""
+    if not value:
+        return None
+    from datetime import time, timezone
+
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"--as-of must be an ISO date/datetime, got {value!r}") from exc
+    if dt.tzinfo is None:
+        # a bare date means "through the end of that day"
+        if len(value.strip()) <= 10:
+            dt = datetime.combine(dt.date(), time.max)
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 def _base_model(candidate: str) -> str:
@@ -157,16 +176,25 @@ class UnitModelAgg:
     n_traces: int = 0
 
 
-def aggregate_unit_models(db_url: str | None = None) -> list[UnitModelAgg]:
-    """Sum token composition + actual cost per (unit, current model)."""
+def aggregate_unit_models(
+    db_url: str | None = None, *, as_of: datetime | None = None
+) -> list[UnitModelAgg]:
+    """Sum token composition + actual cost per (unit, current model).
+
+    ``as_of`` freezes the snapshot: only traces with ``invoked_at <= as_of``
+    are counted (daily ingest keeps writing, but a pinned report stays stable).
+    """
     engine = make_engine(db_url)
     ensure_tables(engine)
     index = load_unit_index(engine)
     aggs: dict[tuple[str, str], UnitModelAgg] = {}
     with Session(engine) as sess:
-        rows = sess.execute(
-            select(Trace.output_parsed, Trace.invoked_at, Trace.project, Trace.model_id, Trace.cost_usd)
+        stmt = select(
+            Trace.output_parsed, Trace.invoked_at, Trace.project, Trace.model_id, Trace.cost_usd
         )
+        if as_of is not None:
+            stmt = stmt.where(Trace.invoked_at <= as_of)
+        rows = sess.execute(stmt)
         for output_parsed, invoked_at, project, model_id, cost_usd in rows:
             if model_id is None:
                 continue
@@ -199,9 +227,11 @@ class CounterfactualRow:
     saving: Decimal
 
 
-def compute_counterfactuals(db_url: str | None = None) -> list[CounterfactualRow]:
+def compute_counterfactuals(
+    db_url: str | None = None, *, as_of: datetime | None = None
+) -> list[CounterfactualRow]:
     rows: list[CounterfactualRow] = []
-    for a in aggregate_unit_models(db_url):
+    for a in aggregate_unit_models(db_url, as_of=as_of):
         for candidate in candidates_for(a.current_model):
             price = CANDIDATE_PRICES[candidate]
             factor = token_factor(a.current_model, candidate)
@@ -221,9 +251,9 @@ def compute_counterfactuals(db_url: str | None = None) -> list[CounterfactualRow
     return rows
 
 
-def format_matrix(db_url: str | None = None) -> str:
+def format_matrix(db_url: str | None = None, *, as_of: datetime | None = None) -> str:
     """task_type × current_model → candidate potential-saving matrix."""
-    rows = compute_counterfactuals(db_url)
+    rows = compute_counterfactuals(db_url, as_of=as_of)
     if not rows:
         return "no counterfactual rows — ingest + tag first."
     candidates = list(CANDIDATE_PRICES.keys())
@@ -267,9 +297,11 @@ def _short_model(model_id: str) -> str:
     return model_id.replace("claude-", "").replace("-20251001", "")
 
 
-def format_top(db_url: str | None = None, *, n: int = 10) -> str:
+def format_top(
+    db_url: str | None = None, *, n: int = 10, as_of: datetime | None = None
+) -> str:
     """Top-N (unit, candidate) rows by absolute saving — the rerun candidate pool."""
-    rows = [r for r in compute_counterfactuals(db_url) if r.saving > 0]
+    rows = [r for r in compute_counterfactuals(db_url, as_of=as_of) if r.saving > 0]
     rows.sort(key=lambda r: r.saving, reverse=True)
     top = rows[:n]
     if not top:
@@ -429,10 +461,12 @@ def main(argv: list[str] | None = None) -> int:
 
     p_matrix = sub.add_parser("matrix", help="task_type × current → candidate saving matrix")
     p_matrix.add_argument("--db", default=DEFAULT_DB)
+    p_matrix.add_argument("--as-of", default=None, help="freeze: only traces invoked_at <= this")
 
     p_top = sub.add_parser("top", help="top-N units by potential saving")
     p_top.add_argument("--db", default=DEFAULT_DB)
     p_top.add_argument("--n", type=int, default=10)
+    p_top.add_argument("--as-of", default=None)
 
     p_cand = sub.add_parser("candidates", help="shortlist self-contained fable advisor units")
     p_cand.add_argument("--db", default=DEFAULT_DB)
@@ -442,9 +476,9 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "matrix":
-        print(format_matrix(args.db))
+        print(format_matrix(args.db, as_of=parse_as_of(args.as_of)))
     elif args.command == "top":
-        print(format_top(args.db, n=args.n))
+        print(format_top(args.db, n=args.n, as_of=parse_as_of(args.as_of)))
     elif args.command == "candidates":
         rows = quality_candidates(args.db, args.source, limit=args.limit)
         print(format_candidates(rows, args.csv))

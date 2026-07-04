@@ -25,6 +25,7 @@ import hashlib
 import sys
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -54,11 +55,13 @@ class PremiumRow:
     premium: Decimal
 
 
-def intra_tier_premium(db_url: str | None = None) -> list[PremiumRow]:
+def intra_tier_premium(
+    db_url: str | None = None, *, as_of: datetime | None = None
+) -> list[PremiumRow]:
     """Per task_type: Σ fable actual vs Σ opus-4-8 counterfactual (both frontier)."""
     rows = [
         r
-        for r in compute_counterfactuals(db_url)
+        for r in compute_counterfactuals(db_url, as_of=as_of)
         if r.current_model == FABLE and r.candidate == OPUS
     ]
     agg: dict[str, list[Any]] = defaultdict(lambda: [0, Decimal("0"), Decimal("0")])
@@ -75,12 +78,17 @@ def intra_tier_premium(db_url: str | None = None) -> list[PremiumRow]:
     return out
 
 
-def format_intra_tier_premium(db_url: str | None = None) -> str:
-    rows = intra_tier_premium(db_url)
+def format_intra_tier_premium(db_url: str | None = None, *, as_of: datetime | None = None) -> str:
+    rows = intra_tier_premium(db_url, as_of=as_of)
     lines = [
         f"== intra-tier advisor premium (arithmetic) — fable-5 vs opus-4-8, both frontier {_PENDING_NOTE} ==",
-        "SAME-TIER premium (the cost of choosing Fable over Opus within the",
-        "frontier tier). This is NOT the cross-tier deviation audit — keep separate.",
+        "This is an UPPER BOUND, and a direct COROLLARY of the price sheet — not an",
+        "empirical finding: with the same tokenizer and the token mix held fixed, the",
+        "saving is identically the price ratio (opus is half of fable → 50%). The real",
+        "empirical questions — did quality hold, and does the token count itself change",
+        "on a different model — are answered by the blind eval (§5b) + later online data.",
+        "SAME-TIER premium (choosing Fable over Opus within frontier); NOT the",
+        "cross-tier deviation audit — keep separate.",
         "",
         f"{'task_type':<20} {'units':>6} {'fable_actual$':>14} {'opus_cf$':>12} "
         f"{'premium$':>11} {'premium%':>9}",
@@ -268,6 +276,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_prem = sub.add_parser("premium", help="arithmetic intra-tier fable vs opus premium")
     p_prem.add_argument("--db", default=DEFAULT_DB)
+    p_prem.add_argument("--as-of", default=None, help="freeze: only traces invoked_at <= this")
 
     p_export = sub.add_parser("export", help="export blind A/B sheet (needs completed reruns)")
     p_export.add_argument("--db", default=DEFAULT_DB)
@@ -282,7 +291,9 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "premium":
-        print(format_intra_tier_premium(args.db))
+        from traceguard.routing_audit.counterfactual import parse_as_of
+
+        print(format_intra_tier_premium(args.db, as_of=parse_as_of(args.as_of)))
     elif args.command == "export":
         stats = export_blind_sheet(args.csv, args.db)
         print(

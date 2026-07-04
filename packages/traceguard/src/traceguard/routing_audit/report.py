@@ -93,9 +93,12 @@ class ReportData:
     premium_fable_cost: Decimal = Decimal("0")
     premium_units: int = 0
     blind_verdicts: int = 0
+    # self-audit: cost of building the audit tool itself
+    self_audit_cost: Decimal = Decimal("0")
+    self_audit_traces: int = 0
 
 
-def gather(db_url: str | None = None) -> ReportData:
+def gather(db_url: str | None = None, *, as_of: datetime | None = None) -> ReportData:
     policy = load_policy()
     engine = make_engine(db_url)
     ensure_tables(engine)
@@ -103,16 +106,22 @@ def gather(db_url: str | None = None) -> ReportData:
     data = ReportData()
 
     with Session(engine) as sess:
-        for output_parsed, invoked_at, project, model_id, cost_usd in sess.execute(
-            select(
-                Trace.output_parsed, Trace.invoked_at, Trace.project,
-                Trace.model_id, Trace.cost_usd,
-            )
-        ):
+        stmt = select(
+            Trace.output_parsed, Trace.invoked_at, Trace.project,
+            Trace.model_id, Trace.cost_usd, Trace.component,
+        )
+        if as_of is not None:
+            stmt = stmt.where(Trace.invoked_at <= as_of)
+        for output_parsed, invoked_at, project, model_id, cost_usd, component in sess.execute(stmt):
             data.total_traces += 1
             c = cost_usd or Decimal("0")
             data.total_cost += c
             data.by_project[project] += c
+            # self-audit overhead: the traceguard project's own dev + the
+            # rerun-harness component (the audit tool auditing itself).
+            if project == "traceguard" or component == "rerun-harness":
+                data.self_audit_cost += c
+                data.self_audit_traces += 1
             if data.ts_min is None or invoked_at < data.ts_min:
                 data.ts_min = invoked_at
             if data.ts_max is None or invoked_at > data.ts_max:
@@ -141,7 +150,7 @@ def gather(db_url: str | None = None) -> ReportData:
             b[1] += 1
             b[2] += d.cost_usd or Decimal("0")
 
-    prem = intra_tier_premium(db_url)
+    prem = intra_tier_premium(db_url, as_of=as_of)
     data.premium_total = sum((p.premium for p in prem), Decimal("0"))
     data.premium_fable_cost = sum((p.fable_actual for p in prem), Decimal("0"))
     data.premium_units = sum(p.units for p in prem)
@@ -185,6 +194,11 @@ def render(data: ReportData, *, lang: str, audience: str, alias: dict[str, str])
             "ingest-log 为不可变留存层，库与源冲突以库为准。",
             "- **证据链二：Fable 停用期外部校验**——2026-06-13 的 31 条 fable 消息全部落在"
             "三个先前会话的尾部（跨停用时点残留，非映射错误），已保留原样。",
+            f"- **自指开销单列**：本审计库**包含构建审计工具自身的开销**"
+            f"（traceguard 项目 + rerun-harness component）——共 {data.self_audit_traces:,} 条 "
+            f"**{_money(data.self_audit_cost)}**（占总成本 "
+            f"{(data.self_audit_cost / data.total_cost if data.total_cost else 0):.1%}）；"
+            "解读花钱结构时应意识到这部分是工具自建成本，非被审计的生产用量。",
             f"- 标签状态：{tags_note or '已含人工校正'}（启发式打标，人工校正后 §3 数字重算）。",
             "",
             "## §2 花钱结构（task_type × 档位）",
@@ -206,6 +220,12 @@ def render(data: ReportData, *, lang: str, audience: str, alias: dict[str, str])
             "- **Evidence 2: Fable stand-down external check** — the 31 fable messages on "
             "2026-06-13 are all fade-out tails of three prior sessions (cross-cutover "
             "residue, not a mapping bug), kept as-is.",
+            f"- **Self-audit overhead, listed separately**: this audit DB **includes the "
+            f"cost of building the audit tool itself** (traceguard project + rerun-harness "
+            f"component) — {data.self_audit_traces:,} traces, **{_money(data.self_audit_cost)}** "
+            f"({(data.self_audit_cost / data.total_cost if data.total_cost else 0):.1%} of "
+            "total); read the spend structure knowing this slice is tool self-build, not "
+            "audited production usage.",
             f"- Tag status: {tags_note or 'manual-corrected'} (heuristic tags; §3 recomputes "
             "after manual correction).",
             "",
@@ -284,8 +304,12 @@ def render(data: ReportData, *, lang: str, audience: str, alias: dict[str, str])
         L += [
             "",
             "## §5 档内 advisor 溢价（与 §3 档位偏差**分开**呈现）",
-            f"### §5a 算术版：{data.premium_units} 个 fable 单元，若换 opus-4-8（同 frontier 档）"
-            f"省 **{_money(data.premium_total)}**（溢价率 **{prem_pct}**，价格严格 2:1）。",
+            f"### §5a 节省上界（算术推论，非经验发现）：{data.premium_units} 个 fable 单元，"
+            f"换 opus-4-8（同 frontier 档）省 **{_money(data.premium_total)}**（**{prem_pct}**）。",
+            "  - 这是**价目表的直接推论**：同 tokenizer + token 构成锁定 ⇒ 节省额恒等于价差"
+            "比例（opus 是 fable 半价 → 严格 50%），**不是经验测得的差距**，只是上界。",
+            "  - 真正的经验问题——**质量是否受损**、以及**换模型后 token 量本身会变**"
+            "（不同模型对同任务的输出长度/思考量不同）——由 §5b 盲评与后续在线数据回答。",
             f"### §5b 盲评版：{_PENDING_BLIND} 需先执行重跑（另行下令，key-gated）并导入盲评裁决；"
             "产出 fable 胜率/平手率/每次「fable 确实更好」的平均溢价美元。",
         ]
@@ -293,9 +317,15 @@ def render(data: ReportData, *, lang: str, audience: str, alias: dict[str, str])
         L += [
             "",
             "## §5 Intra-tier advisor premium (kept SEPARATE from §3 tier deviation)",
-            f"### §5a Arithmetic: {data.premium_units} fable units; switching to Opus 4.8 "
-            f"(same frontier tier) saves **{_money(data.premium_total)}** "
-            f"(premium **{prem_pct}**, strict 2:1 pricing).",
+            f"### §5a Saving upper bound (arithmetic corollary, NOT an empirical finding): "
+            f"{data.premium_units} fable units, switching to Opus 4.8 (same frontier tier) "
+            f"saves **{_money(data.premium_total)}** (**{prem_pct}**).",
+            "  - This is a **direct corollary of the price sheet**: same tokenizer + token "
+            "mix held fixed ⇒ the saving is identically the price ratio (opus is half of "
+            "fable → strictly 50%). It is a bound, **not a measured gap**.",
+            "  - The real empirical questions — **did quality hold**, and **does the token "
+            "count itself change** on a different model (different output length/thinking "
+            "per task) — are answered by §5b blind eval + later online data.",
             f"### §5b Blind: {_PENDING_BLIND} needs a rerun (separate, key-gated) + imported "
             "verdicts; yields fable win/tie rate and avg $ premium per 'fable actually better'.",
         ]
@@ -306,11 +336,21 @@ def render(data: ReportData, *, lang: str, audience: str, alias: dict[str, str])
             "",
             "## §6 政策修订建议与预计影响",
             f"- {_PENDING_POLICY} 待你改 routing_policy.yaml + 校正标签后，本节自动重算。",
-            "- **处方不止「换模型」一种**，也含**工作流形状**类建议位：",
-            "  - [ ] 探索/研究类任务改派廉价子代理（如 Explore→haiku），而非主线程 frontier。",
-            "  - [ ] 高 cache-hit 单元避免跨模型重跑（会丢 cache 折扣）——见 §4 敏感度。",
+            "- 处方分**三类**（与 routing_decisions 的 `reason`/`outcome` 字段打通——"
+            "每条偏差在导出的 routing_deviations.csv 里填 reason 后归入其一）：",
+            "",
+            "  **A. 换档（model swap）** — 同任务换更便宜档位：",
             "  - [ ] 机械型 workflow-subagent 收敛到 mid 档。",
             "  - [ ] 档内：低风险 advisor 咨询默认 opus-4-8，保留 fable 给高判断力场景。",
+            "",
+            "  **B. 改派（工作流形状）** — 不换模型而改任务的承载形态：",
+            "  - [ ] 探索/研究类任务改派廉价子代理（如 Explore→haiku），而非主线程 frontier。",
+            "  - [ ] 高 cache-hit 单元避免跨模型重跑（会丢 cache 折扣）——见 §4 敏感度。",
+            "",
+            "  **C. 保留但记录理由（policy exception with reason）** — 偏差是有意的：",
+            "  - [ ] 在 routing_deviations.csv 填 `reason` + `outcome=adopted`，"
+            "import 后 `source=manual` 永不被重生成覆盖，成为政策的显式例外。",
+            "",
             "- 每条建议的预计影响 = 对应 §3 偏差成本 / §4 反事实节省（待数字定稿后填）。",
         ]
     else:
@@ -318,14 +358,25 @@ def render(data: ReportData, *, lang: str, audience: str, alias: dict[str, str])
             "",
             "## §6 Policy-revision proposals & projected impact",
             f"- {_PENDING_POLICY} recomputes once you edit routing_policy.yaml + correct tags.",
-            "- **Prescriptions are not only 'switch model'** — includes WORKFLOW-SHAPE slots:",
+            "- Prescriptions fall in **three classes** (wired to routing_decisions' "
+            "`reason`/`outcome` — each deviation is filed into one via routing_deviations.csv):",
+            "",
+            "  **A. Model swap** — same task, cheaper tier:",
+            "  - [ ] Converge mechanical workflow-subagents to the mid tier.",
+            "  - [ ] Intra-tier: default low-stakes advisor consults to Opus 4.8, keep Fable "
+            "for high-judgment cases.",
+            "",
+            "  **B. Re-route (workflow shape)** — change the task's carrier, not the model:",
             "  - [ ] Route exploratory/research work to cheap subagents (Explore→haiku), not "
             "the frontier main thread.",
             "  - [ ] Avoid cross-model rerun of high cache-hit units (forfeits cache discount) "
             "— see §4 sensitivity.",
-            "  - [ ] Converge mechanical workflow-subagents to the mid tier.",
-            "  - [ ] Intra-tier: default low-stakes advisor consults to Opus 4.8, keep Fable "
-            "for high-judgment cases.",
+            "",
+            "  **C. Keep but record the reason (policy exception with reason)** — the "
+            "deviation is intentional:",
+            "  - [ ] Fill `reason` + `outcome=adopted` in routing_deviations.csv; after import "
+            "`source=manual` is never regenerated, becoming an explicit policy exception.",
+            "",
             "- Each proposal's projected impact = its §3 deviation cost / §4 saving (fill once "
             "numbers are final).",
         ]
@@ -341,8 +392,9 @@ def generate_reports(
     langs: tuple[str, ...] = ("zh", "en"),
     out_dir: Path | str = ".",
     alias_path: Path | str = DEFAULT_ALIAS,
+    as_of: datetime | None = None,
 ) -> list[Path]:
-    data = gather(db_url)
+    data = gather(db_url, as_of=as_of)
     alias = build_alias_map(db_url, Path(alias_path))
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -362,10 +414,12 @@ def refresh_chain(
     deviations_csv: str | None = None,
     audience: str = "external",
     out_dir: Path | str = ".",
+    as_of: datetime | None = None,
 ) -> list[str]:
     """tags import → decisions generate → (counterfactual is read-only) → report.
 
     Fixed order, idempotent. Returns a log of steps for the caller to print.
+    ``as_of`` freezes the report/decisions snapshot; daily ingest is unaffected.
     """
     from traceguard.routing_audit.routing_decisions import (
         generate_decisions,
@@ -374,15 +428,17 @@ def refresh_chain(
     from traceguard.routing_audit.task_tags import import_csv as import_tags
 
     log: list[str] = []
+    if as_of is not None:
+        log.append(f"as-of freeze: invoked_at <= {as_of.isoformat()}")
     if tags_csv:
         s = import_tags(tags_csv, db_url)
         log.append(f"tags import: {s.updated} manual rows")
     if deviations_csv:
         s2 = import_decisions_csv(deviations_csv, db_url)
         log.append(f"deviations import: {s2.updated} manual rows")
-    gen = generate_decisions(db_url, write=True)
+    gen = generate_decisions(db_url, write=True, as_of=as_of)
     log.append(f"decisions generate: {gen.decisions} decisions, {gen.deviations} deviations")
-    paths = generate_reports(db_url, audience=audience, out_dir=out_dir)
+    paths = generate_reports(db_url, audience=audience, out_dir=out_dir, as_of=as_of)
     log.append("reports: " + ", ".join(str(p) for p in paths))
     return log
 
@@ -399,6 +455,7 @@ def main(argv: list[str] | None = None) -> int:
     p_gen.add_argument("--audience", choices=("personal", "external"), default="external")
     p_gen.add_argument("--lang", choices=("zh", "en", "both"), default="both")
     p_gen.add_argument("--out-dir", default=".")
+    p_gen.add_argument("--as-of", default=None, help="freeze snapshot: only traces invoked_at <= this")
 
     p_ref = sub.add_parser("refresh", help="tags import → decisions → report (idempotent)")
     p_ref.add_argument("--db", default=DEFAULT_DB)
@@ -406,18 +463,22 @@ def main(argv: list[str] | None = None) -> int:
     p_ref.add_argument("--deviations-csv", default=None)
     p_ref.add_argument("--audience", choices=("personal", "external"), default="external")
     p_ref.add_argument("--out-dir", default=".")
+    p_ref.add_argument("--as-of", default=None, help="freeze snapshot: only traces invoked_at <= this")
+
+    from traceguard.routing_audit.counterfactual import parse_as_of
 
     args = parser.parse_args(argv)
     if args.command == "generate":
         langs = ("zh", "en") if args.lang == "both" else (args.lang,)
         paths = generate_reports(
-            args.db, audience=args.audience, langs=langs, out_dir=args.out_dir
+            args.db, audience=args.audience, langs=langs, out_dir=args.out_dir,
+            as_of=parse_as_of(args.as_of),
         )
         print("wrote " + ", ".join(str(p) for p in paths))
     elif args.command == "refresh":
         log = refresh_chain(
             args.db, tags_csv=args.tags_csv, deviations_csv=args.deviations_csv,
-            audience=args.audience, out_dir=args.out_dir,
+            audience=args.audience, out_dir=args.out_dir, as_of=parse_as_of(args.as_of),
         )
         print("\n".join(log))
     return 0

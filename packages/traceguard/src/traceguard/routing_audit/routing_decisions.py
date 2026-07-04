@@ -151,20 +151,23 @@ def _batch_id() -> str:
     return f"dec-{stamp}-{uuid_mod.uuid4().hex[:6]}"
 
 
-def _aggregate(engine: Any, stats: DecisionStats) -> dict[tuple[str, str], _Agg]:
+def _aggregate(
+    engine: Any, stats: DecisionStats, *, as_of: datetime | None = None
+) -> dict[tuple[str, str], _Agg]:
     index = load_unit_index(engine)
     agg: dict[tuple[str, str], _Agg] = {}
     with Session(engine) as sess:
-        rows = sess.execute(
-            select(
-                Trace.output_parsed,
-                Trace.invoked_at,
-                Trace.project,
-                Trace.component,
-                Trace.model_id,
-                Trace.cost_usd,
-            )
+        stmt = select(
+            Trace.output_parsed,
+            Trace.invoked_at,
+            Trace.project,
+            Trace.component,
+            Trace.model_id,
+            Trace.cost_usd,
         )
+        if as_of is not None:
+            stmt = stmt.where(Trace.invoked_at <= as_of)
+        rows = sess.execute(stmt)
         for output_parsed, invoked_at, project, component, model_id, cost_usd in rows:
             if model_id is None:  # API error — no actual model to judge
                 stats.skipped_api_error += 1
@@ -200,17 +203,19 @@ def generate_decisions(
     *,
     write: bool = False,
     policy_path: Path | str | None = None,
+    as_of: datetime | None = None,
 ) -> DecisionStats:
     """Build one decision per (unit, component); optionally upsert.
 
     ``source="manual"`` rows are never regenerated. Returns stats even in
-    dry-run (``write=False``) so the report can be previewed.
+    dry-run (``write=False``) so the report can be previewed. ``as_of`` freezes
+    the trace snapshot (only ``invoked_at <= as_of``).
     """
     policy = load_policy(policy_path)
     stats = DecisionStats(policy_path=str(policy_path or DEFAULT_POLICY))
     engine = make_engine(db_url)
     ensure_tables(engine)
-    agg = _aggregate(engine, stats)
+    agg = _aggregate(engine, stats, as_of=as_of)
 
     stats.batch_id = _batch_id()
     sess: Session | None = Session(engine) if write else None
@@ -444,6 +449,7 @@ def main(argv: list[str] | None = None) -> int:
     p_gen.add_argument("--db", default=DEFAULT_DB)
     p_gen.add_argument("--policy", default=None, help=f"policy YAML (default: {DEFAULT_POLICY})")
     p_gen.add_argument("--write", action="store_true")
+    p_gen.add_argument("--as-of", default=None, help="freeze: only traces invoked_at <= this")
 
     p_export = sub.add_parser("export", help="export deviation rows to CSV for manual review")
     p_export.add_argument("--db", default=DEFAULT_DB)
@@ -458,7 +464,11 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "generate":
-        stats = generate_decisions(args.db, write=args.write, policy_path=args.policy)
+        from traceguard.routing_audit.counterfactual import parse_as_of
+
+        stats = generate_decisions(
+            args.db, write=args.write, policy_path=args.policy, as_of=parse_as_of(args.as_of)
+        )
         print(_format_gen_stats(stats, wrote=args.write))
         if not args.write:
             print("\n(dry-run — re-run with --write to persist)")
