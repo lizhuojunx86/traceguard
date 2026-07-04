@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.traceguard.routing-audit.ingest</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__REPO_DIR__/examples/routing_audit/run_ingest.sh</string>
+    </array>
+
+    <!-- Daily at 03:17 local time. launchd runs it at the next wake if the
+         machine was asleep at the scheduled instant. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>3</integer>
+        <key>Minute</key>
+        <integer>17</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- launchd's own stdout/stderr capture (the ingest's structured trail is
+         routing_audit_ingest.log, written by --log-file). -->
+    <key>StandardOutPath</key>
+    <string>__REPO_DIR__/routing_audit_launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO_DIR__/routing_audit_launchd.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

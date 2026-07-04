@@ -65,6 +65,29 @@ Privacy: prompt/completion content, tool inputs/outputs and error text are
 NEVER read into the database. ``input_summary`` is a short synthetic label;
 ``output_parsed`` holds only non-sensitive metadata (version, entrypoint,
 git branch, stop_reason, token breakdown, agent identity).
+
+Data caveats (read before trusting the numbers):
+
+- **The source is mutable.** Claude Code rewrites a session ``.jsonl`` in
+  place on resume/compact: messages can disappear, be re-emitted with a new
+  ``uuid``, or move between files. ``routing_audit_ingest_log`` is the
+  immutable retention layer — once a ``source_message_id`` is logged its
+  trace is never rewritten or double-counted. **On any disagreement between
+  the source tree and the DB, the DB wins.** A consequence: a model's
+  "first-seen" timestamp (used for ``available_to_us_at``) can drift between
+  runs as the source changes; the first successful ingest into a given DB
+  fixes it (registry is insert-only).
+- **Cross-cutover residue is expected, not a bug.** Long sessions that
+  straddle a model-availability change carry the old model on their tail
+  messages. Concretely (data as of 2026-07-02): 31 ``claude-fable-5``
+  messages land on 2026-06-13, all inside three sessions that opened
+  2026-06-10..12 and switched to opus-4-8 afterwards — i.e. the fade-out
+  tail of pre-existing sessions during the Fable stand-down window, not a
+  mapping error. Such rows are kept as-is.
+- **Incremental runs trust mtime.** ``--since`` skips files whose mtime
+  predates the cutoff; because resume/compact bumps mtime, a rewritten file
+  is always re-scanned and the idempotency layer dedupes. A full scan (no
+  ``--since``) remains the backstop for correctness.
 """
 from __future__ import annotations
 
@@ -121,6 +144,7 @@ class ParsedRecord:
 class IngestStats:
     files_main: int = 0
     files_subagent: int = 0
+    files_skipped_mtime: int = 0  # skipped by --since (mtime before cutoff)
     lines_read: int = 0
     assistant_lines: int = 0
     malformed_lines: int = 0
@@ -131,6 +155,7 @@ class IngestStats:
     error_records: int = 0
     already_ingested: int = 0
     written: int = 0
+    written_cost: Decimal = Decimal("0")  # list-price cost of rows written this run
     missing_price: int = 0
     batch_id: str | None = None
     warnings: list[str] = field(default_factory=list)
@@ -315,13 +340,34 @@ def parse_session_file(
             )
 
 
+def _file_mtime_utc(path: Path) -> datetime | None:
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+    except OSError:
+        return None
+
+
 def collect_records(
-    source_root: Path, *, include_subagents: bool = True, stats: IngestStats | None = None
+    source_root: Path,
+    *,
+    include_subagents: bool = True,
+    stats: IngestStats | None = None,
+    since: datetime | None = None,
 ) -> tuple[dict[str, ParsedRecord], IngestStats]:
-    """Discover, parse and deduplicate all source records (no DB access)."""
+    """Discover, parse and deduplicate all source records (no DB access).
+
+    ``since`` (incremental mode) skips files whose mtime predates the cutoff.
+    resume/compact bumps mtime, so a rewritten file is always re-scanned; the
+    idempotency layer then dedupes. Omit ``since`` for a full backstop scan.
+    """
     stats = stats or IngestStats()
     records: dict[str, ParsedRecord] = {}
     for source_file in discover_session_files(source_root, include_subagents=include_subagents):
+        if since is not None:
+            mtime = _file_mtime_utc(source_file.path)
+            if mtime is not None and mtime < since:
+                stats.files_skipped_mtime += 1
+                continue
         if source_file.agent_id is None:
             stats.files_main += 1
         else:
@@ -427,15 +473,19 @@ def ingest(
     write: bool = False,
     include_subagents: bool = True,
     batch_id: str | None = None,
+    since: datetime | None = None,
 ) -> IngestStats:
     """Parse the source tree; optionally write new traces (default dry-run).
 
     Idempotent: records whose ``source_message_id`` already exists in
     ``routing_audit_ingest_log`` are skipped. Every written row is logged
-    under ``stats.batch_id`` for :func:`rollback_batch`.
+    under ``stats.batch_id`` for :func:`rollback_batch`. ``since`` enables
+    incremental scanning (see :func:`collect_records`).
     """
     source_root = Path(source).expanduser()
-    records, stats = collect_records(source_root, include_subagents=include_subagents)
+    records, stats = collect_records(
+        source_root, include_subagents=include_subagents, since=since
+    )
     if not write:
         return stats
 
@@ -470,6 +520,8 @@ def ingest(
                 trace = _build_trace(rec)
                 sess.add(trace)
                 sess.flush()  # populate trace.trace_id
+                if trace.cost_usd is not None:
+                    stats.written_cost += trace.cost_usd
                 sess.add(
                     RoutingAuditIngestLog(
                         batch_id=stats.batch_id,
@@ -519,12 +571,49 @@ def rollback_batch(
     return n_traces, n_log
 
 
+def append_run_log(
+    log_path: Path | str, stats: IngestStats, *, wrote: bool, error: str | None = None
+) -> None:
+    """Append one JSON-line record of this run (for the scheduled job trail).
+
+    Fields: timestamp, batch, whether it wrote, distinct/new-row counts, new
+    list-price cost, per-kind file counts, and any error/warnings — enough to
+    chart daily growth or spot a failed cron run. Never raises: a logging
+    failure must not fail the ingest.
+    """
+    entry = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "wrote": wrote,
+        "batch_id": stats.batch_id,
+        "records": stats.records,
+        "written": stats.written,
+        "new_cost_usd": f"{stats.written_cost:.6f}",
+        "already_ingested": stats.already_ingested,
+        "files_main": stats.files_main,
+        "files_subagent": stats.files_subagent,
+        "files_skipped_mtime": stats.files_skipped_mtime,
+        "error_records": stats.error_records,
+        "warnings": stats.warnings,
+        "error": error,
+    }
+    try:
+        path = Path(log_path).expanduser()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as exc:  # logging must never break the ingest
+        print(f"WARNING: could not write run log to {log_path}: {exc}")
+
+
 def format_report(stats: IngestStats, *, wrote: bool) -> str:
     """Plain-text summary: totals, model × project × component, time span."""
     mode = f"WROTE batch={stats.batch_id}" if wrote else "DRY-RUN (no writes)"
+    files_line = f"files: {stats.files_main} main + {stats.files_subagent} subagent transcripts"
+    if stats.files_skipped_mtime:
+        files_line += f" ({stats.files_skipped_mtime} skipped by --since)"
     lines = [
         f"== routing_audit: claude-code ingest — {mode} ==",
-        f"files: {stats.files_main} main + {stats.files_subagent} subagent transcripts",
+        files_line,
         (
             f"lines: {stats.lines_read} read, {stats.assistant_lines} assistant, "
             f"{stats.duplicate_lines} duplicate (streaming/resume), "
@@ -534,7 +623,8 @@ def format_report(stats: IngestStats, *, wrote: bool) -> str:
         (
             f"records: {stats.records} distinct messages "
             f"({stats.error_records} api-error) | already ingested: "
-            f"{stats.already_ingested} | written: {stats.written}"
+            f"{stats.already_ingested} | written: {stats.written} "
+            f"(new cost ${stats.written_cost:.4f})"
         ),
     ]
     if stats.missing_price:
