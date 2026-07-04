@@ -188,5 +188,15 @@ class BlindEval(RoutingAuditBase):
 
 
 def ensure_tables(engine: Engine) -> None:
-    """Create the routing_audit tables if missing (idempotent, additive-only)."""
+    """Create the routing_audit tables if missing (idempotent, additive-only).
+
+    KNOWN DEBT — no migrations. ``create_all`` only CREATEs missing tables; it
+    never ALTERs an existing one. So adding a column to a table that a
+    long-lived local DB already has (as ``prompt_summary`` was added to
+    ``routing_audit_rerun_results``) does NOT reach that DB — fresh DBs get it,
+    existing ones need a one-off ``ALTER TABLE ... ADD COLUMN`` by hand. This is
+    accepted for these contract-external local tables; do NOT add a migration
+    framework for them (the SDK deliberately has none — same posture as the
+    core store, where ``feature_as_of`` shipped create_all-only in 0.9.0).
+    """
     RoutingAuditBase.metadata.create_all(engine)

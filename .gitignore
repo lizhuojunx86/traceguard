@@ -66,3 +66,8 @@ docs/case-studies/*
 # public TraceGuard study.
 !docs/case-studies/fmp-revision.md
 !docs/case-studies/fmp-revision.zh.md
+
+# Local working material (not project source): launch/marketing notes and the
+# personal positioning/dev-prompt doc. Kept out of every commit.
+launch/
+/traceguard_定位与CC开发Prompt.md
