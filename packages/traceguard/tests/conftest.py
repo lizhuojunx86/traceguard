@@ -8,6 +8,11 @@ from sqlalchemy.engine import Engine
 
 from traceguard.store.models import Base, make_engine
 
+# iCloud/file-sync duplicates new files as "<name> 2.py"; those stale copies
+# would be collected as tests. Ignore them (mirrors the build-time
+# `exclude = ["* 2.py"]` in pyproject).
+collect_ignore_glob = ["* 2.py"]
+
 
 @pytest.fixture
 def engine() -> Iterator[Engine]:
