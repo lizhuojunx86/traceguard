@@ -88,6 +88,13 @@ Data caveats (read before trusting the numbers):
   predates the cutoff; because resume/compact bumps mtime, a rewritten file
   is always re-scanned and the idempotency layer dedupes. A full scan (no
   ``--since``) remains the backstop for correctness.
+- **iCloud sync hazard (this repo lives under a synced Desktop path).** iCloud
+  produces ``"<name> 2.<ext>"`` conflict copies; for a live SQLite DB or a log
+  being appended, that can surface as corruption/duplication exposure (a sister
+  project, quant_alpha_v2, relocated to ``~/apps`` for exactly this reason).
+  The ``.gitignore`` masks ``* 2.*`` so copies never reach a commit, but the
+  DB/logs themselves are still at risk in place. Whether to move THIS repo off
+  the synced path is a separate decision — recorded here, not acted on.
 """
 from __future__ import annotations
 
