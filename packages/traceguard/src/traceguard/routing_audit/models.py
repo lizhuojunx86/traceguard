@@ -191,6 +191,25 @@ class BlindEval(RoutingAuditBase):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
 
 
+class RoutingAuditRepriceLog(RoutingAuditBase):
+    """Audit trail for a reprice run: one row per trace whose cost_usd changed.
+
+    Records the old value (NULL for a first-time fill) and the new value under
+    a ``batch_id`` so a run is idempotent (already-priced rows are skipped) and
+    reversible (:func:`reprice.rollback_reprice` restores ``old_cost_usd``).
+    """
+
+    __tablename__ = "routing_audit_reprice_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    batch_id: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    trace_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    model_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    old_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    new_cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)
+    repriced_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
+
+
 def ensure_tables(engine: Engine) -> None:
     """Create the routing_audit tables if missing (idempotent, additive-only).
 

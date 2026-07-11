@@ -52,6 +52,16 @@ class ModelPrice:
     fast_multiplier: Decimal | None = None
 
 
+# Claude Sonnet 5 has two price eras (verified against the platform pricing
+# page 2026-07-02): introductory $2/$10 through 2026-08-31, then standard
+# $3/$15 from 2026-09-01. The base ``PRICES`` entry carries the CURRENT era's
+# price; :func:`price_for` picks the right era by ``invoked_at`` so historical
+# and future traces both reconcile. Cache multipliers are the standard
+# 0.1×/1.25×/2× for both eras.
+SONNET5_INTRO = ModelPrice(Decimal("2.00"), Decimal("10.00"))
+SONNET5_STANDARD = ModelPrice(Decimal("3.00"), Decimal("15.00"))
+SONNET5_STANDARD_FROM = datetime(2026, 9, 1, tzinfo=timezone.utc)
+
 PRICES: dict[str, ModelPrice] = {
     "claude-opus-4-8": ModelPrice(
         Decimal("5.00"), Decimal("25.00"), fast_multiplier=Decimal("2")
@@ -59,29 +69,46 @@ PRICES: dict[str, ModelPrice] = {
     "claude-opus-4-7": ModelPrice(Decimal("5.00"), Decimal("25.00")),
     "claude-fable-5": ModelPrice(Decimal("10.00"), Decimal("50.00")),
     "claude-haiku-4-5-20251001": ModelPrice(Decimal("1.00"), Decimal("5.00")),
+    # All locally observed sonnet-5 traces are in the introductory era (July);
+    # the base entry is intro. Time-aware callers should use price_for().
+    "claude-sonnet-5": SONNET5_INTRO,
 }
 
 KNOWN_RELEASED_AT: dict[str, datetime] = {
     # Verified against anthropic.com/news on 2026-07-02 (opus-4-8, fable-5);
     # haiku date embedded in the model id. opus-4-7: unverified, resolved to
-    # first-seen by the ingest (see module docstring).
+    # first-seen by the ingest (see module docstring). sonnet-5 announced
+    # 2026-06-30 ("Introducing Claude Sonnet 5").
     "claude-opus-4-8": datetime(2026, 5, 28, tzinfo=timezone.utc),
     "claude-fable-5": datetime(2026, 6, 9, tzinfo=timezone.utc),
     "claude-haiku-4-5-20251001": datetime(2025, 10, 1, tzinfo=timezone.utc),
+    "claude-sonnet-5": datetime(2026, 6, 30, tzinfo=timezone.utc),
 }
 
 
-def compute_cost_usd(model_id: str | None, usage: Mapping[str, Any] | None) -> Decimal | None:
+def price_for(model_id: str | None, invoked_at: datetime | None = None) -> ModelPrice | None:
+    """Price sheet for ``model_id`` at ``invoked_at`` (handles Sonnet 5 eras)."""
+    if model_id == "claude-sonnet-5" and invoked_at is not None:
+        return SONNET5_STANDARD if invoked_at >= SONNET5_STANDARD_FROM else SONNET5_INTRO
+    return PRICES.get(model_id) if model_id is not None else None
+
+
+def compute_cost_usd(
+    model_id: str | None,
+    usage: Mapping[str, Any] | None,
+    invoked_at: datetime | None = None,
+) -> Decimal | None:
     """List-price cost of one API message from its ``usage`` block.
 
     Returns None when the model has no price entry, usage is missing, or the
     record's speed tier has no published price — never guesses. Uses the
     ``cache_creation`` 5m/1h split when present, otherwise treats all
-    cache-creation tokens as 5-minute TTL (1.25×).
+    cache-creation tokens as 5-minute TTL (1.25×). ``invoked_at`` selects the
+    price era for time-versioned models (Sonnet 5 intro vs standard).
     """
     if model_id is None or usage is None:
         return None
-    price = PRICES.get(model_id)
+    price = price_for(model_id, invoked_at)
     if price is None:
         return None
 
