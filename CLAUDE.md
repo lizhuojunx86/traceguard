@@ -17,14 +17,15 @@ Downstream consumers pin git tags: huadian → `v0.1.0-huadian-baseline` (guardi
 # ── traceguard SDK (packages/traceguard) ──
 cd packages/traceguard
 uv sync
-uv run pytest                    # 181 tests (4 skip without contamination-hf extra)
+uv run pytest                    # 280 tests (4 skip without contamination-hf extra)
 uv run python ../../examples/quickstart/run_quickstart.py
 
 # ── pipeline-guardian (repo root) ──
 # Install dependencies
 uv sync
 
-# Run all tests (246 tests, ~1s)
+# Run all tests (259 tests, ~3s; needs `uv sync --extra mcp` or
+# tests/test_mcp_server.py fails at collection)
 uv run pytest
 
 # Run a single test file
