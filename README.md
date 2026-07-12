@@ -203,7 +203,7 @@ This repo hosts two Python packages:
 
 | Package | Path | Status |
 |---------|------|--------|
-| **`traceguard`** — the SDK described above | [packages/traceguard/](packages/traceguard/) | Active development; all new features land here |
+| **`traceguard`** — the SDK described above | [packages/traceguard/](packages/traceguard/) | Active development; all new features land here (public API frozen under SemVer since 1.0.0) |
 | **`pipeline-guardian`** (import name `guardian`) — checkpoint validation for multi-agent pipelines: structural checks, LLM-as-Judge, retry/abort actions, dashboard | repo root (`guardian/`) | Frozen: bugfixes only; its 4-symbol public API stays stable for existing integrators |
 
 Pipeline Guardian's full documentation is in

@@ -1,6 +1,6 @@
 # TraceGuard 集成规范 (Spec)
 
-> **状态**: Draft v0.3 (2026-06-28)
+> **状态**: v1.0 (2026-07-12) — 契约生效,随 `traceguard` 包 v1.0.0 冻结,按 §6 SemVer 演进(SPEC 版本从此跟随包的 major)
 > **类型**: 接口契约 / "宪法"
 > **范围**: 任何接入 TraceGuard 的项目都必须遵守本文档定义的数据模型、SDK 接口签名、不变量。
 > **非范围**: 实现路线、Phase 计划、具体业务的 check 清单、运维细节,统一搬到 `TRACEGUARD_ROADMAP.md` 和各业务方的 `<project>_TRACEGUARD_INTEGRATION.md`。

@@ -1,8 +1,9 @@
 # TraceGuard Integration Specification (English)
 
 > **Status**: translation of [`TRACEGUARD_SPEC.md`](../TRACEGUARD_SPEC.md)
-> Draft v0.3 (2026-06-28). Until v1.0, the Chinese original is authoritative;
-> if the two disagree, the original wins.
+> v1.0 (2026-07-12) — the contract is in force, frozen with `traceguard`
+> v1.0.0 and evolving under SemVer per §6. The Chinese original is
+> authoritative; if the two disagree, the original wins.
 >
 > **Type**: interface contract. Any project integrating TraceGuard MUST
 > conform to the data model, SDK signatures, and invariants defined here.
