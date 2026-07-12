@@ -16,6 +16,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    Boolean,
     DateTime,
     ForeignKey,
     Integer,
@@ -23,10 +24,13 @@ from sqlalchemy import (
     String,
     Text,
     TypeDecorator,
+    UniqueConstraint,
     create_engine,
+    event,
+    select,
 )
 from sqlalchemy.engine import Engine
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 class UTCDateTime(TypeDecorator):
@@ -125,6 +129,107 @@ class ModelRegistryEntry(Base):
         UTCDateTime(), nullable=False, index=True
     )
     deprecated_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
+
+
+class ReplaySet(Base):
+    """A curated, lockable set of inputs for regression / A/B (SPEC §3.4).
+
+    ``is_locked = TRUE`` makes the set physically immutable: invariant 4
+    (SPEC §5.4) is enforced at the ORM flush layer by the event listeners below,
+    not merely by convention. Locking is one-way — a locked set cannot be
+    unlocked, mutated, or deleted; create a new set instead.
+    """
+
+    __tablename__ = "replay_sets"
+
+    # str PK (matches SPEC §4.5 assert_replay_set_locked(replay_set_id: str)).
+    replay_set_id: Mapped[str] = mapped_column(String(256), primary_key=True)
+    project: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    component: Mapped[str] = mapped_column(String(128), nullable=False)
+    is_locked: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    curated_at: Mapped[datetime] = mapped_column(
+        UTCDateTime(), nullable=False, default=_utcnow
+    )
+
+    items: Mapped[list[ReplaySetItem]] = relationship(
+        back_populates="replay_set", cascade="all, delete-orphan"
+    )
+
+
+class ReplaySetItem(Base):
+    __tablename__ = "replay_set_items"
+    __table_args__ = (
+        UniqueConstraint("replay_set_id", "item_index", name="uq_replay_set_item_index"),
+    )
+
+    item_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    replay_set_id: Mapped[str] = mapped_column(
+        String(256), ForeignKey("replay_sets.replay_set_id"), nullable=False, index=True
+    )
+    item_index: Mapped[int] = mapped_column(Integer, nullable=False)
+    input_payload: Mapped[Any] = mapped_column(JSON, nullable=False)
+    expected_output: Mapped[Any | None] = mapped_column(JSON, nullable=True)
+
+    replay_set: Mapped[ReplaySet] = relationship(back_populates="items")
+
+
+class ReplaySetLockedError(Exception):
+    """Raised when a write is attempted against a locked replay set (invariant 4).
+
+    The physical guarantee behind SPEC §3.4/§5.4: once ``is_locked = TRUE`` no
+    item may be added/modified/deleted and the set itself may not be mutated or
+    deleted, so A/B results from different periods stay comparable.
+    """
+
+
+def _set_is_locked(connection, replay_set_id: str | None) -> bool:
+    """The DB-persisted lock state of a set, read on the flush ``connection``.
+
+    Mapper ``before_*`` events fire before the row's own UPDATE/DELETE is
+    emitted, so this SELECT still sees the pre-flush (committed) value within the
+    transaction — robust regardless of ORM expiry/history quirks. This lets the
+    one-way False -> True lock transition through (persisted value is still
+    False) while rejecting every write once the row is committed as locked.
+    """
+    if replay_set_id is None:
+        return False
+    locked = connection.execute(
+        select(ReplaySet.is_locked).where(ReplaySet.replay_set_id == replay_set_id)
+    ).scalar()
+    return bool(locked)
+
+
+@event.listens_for(ReplaySetItem, "before_insert")
+@event.listens_for(ReplaySetItem, "before_update")
+@event.listens_for(ReplaySetItem, "before_delete")
+def _block_item_write_if_locked(mapper, connection, target: ReplaySetItem) -> None:
+    if _set_is_locked(connection, target.replay_set_id):
+        raise ReplaySetLockedError(
+            f"replay_set {target.replay_set_id!r} is locked; items cannot be "
+            "added, modified, or deleted (SPEC §3.4/§5.4 invariant 4)."
+        )
+
+
+@event.listens_for(ReplaySet, "before_update")
+def _block_locked_set_update(mapper, connection, target: ReplaySet) -> None:
+    # Reject every mutation of an already-locked set, including any unlock. The
+    # False -> True lock is allowed because the persisted value is still False.
+    if _set_is_locked(connection, target.replay_set_id):
+        raise ReplaySetLockedError(
+            f"replay_set {target.replay_set_id!r} is locked and immutable; it "
+            "cannot be modified or unlocked (SPEC §3.4/§5.4 invariant 4). "
+            "Create a new replay set instead."
+        )
+
+
+@event.listens_for(ReplaySet, "before_delete")
+def _block_locked_set_delete(mapper, connection, target: ReplaySet) -> None:
+    if _set_is_locked(connection, target.replay_set_id):
+        raise ReplaySetLockedError(
+            f"replay_set {target.replay_set_id!r} is locked and cannot be deleted "
+            "(SPEC §3.4/§5.4 invariant 4)."
+        )
 
 
 DEFAULT_DB_URL = "sqlite:///traceguard.db"

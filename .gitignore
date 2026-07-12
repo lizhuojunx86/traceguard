@@ -11,6 +11,21 @@
 .LSOverride
 
 # DB (main + journals + backups + dumps; keep migrations/*.sql if added later)
+# traces_routing_audit.db = local Claude Code session backfill (private usage
+# data — covered by *.db below, listed explicitly because it must never ship).
+# The task-tag review CSV carries redacted prompt summaries — never commit.
+traces_routing_audit.db
+routing_audit_task_tags*.csv
+routing_audit_candidates*.csv
+routing_audit_blind*.csv
+routing_deviations*.csv
+routing_audit_alias_map.json
+# Generated report skeletons carry real aggregate figures — local only.
+report_zh.md
+report_en.md
+# Scheduled-ingest run logs (project names, costs, warnings — private metadata).
+routing_audit_ingest.log
+routing_audit_launchd.*.log
 *.db
 *.db-journal
 *.db-wal
@@ -51,3 +66,16 @@ docs/case-studies/*
 # public TraceGuard study.
 !docs/case-studies/fmp-revision.md
 !docs/case-studies/fmp-revision.zh.md
+
+# Local working material (not project source): launch/marketing notes and the
+# personal positioning/dev-prompt doc. Kept out of every commit.
+launch/
+/traceguard_定位与CC开发Prompt.md
+
+# iCloud/file-sync duplicates: "<name> 2.<ext>" — never commit (mirrors the
+# pyproject build `exclude = ["* 2.py"]` and conftest collect_ignore_glob).
+* 2.py
+* 2.md
+* 2.yaml
+* 2.sh
+* 2.plist

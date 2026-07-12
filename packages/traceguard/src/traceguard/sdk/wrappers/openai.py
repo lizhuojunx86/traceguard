@@ -16,6 +16,17 @@ from typing import Any
 
 from traceguard.sdk.tracer import Tracer
 from traceguard.sdk.tracer import tracer as default_tracer
+from traceguard.sdk.wrappers._base import (
+    FeatureAsOf,
+    _DelegatingWrapper,
+    resolve_feature_as_of,
+)
+
+# A streaming call returns an iterator, not a materialized response: text/usage
+# are unavailable until the caller drains the stream, which this wrapper does
+# not do. We record an honest 'partial' rather than a false 'success' with empty
+# text and zero tokens, which would corrupt the trace dataset.
+_STREAM_NOTE = "streaming response body not captured by wrap_openai"
 
 
 def _chat_text(response: Any) -> str | None:
@@ -55,7 +66,7 @@ def _responses_text(response: Any) -> str | None:
     return text if isinstance(text, str) else None
 
 
-class _WrappedCompletions:
+class _WrappedCompletions(_DelegatingWrapper):
     """Instruments ``client.chat.completions.create``."""
 
     def __init__(
@@ -65,11 +76,13 @@ class _WrappedCompletions:
         tracer: Tracer,
         project: str,
         component: str,
+        feature_as_of: FeatureAsOf = None,
     ) -> None:
         self._original = original
         self._tracer = tracer
         self._project = project
         self._component = component
+        self._feature_as_of = feature_as_of
 
     def create(self, **kwargs: Any) -> Any:
         model = kwargs.get("model")
@@ -78,6 +91,7 @@ class _WrappedCompletions:
             self._project,
             self._component,
             operation="llm_complete",
+            feature_as_of=resolve_feature_as_of(self._feature_as_of),
         ) as span:
             extra = {k: v for k, v in kwargs.items() if k not in {"model", "messages"}}
             span.record_input({"messages": messages, "model": model, "params": extra})
@@ -86,6 +100,13 @@ class _WrappedCompletions:
             # The tracer.span context manager records the error + flushes + re-raises
             # if this call fails, so no explicit try/except is needed here.
             response = self._original.create(**kwargs)
+
+            if kwargs.get("stream"):
+                span.record_output(
+                    parsed={"streaming": True, "note": _STREAM_NOTE},
+                    parse_status="partial",
+                )
+                return response
 
             span.record_output(
                 parsed={
@@ -104,11 +125,8 @@ class _WrappedCompletions:
                 )
             return response
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._original, name)
 
-
-class _WrappedChat:
+class _WrappedChat(_DelegatingWrapper):
     """Exposes an instrumented ``completions``; passes everything else through."""
 
     def __init__(
@@ -118,6 +136,7 @@ class _WrappedChat:
         tracer: Tracer,
         project: str,
         component: str,
+        feature_as_of: FeatureAsOf = None,
     ) -> None:
         self._original = original
         self.completions = _WrappedCompletions(
@@ -125,13 +144,11 @@ class _WrappedChat:
             tracer=tracer,
             project=project,
             component=component,
+            feature_as_of=feature_as_of,
         )
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._original, name)
 
-
-class _WrappedResponses:
+class _WrappedResponses(_DelegatingWrapper):
     """Instruments ``client.responses.create`` (OpenAI Responses API)."""
 
     def __init__(
@@ -141,11 +158,13 @@ class _WrappedResponses:
         tracer: Tracer,
         project: str,
         component: str,
+        feature_as_of: FeatureAsOf = None,
     ) -> None:
         self._original = original
         self._tracer = tracer
         self._project = project
         self._component = component
+        self._feature_as_of = feature_as_of
 
     def create(self, **kwargs: Any) -> Any:
         model = kwargs.get("model")
@@ -154,6 +173,7 @@ class _WrappedResponses:
             self._project,
             self._component,
             operation="llm_complete",
+            feature_as_of=resolve_feature_as_of(self._feature_as_of),
         ) as span:
             extra = {k: v for k, v in kwargs.items() if k not in {"model", "input"}}
             span.record_input({"input": input_, "model": model, "params": extra})
@@ -161,6 +181,13 @@ class _WrappedResponses:
                 span.record_model_prompt(model_id=str(model))
             # See note in _WrappedCompletions.create — span records error + re-raises.
             response = self._original.create(**kwargs)
+
+            if kwargs.get("stream"):
+                span.record_output(
+                    parsed={"streaming": True, "note": _STREAM_NOTE},
+                    parse_status="partial",
+                )
+                return response
 
             span.record_output(
                 parsed={
@@ -179,15 +206,14 @@ class _WrappedResponses:
                 )
             return response
 
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._original, name)
 
-
-class WrappedOpenAIClient:
+class WrappedOpenAIClient(_DelegatingWrapper):
     """Delegating wrapper. ``chat.completions.create`` — and ``responses.create``
     when the underlying client exposes it — are instrumented; every other
     attribute access passes through to the original client.
     """
+
+    _delegate_attr = "_client"
 
     def __init__(
         self,
@@ -196,6 +222,7 @@ class WrappedOpenAIClient:
         tracer: Tracer,
         project: str,
         component: str,
+        feature_as_of: FeatureAsOf = None,
     ) -> None:
         self._client = client
         self.chat = _WrappedChat(
@@ -203,6 +230,7 @@ class WrappedOpenAIClient:
             tracer=tracer,
             project=project,
             component=component,
+            feature_as_of=feature_as_of,
         )
         # The Responses API only exists on newer openai SDKs. Wrap it only when
         # present so older clients are unaffected; absent, attribute access on
@@ -213,10 +241,8 @@ class WrappedOpenAIClient:
                 tracer=tracer,
                 project=project,
                 component=component,
+                feature_as_of=feature_as_of,
             )
-
-    def __getattr__(self, name: str) -> Any:
-        return getattr(self._client, name)
 
 
 def wrap_openai(
@@ -225,6 +251,7 @@ def wrap_openai(
     project: str,
     component: str,
     tracer: Tracer | None = None,
+    feature_as_of: FeatureAsOf = None,
 ) -> WrappedOpenAIClient:
     """Return ``client`` wrapped so OpenAI calls produce traces.
 
@@ -240,6 +267,12 @@ def wrap_openai(
         project: Project label recorded on every trace.
         component: Component label recorded on every trace.
         tracer: Tracer to persist into; defaults to the module-level tracer.
+        feature_as_of: Point-in-time stamp for every instrumented call — a fixed
+            ``datetime``, a zero-arg callable resolved at each call (e.g. reads a
+            contextvar a backtest loop sets), or ``None`` (default) to record no
+            stamp. Stamping it makes the resulting traces checkable by the
+            look-ahead invariants (SPEC §3); a callable that raises is swallowed
+            (fail-open) and that trace records ``feature_as_of=None``.
 
     Returns:
         A :class:`WrappedOpenAIClient` delegating to ``client``.
@@ -249,4 +282,5 @@ def wrap_openai(
         tracer=tracer or default_tracer,
         project=project,
         component=component,
+        feature_as_of=feature_as_of,
     )

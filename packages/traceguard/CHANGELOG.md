@@ -7,6 +7,142 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [0.9.0] - 2026-06-29
+
+Point-in-time instrumentation reaches the wrappers, plus a guardian bridge — the
+release that turned on traceguard's first **external** adoption (Phase 0
+acceptance #7): `huadian` (via the bridge) and `quant_alpha_v2` (via manual
+spans) now write real traces, the latter catching **206 look-ahead violations**
+in a 2016–2026 backtest scan. **No breaking changes** — every 0.2.0–0.8.1 public
+signature is unchanged; all additions are new keyword params, one new symbol, and
+a new off-surface submodule (SemVer minor).
+
+### Added
+
+- **`feature_as_of` on `wrap_openai` / `wrap_anthropic`** — a `datetime`, a
+  zero-arg callable resolved per call (to replay many points in time without
+  touching the `create()` call site), or `None` (default, unchanged behaviour).
+  Stamping it makes wrapper traces checkable by the look-ahead invariants
+  (SPEC §3) — turning "tracing" into "look-ahead protection". Fail-open: a
+  callable that raises, or a naive (tz-less) datetime, downgrades to
+  `feature_as_of=None` with a warning rather than breaking the host call or
+  silently dropping the trace.
+- **`resolve_feature_as_of`** (new public symbol) — the wrappers' point-in-time
+  resolution, exposed so consumers instrumenting by hand (their own
+  `Tracer.span`, e.g. a no-SDK / bare-httpx client the wrappers cannot attach to)
+  get identical fail-open semantics instead of re-implementing them.
+- **`traceguard.bridges.guardian.write_trace_from_guardian`** — an opt-in,
+  off-the-frozen-surface bridge that writes one trace from a `pipeline-guardian`
+  `StepOutput` + `GuardianDecision`. Duck-types guardian (never imports it), is
+  fully fail-open, and carries `feature_as_of`, so a project already running
+  guardian adopts traceguard with ~5 lines at its existing decision seam —
+  without changing its pinned guardian dependency.
+- **`register_model(if_exists="error" | "ignore")`** — `"ignore"` makes a fixed
+  set of registrations idempotent across re-runs; default `"error"` preserves the
+  insert-only contract (SPEC §3.2).
+- `examples/manual_span.py` — the bare-client manual-instrumentation recipe and
+  the sanctioned sync-context-manager / async-body pattern.
+
+### Changed
+
+- CI gained a **required `contract-guard`** job (frozen public surface +
+  normalizer golden hashes + the four look-ahead invariants) and `main` is now
+  branch-protected, so the 1.0 freeze is enforced by mechanism, not convention.
+
+The public import surface is now **29 symbols** (added `resolve_feature_as_of`).
+1.0 remains a freeze-only flip — now gated on soak, with genuine external
+adoption already in hand.
+
+## [0.8.1] - 2026-06-28
+
+Patch release: one adoption-blocking bugfix in the SDK wrappers. **No API
+changes** — the public surface (`__all__`, 28 symbols) and all signatures are
+unchanged; this is a strict behavioural fix (SemVer patch).
+
+### Fixed
+
+- **Wrapped clients are now transparent to `copy.deepcopy` / `copy.copy`.** A
+  client returned by `wrap_openai` / `wrap_anthropic` previously raised
+  `RecursionError` when copied (and `TypeError` on the engine-backed tracer once
+  past it). The delegating `__getattr__` forwarded the `__setstate__` /
+  `__reduce_ex__` dunders the copy/pickle protocol probes on a half-constructed
+  (`cls.__new__`) instance to a not-yet-set delegate attribute, recursing
+  forever. Frameworks such as LangChain / LlamaIndex deep-copy LLM clients, so a
+  wrapped client crashed where the raw client would not. Delegation is now
+  factored into a private `_DelegatingWrapper` mixin that (1) raises
+  `AttributeError` for any private/dunder lookup, so the copy/pickle protocol
+  falls back cleanly, and (2) implements `__deepcopy__` sharing the process-level
+  `Tracer` by reference (a sink, never copied) while deep-copying the wrapped
+  client. The wrapper no longer *adds* a copy-time failure the underlying client
+  didn't already have.
+
+## [0.8.0] - 2026-06-28
+
+The **contract-close** release on the road to 1.0: every SPEC §3–5 MUST is now
+implemented and enforced, the public import surface is curated and ready to
+freeze, and instrumentation can no longer break the host call. **No breaking
+changes** — every 0.2.0–0.7.0 public signature is unchanged (SemVer minor): all
+additions are new tables/symbols/keyword params, the default happy path is
+preserved, and the two behavioural fixes (fail-open persistence, no streaming
+false-success) strictly improve correctness. 1.0 itself will be a freeze-only
+flip (no new features) once this has soaked.
+
+### Added
+
+- **Replay sets + invariant 4** (SPEC §3.4/§4.5/§5.4): `replay_sets` /
+  `replay_set_items` ORM tables with **physical lock rejection** — once a set is
+  locked, ORM flush-layer events reject any item add/modify/delete, any mutation
+  or unlock of the set, and deletion, raising `ReplaySetLockedError`. The
+  read-side validator `assert_replay_set_locked(replay_set_id, *, engine=None)`
+  completes the four look-ahead invariants so consumers can satisfy SPEC §7.4
+  ("call invariants 1–4 in CI"); an un-migrated DB surfaces a clear
+  invariant-4 error instead of a raw `OperationalError`. The sanctioned
+  write-path ships in `traceguard.registry.replay`: `create_replay_set`,
+  `add_replay_item`, `lock_replay_set`, and the `build_locked_replay_set`
+  convenience.
+- **Curated top-level public API**: `traceguard/__init__` now re-exports the
+  stable contract surface behind a real `__all__` (Tracer/Span/tracer,
+  normalize_input/input_hash, wrap_anthropic/wrap_openai, the model/prompt
+  registries, the replay write-path, all four validators, and the ORM). Deep
+  submodule paths remain importable as aliases, so pinned consumers do not
+  break. Opt-in non-contract extras (otel/contamination/loop) stay off the
+  frozen surface.
+- **`py.typed`** (PEP 561): the fully-annotated package now advertises its
+  types, so downstream type-checkers see them — including the `Literal`-typed
+  `select_model(..., strict=...)` safety story. Verified it ships in the wheel.
+- **Opt-in fail-closed persistence**: `Tracer(strict_persistence=...)` /
+  `TRACEGUARD_STRICT_PERSISTENCE=1` make a persistence failure propagate, for
+  backtests where a silently-missing trace could hide an anachronism.
+- **Tests**: a frozen golden-hash table for `normalize_input` (the highest-
+  blast-radius function) and an API-surface snapshot test, so canonicalization
+  drift and accidental surface changes fail CI rather than slipping through.
+
+### Fixed
+
+- **Instrumentation is now fail-open** (SPEC §4.1 failure-mode MUST): the SQLite
+  source-of-truth write was unguarded while only the opt-in OTel path was
+  isolated — backwards. A locked/full/missing-table DB propagated to the caller,
+  and on the error path the flush ran before `raise`, so a persistence error
+  *replaced* the original business exception. Persistence is now swallowed +
+  logged by default and never masks the business call.
+- **No more streaming false-success traces**: a `stream=True` call returns an
+  iterator the wrappers don't drain, yet they recorded `parse_status='success'`
+  with empty text, null tokens, and ~0 latency — corrupting the dataset
+  TraceGuard exists to make trustworthy. All three entry points (Anthropic
+  messages, OpenAI chat.completions, OpenAI responses) now record an honest
+  `parse_status='partial'`. (Full stream accumulation is deferred post-1.0.)
+
+### Changed
+
+- **SPEC v0.2 → v0.3**: adds the §4.1 fail-open MUST, corrects the §4.5
+  "pure function" wording (invariants 2 and 4 read the store and take
+  `engine=`), and records that invariant 4 / `replay_sets` are now implemented.
+  `validate_model_timing` / `assert_replay_set_locked` are documented as
+  store-reading. `TRACEGUARD_ROADMAP.md` carries a 2026-06-28 status update that
+  supersedes "1.0 = Phase 2 complete" with the real 1.0 definition (contract
+  honored + frozen surface + fail-open) and fixes a false "drift_alerts table is
+  SPEC-defined" claim.
+
 ## [0.7.0] - 2026-06-18
 
 Adds an **OpenAI client wrapper**, bringing auto-instrumentation parity with

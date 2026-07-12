@@ -30,10 +30,23 @@ and [docs/POSITIONING.md](https://github.com/lizhuojunx86/traceguard/blob/main/d
 - `traceguard.sdk.wrappers.openai` — `wrap_openai` auto-instruments an OpenAI
   SDK client's `chat.completions` and `responses` calls (extra:
   `traceguard[openai]`).
-- `traceguard.validators.lookahead` — pure-function invariant validators
+- `traceguard.registry.replay` — curated, lockable replay sets
+  (`create_replay_set` / `add_replay_item` / `lock_replay_set` /
+  `build_locked_replay_set`); once locked, the store physically rejects any
+  mutation (invariant 4).
+- `traceguard.validators.lookahead` — invariant validators
   (`validate_feature_as_of`, `validate_model_timing`,
-  `validate_reference_timing`) that raise `InvariantViolation`; call them in
-  pytest/CI.
+  `validate_reference_timing`, `assert_replay_set_locked`) that raise
+  `InvariantViolation`; call them in pytest/CI to enforce all four look-ahead
+  invariants.
+
+All of the above are also re-exported from the top level (`from traceguard
+import select_model, tracer, assert_replay_set_locked, ...`); the deep paths
+stay valid as aliases. The package ships `py.typed`, so the annotations
+(including the `Literal`-typed `select_model(..., strict=...)`) reach
+type-checkers. Persistence is **fail-open**: a tracing/DB failure never breaks
+or masks the instrumented call (set `TRACEGUARD_STRICT_PERSISTENCE=1` to fail
+closed).
 
 ## Install
 
@@ -77,9 +90,11 @@ The binding interface contract — table schemas, SDK signatures, the four
 look-ahead invariants, SemVer rules — is in
 [docs/SPEC.md](https://github.com/lizhuojunx86/traceguard/blob/main/docs/SPEC.md).
 
-Phase 0 scope: tracer, model/prompt registries, normalizer, invariants 1–3,
-Anthropic + OpenAI wrappers. Not yet: drift checks, replay sets (invariant 4),
-CLI, Postgres/TimescaleDB, Voyage wrapper — see
+Implemented: tracer, model/prompt registries, normalizer, all four look-ahead
+invariants (1–4, including locked replay sets), Anthropic + OpenAI wrappers,
+and a frozen public API. Not yet (post-1.0): drift checks + alerts, the full
+replay executor / A-B compare tooling, a CLI, Postgres/TimescaleDB, Voyage
+wrapper — see
 [TRACEGUARD_ROADMAP.md](https://github.com/lizhuojunx86/traceguard/blob/main/TRACEGUARD_ROADMAP.md).
 
 ## Development
@@ -87,7 +102,7 @@ CLI, Postgres/TimescaleDB, Voyage wrapper — see
 ```bash
 cd packages/traceguard
 uv sync
-uv run pytest        # 136 tests
+uv run pytest        # 181 tests (4 skip without the contamination-hf extra)
 ```
 
 ## License

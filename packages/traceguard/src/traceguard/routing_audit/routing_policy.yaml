@@ -1,0 +1,60 @@
+# routing_policy.yaml — declarative tiered routing policy (contract-external).
+#
+# The routing_decisions audit compares each observed (unit, component) against
+# this policy and flags a deviation ONLY when the actual model's TIER differs
+# from the expected tier. Same-tier substitutions (e.g. opus-4-8 <-> fable-5,
+# both "frontier") are NOT deviations — the policy is about tiers, not exact
+# models. `expected_model` is advisory (shown in the report), never the
+# deviation trigger.
+#
+# 本文件 = stated policy（意图声明）；trace = revealed routing（实际行为）。
+# Owner: lizhuojun · Effective: 2026-07-05 · 修订记录：
+#   v1 (2026-07-05, Claude 起草 + lizhuojun 终审"应用"/方案A)：
+#   1. general-purpose cheap→mid —— 实际分工是 sonnet subagent 干机械活，
+#      初稿的 cheap 会把政策错误报成行为偏差。
+#   2. 新增 (main × research-explore) → frontier【方案A已拍板】——交互式研究
+#      本人在环，frontier 合理；降本诉求走 §6"改派"处方（可批量探索派给
+#      Explore/haiku），不记违规。若未来想改用偏差施压（方案B），删除该规则即可。
+#   3. 已知例外类（不改政策，走"处方C=记录例外"）：huadian 创作类角色 subagent
+#      按 D-route 资产#11 允许 opus；component 粒度细化前在 deviations CSV 填
+#      reason，不放宽 workflow-subagent 的 mid 期望。
+#
+# 规则匹配：一条规则可指定 project / component / task_type 中任意子集；只有
+# 全部指定项都相等才适用。适用规则里"指定项最多"的胜出，平局取本文件中靠前的
+# 一条。都不适用则用 default_tier。
+
+tiers:
+  frontier: [claude-opus-4-8, claude-opus-4-7, claude-opus-4-6, claude-opus-4-5, claude-fable-5]
+  mid: [claude-sonnet-5, claude-sonnet-4-6, claude-sonnet-4-5]
+  cheap: [claude-haiku-4-5-20251001, claude-haiku-4-5]
+
+default_tier: frontier
+
+rules:
+  # ── 机械型 subagent ──
+  - component: Explore
+    expected_tier: cheap
+    expected_model: claude-haiku-4-5-20251001
+  - component: general-purpose
+    expected_tier: mid
+  - component: workflow-subagent
+    expected_tier: mid
+
+  # ── 决策/咨询 ──
+  - task_type: decision-advisor
+    expected_tier: frontier
+    expected_model: claude-fable-5
+
+  # ── main 线程的交互式研究【方案A】──
+  - component: main
+    task_type: research-explore
+    expected_tier: frontier
+
+  # ── 非 main 的研究类（subagent 里的批量探索）──
+  - task_type: research-explore
+    expected_tier: cheap
+
+  # ── main 默认 ──
+  - component: main
+    expected_tier: frontier
+    expected_model: claude-opus-4-8

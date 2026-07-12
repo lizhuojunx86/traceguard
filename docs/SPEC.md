@@ -1,7 +1,7 @@
 # TraceGuard Integration Specification (English)
 
 > **Status**: translation of [`TRACEGUARD_SPEC.md`](../TRACEGUARD_SPEC.md)
-> Draft v0.2 (2026-05-18). Until v1.0, the Chinese original is authoritative;
+> Draft v0.3 (2026-06-28). Until v1.0, the Chinese original is authoritative;
 > if the two disagree, the original wins.
 >
 > **Type**: interface contract. Any project integrating TraceGuard MUST
@@ -138,6 +138,13 @@ with tracer.span(project, component, operation, *,
 Client wrappers (`wrap_anthropic`, …) are optional implementations and not
 constrained by this spec.
 
+**Failure semantics (MUST).** Instrumentation MUST NOT break the instrumented
+call. Trace persistence is **fail-open** by default — a failure is swallowed and
+logged, never propagated, and on the error path it never replaces the original
+business exception. The implementation MUST also offer an opt-in **fail-closed**
+mode (e.g. a `strict_persistence` flag / `TRACEGUARD_STRICT_PERSISTENCE` env
+var) for backtests where a silently-missing trace could hide an anachronism.
+
 ### 4.2 Model registry queries
 
 ```python
@@ -177,13 +184,17 @@ amendment (it breaks comparability of all historical traces).
 
 ```python
 validate_feature_as_of(input_traces: list, output_feature_as_of) -> None
-validate_model_timing(model_id, feature_as_of, *, strict: bool) -> None
+validate_model_timing(model_id, feature_as_of, *, strict: bool, engine=None) -> None
 validate_reference_timing(valid_from, feature_as_of, *, kind: str) -> None
-assert_replay_set_locked(replay_set_id) -> None   # Phase 2
+assert_replay_set_locked(replay_set_id, *, engine=None) -> None
 ```
 
-All are pure functions that raise on violation — integrators call them
-directly inside pytest.
+`validate_feature_as_of` and `validate_reference_timing` are pure functions.
+`validate_model_timing` (invariant 2) and `assert_replay_set_locked`
+(invariant 4) necessarily read the model_registry / replay_sets store, so they
+take an optional `engine` and are not literally pure; the binding guarantee is
+"no side effects beyond raising and reading the store". All four raise on
+violation and are called directly inside pytest/CI.
 
 ## 5. The four look-ahead-bias invariants
 
