@@ -3,7 +3,7 @@
 See ../TRACEGUARD_SPEC.md for the binding interface contract.
 
 The names re-exported here (and enumerated in ``__all__``) are the **stable
-public API**. From 1.0 they follow SemVer per docs/SPEC.md §6, and the deep
+public API**. Since 1.0 they follow SemVer per docs/SPEC.md §6, and the deep
 submodule paths they come from remain importable as aliases so pinned consumers
 do not break.
 
@@ -18,7 +18,7 @@ this frozen surface — import them from their submodule paths:
 """
 from __future__ import annotations
 
-__version__ = "0.9.0"
+__version__ = "1.0.0"
 
 from traceguard.registry.models import NoEligibleModelError, register_model, select_model
 from traceguard.registry.prompts import PromptTemplate, load_prompt

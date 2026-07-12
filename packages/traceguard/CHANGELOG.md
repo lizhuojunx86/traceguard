@@ -7,6 +7,35 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [1.0.0] - 2026-07-12
+
+The freeze-flip. **Zero functional changes** — no new symbols, no signature
+changes, no behavioural changes; every 0.9.0 test passes unmodified. This
+release turns the contract that 0.8.0–0.9.0 already enforced (SPEC §3–5 MUSTs
+including invariant 4, fail-open instrumentation, the 29-symbol curated surface
+guarded by the required `contract-guard` CI job) into a formal SemVer
+commitment: from this release, breaking any public signature or MUST item
+requires a major version bump (SPEC §6).
+
+Soak evidence behind the flip: two external consumers (`huadian` via the
+guardian bridge, `quant_alpha_v2` via manual spans) writing real traces since
+0.9.0, and a two-week quiet period in which the frozen surface needed zero
+fixes.
+
+### Changed
+
+- Development Status classifier: `3 - Alpha` → `5 - Production/Stable`.
+- SPEC status flipped from Draft to **v1.0** (`TRACEGUARD_SPEC.md` /
+  `docs/SPEC.md`); the SPEC version now tracks the package major. The Chinese
+  original remains authoritative.
+- Doc status lines updated: ROADMAP marks the 1.0 definition as achieved;
+  `INTEGRATING.md` no longer says the SDK is unreleased.
+
+Note: this is the first wheel that ships `traceguard.routing_audit`. It is
+**contract-external and experimental** (off the frozen surface, like
+`exporters.otel` / `contamination` / `loop`) — importing it implies no SemVer
+promise.
+
 ## [0.9.0] - 2026-06-29
 
 Point-in-time instrumentation reaches the wrappers, plus a guardian bridge — the

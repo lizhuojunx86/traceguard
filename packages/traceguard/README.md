@@ -92,7 +92,8 @@ look-ahead invariants, SemVer rules — is in
 
 Implemented: tracer, model/prompt registries, normalizer, all four look-ahead
 invariants (1–4, including locked replay sets), Anthropic + OpenAI wrappers,
-and a frozen public API. Not yet (post-1.0): drift checks + alerts, the full
+and a frozen public API — since 1.0.0 a formal SemVer commitment (SPEC §6).
+Not yet (post-1.0): drift checks + alerts, the full
 replay executor / A-B compare tooling, a CLI, Postgres/TimescaleDB, Voyage
 wrapper — see
 [TRACEGUARD_ROADMAP.md](https://github.com/lizhuojunx86/traceguard/blob/main/TRACEGUARD_ROADMAP.md).

@@ -25,7 +25,7 @@ dependencies = [
 
 具体 tag/SHA 由 traceguard 维护者(本仓库)告知。当前可用基线:
 - `v0.1.0-huadian-baseline`(老 API,只为 huadian 兼容,不推荐新项目使用)
-- 新 SDK 尚未发版(Phase 0 进行中)
+- 新 SDK:PyPI `pip install "traceguard>=1.0"`,或 pin 本仓库 `v1.0.0` tag(公开 API 已按 SPEC §6 SemVer 冻结)
 
 ---
 
