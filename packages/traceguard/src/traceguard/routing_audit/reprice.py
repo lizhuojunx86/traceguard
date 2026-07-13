@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path  # noqa: F401  (kept for parity with sibling CLIs)
+from typing import Any, Callable
 
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session
@@ -55,9 +56,23 @@ def _batch_id() -> str:
 
 
 def reprice_null_costs(
-    db_url: str | None = None, *, write: bool = False, batch_id: str | None = None
+    db_url: str | None = None,
+    *,
+    write: bool = False,
+    batch_id: str | None = None,
+    on_cost_write: Callable[..., Any] | None = None,
 ) -> RepriceStats:
-    """Recompute cost for NULL-cost rows whose model now has a price."""
+    """Recompute cost for NULL-cost rows whose model now has a price.
+
+    ``on_cost_write`` (optional, default None = exactly the old behavior) is
+    invoked once per persisted row AFTER each chunk commits, with keyword args
+    ``trace_id, event_type='deferred_first_write', old_value, new_value,
+    batch_id, reason`` — the audit evidence layer wires this to
+    ``traceguard.audit.record_cost_event`` (CLI: ``--audit``). Post-commit on
+    purpose: events are only recorded for changes that actually landed; a
+    crash in between at worst under-records (verify then flags cost_mismatch).
+    Hook errors propagate — this is an explicit opt-in path, not a hot path.
+    """
     stats = RepriceStats()
     engine = make_engine(db_url)
     ensure_tables(engine)
@@ -107,11 +122,31 @@ def reprice_null_costs(
                 )
             sess.commit()
             stats.written += len(chunk)
+            if on_cost_write is not None:
+                for trace_id, model_id, new_cost in chunk:
+                    on_cost_write(
+                        trace_id=trace_id,
+                        event_type="deferred_first_write",
+                        old_value=None,
+                        new_value=new_cost,
+                        batch_id=stats.batch_id,
+                        reason=f"reprice backfill ({model_id})",
+                    )
     return stats
 
 
-def rollback_reprice(batch_id: str, db_url: str | None = None) -> int:
-    """Restore the logged old cost for every trace in ``batch_id``. Returns count."""
+def rollback_reprice(
+    batch_id: str,
+    db_url: str | None = None,
+    *,
+    on_cost_write: Callable[..., Any] | None = None,
+) -> int:
+    """Restore the logged old cost for every trace in ``batch_id``. Returns count.
+
+    ``on_cost_write`` mirrors :func:`reprice_null_costs`: called post-commit
+    per restored row with ``event_type='rollback'`` (old_value = the reprice
+    value being undone, new_value = the restored prior value).
+    """
     engine = make_engine(db_url)
     ensure_tables(engine)
     with Session(engine) as sess:
@@ -122,6 +157,7 @@ def rollback_reprice(batch_id: str, db_url: str | None = None) -> int:
                 )
             )
         )
+        restored = [(log.trace_id, log.new_cost_usd, log.old_cost_usd) for log in logs]
         for log in logs:
             sess.execute(
                 update(Trace).where(Trace.trace_id == log.trace_id).values(
@@ -130,7 +166,17 @@ def rollback_reprice(batch_id: str, db_url: str | None = None) -> int:
             )
             sess.delete(log)
         sess.commit()
-    return len(logs)
+    if on_cost_write is not None:
+        for trace_id, undone_value, restored_value in restored:
+            on_cost_write(
+                trace_id=trace_id,
+                event_type="rollback",
+                old_value=undone_value,
+                new_value=restored_value,
+                batch_id=batch_id,
+                reason="reprice rollback",
+            )
+    return len(restored)
 
 
 def format_report(stats: RepriceStats, *, wrote: bool) -> str:
@@ -154,14 +200,42 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--db", default=DEFAULT_DB)
     parser.add_argument("--write", action="store_true", help="persist (default: dry-run)")
     parser.add_argument("--rollback", metavar="BATCH_ID", help="restore a reprice batch, then exit")
+    parser.add_argument(
+        "--audit",
+        action="store_true",
+        help="record each cost write as a chained traceguard.audit cost event "
+        "(requires audit enabled on --db)",
+    )
     args = parser.parse_args(argv)
 
+    on_cost_write = None
+    if args.audit:
+        # Lazy import + explicit wiring only when asked for: reprice never
+        # auto-detects the audit layer (importing it must stay side-effect
+        # free and opt-in must stay visible at the call site).
+        from traceguard.audit import is_enabled, record_cost_event
+
+        audit_engine = make_engine(args.db)
+        # Pre-flight BEFORE any write: the hooks fire post-commit, so a
+        # not-enabled failure discovered mid-run would leave cost writes
+        # committed (and a rollback's reprice-log rows deleted) with no
+        # recorded events.
+        if not is_enabled(audit_engine):
+            print(
+                "--audit requires the audit layer to be enabled on this DB first: "
+                f"python -m traceguard.audit enable --db {args.db}"
+            )
+            return 2
+
+        def on_cost_write(**kwargs: Any) -> None:
+            record_cost_event(audit_engine, **kwargs)
+
     if args.rollback:
-        n = rollback_reprice(args.rollback, args.db)
+        n = rollback_reprice(args.rollback, args.db, on_cost_write=on_cost_write)
         print(f"rollback {args.rollback}: restored {n} rows to their prior cost")
         return 0
 
-    stats = reprice_null_costs(args.db, write=args.write)
+    stats = reprice_null_costs(args.db, write=args.write, on_cost_write=on_cost_write)
     print(format_report(stats, wrote=args.write))
     if not args.write:
         print("\n(dry-run — re-run with --write to persist)")
