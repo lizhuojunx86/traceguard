@@ -7,6 +7,48 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [1.1.0] - 2026-07-13
+
+First post-1.0 minor: the **audit evidence layer** (`traceguard.audit`,
+experimental, SPEC §6.6 off-surface opt-in). Purely additive — the frozen
+29-symbol surface, all SPEC MUSTs, the normalize algorithm, and every existing
+signature are untouched; zero new dependencies (stdlib `hashlib`/`json`).
+
+### Added
+
+- `traceguard.audit` submodule (import from the submodule path; NOT on the
+  frozen surface):
+  - **ORM-layer append-only guard** — blocks accidental ORM UPDATE/DELETE
+    (unit-of-work flush, `session.delete`) and `session.execute(update(Trace)
+    ...)`/`delete(Trace)` against `traces`; `cost_usd`-only updates pass (the
+    legal reprice path, SPEC §3.1). Anti-mistake tier only: Core SQL, raw
+    drivers, legacy bulk APIs (`bulk_update_mappings` etc.) and dialect
+    upserts bypass it — documented in docs/audit.md.
+  - **Row hash chain** (`audit_chain_entries`) — every ORM-inserted trace is
+    chained (`sha256(prev_hash || canonical(entry metadata + content))`,
+    `cost_usd` excluded from the envelope, algo v1 frozen by golden tests).
+    `verify_chain()` recomputes the whole chain in two passes and reports
+    BREAK/WARN/GAP findings; `export_anchor()` emits the chain head for
+    external storage. Tamper-EVIDENT, not tamper-proof — without an external
+    anchor, full-chain rewrite and tail truncation are undetectable
+    (docs/audit.md states the exact boundaries).
+  - **Cost event ledger** (`audit_cost_events` + chained entries) — records
+    legal `cost_usd` writes; `verify_chain` cross-checks the live column
+    against the newest chained evidence (`cost_mismatch` WARN).
+  - Deletion tombstones (`record_deletion`), backfill of pre-existing rows at
+    `enable()` (attests state-at-enable-time), `python -m traceguard.audit`
+    CLI (`enable|disable|verify|anchor`).
+  - Fail-open by default per SPEC §4.1 (SAVEPOINT-isolated, bounded retries on
+    head races); opt-in strict mode via `enable(strict=True)` /
+    `TRACEGUARD_AUDIT_STRICT=1`, mirroring `strict_persistence`.
+  - Importing the module has zero side effects; activation is explicit
+    (`enable()` / `attach()`) and scoped to attached engines.
+- `routing_audit.reprice`: optional keyword-only `on_cost_write` callback on
+  `reprice_null_costs()` / `rollback_reprice()` and a `--audit` CLI flag that
+  wires it to `record_cost_event` (default `None` = behavior unchanged).
+- SPEC §6.6 (zh) / §6.1 (en): `traceguard.audit` added to the opt-in
+  extension list. New doc: `docs/audit.md` (honest three-tier threat table).
+
 ## [1.0.0] - 2026-07-12
 
 The freeze-flip. **Zero functional changes** — no new symbols, no signature

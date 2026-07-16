@@ -15,10 +15,12 @@ this frozen surface — import them from their submodule paths:
 - ``traceguard.contamination`` (extra ``traceguard[contamination]`` /
   ``[contamination-hf]``) — training-contamination estimators.
 - ``traceguard.loop`` — self-improvement-loop evidence gating.
+- ``traceguard.audit`` — opt-in tamper-evident audit trail (append-only guard,
+  row hash chain, exportable anchors); see docs/audit.md.
 """
 from __future__ import annotations
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 from traceguard.registry.models import NoEligibleModelError, register_model, select_model
 from traceguard.registry.prompts import PromptTemplate, load_prompt

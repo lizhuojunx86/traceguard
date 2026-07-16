@@ -248,6 +248,16 @@ algorithm, so each is a SemVer **minor**:
   scores attach to a trace via `output_parsed`, **not** via new MUST columns.
 - `traceguard.loop` — evidence-gating helpers for self-improving loops, so only
   evidence traceable before a cutoff is admitted as fact.
+- `traceguard.audit` — opt-in audit evidence layer (experimental, zero new
+  dependencies): an ORM-layer append-only guard (anti-mistake), a row hash
+  chain (tamper-EVIDENT, not tamper-proof — without an externally stored
+  anchor, a full-chain rewrite or tail truncation is undetectable), and an
+  exportable chain-head anchor. The hash envelope **excludes `cost_usd`**
+  (its legal in-place write path, §3.1); cost corrections are evidenced via
+  chained cost events. Importing has no side effects — explicit
+  `enable()/attach()` required; the chain's own failures are fail-open by
+  default (§4.1) with an opt-in strict mode. Honest layering and limits:
+  `docs/audit.md`.
 
 These are integrator-optional: a project may depend on the core contract above
 without installing any of them.

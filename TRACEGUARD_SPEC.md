@@ -359,6 +359,7 @@ assert_replay_set_locked(replay_set_id: str) -> None
 - `traceguard[otel]` — 把 trace 额外导出为 OpenTelemetry / OpenInference (OTLP) span,**附加**于(绝不替换)SQLite/SQLAlchemy 存储。
 - `traceguard[contamination]` — 训练污染估计器(成员推断、regime decay、claim 级检查)。**仅检测**;评分通过 `output_parsed` 挂到 trace,**不**新增 MUST 列。
 - `traceguard.loop` — 自我改进循环的 evidence-gating 辅助:只有 cutoff 之前可溯源的证据才被采纳为事实。
+- `traceguard.audit` — opt-in 审计证据层(实验性,零新增依赖):ORM 层 append-only 守卫(防误写)+ row hash chain(篡改可检测,非防篡改;无外部锚时全链重写/尾部截断不可检测)+ 可导出链头锚点。哈希覆盖字段**排除 `cost_usd`**(§3.1 合法就地补写路径),cost 修正经链内 cost event 记账。`import` 无副作用,须显式 `enable()/attach()`;链自身故障默认 fail-open(§4.1),strict 模式 opt-in。诚实分层与边界见 `docs/audit.md`。
 
 均为接入方可选;项目可只依赖上述核心契约而不安装其中任何一个。
 
