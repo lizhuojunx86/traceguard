@@ -103,7 +103,14 @@ def tg_by_model(db: Path) -> tuple[dict[str, dict], str]:
 
 
 def gap_decomposition(db: Path, live_tree: Path) -> dict:
-    """Classify ingest-logged messages missing from the live tree."""
+    """Classify every ingest-logged message by where it lives now.
+
+    source_file is stored relative to the projects root; classes:
+      live_main      file exists, main transcript (<slug>/<session>.jsonl)
+      live_subagent  file exists, subagent transcript (deeper paths)
+      vanished       file exists but message.id no longer inside it
+      deleted_file   file gone from the live tree
+    """
     con = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
     cur = con.cursor()
     rows = cur.execute(
@@ -144,25 +151,30 @@ def gap_decomposition(db: Path, live_tree: Path) -> dict:
             live_ids_cache[key] = ids
         return live_ids_cache[key]
 
-    stats = {"deleted_file": {"messages": 0, "outputTokens": 0, "files": 0},
-             "vanished": {"messages": 0, "outputTokens": 0, "files": 0},
-             "checked_files": 0}
+    classes = ("live_main", "live_subagent", "vanished", "deleted_file")
+    stats: dict = {c: {"messages": 0, "outputTokens": 0, "files": 0} for c in classes}
+    stats["checked_files"] = 0
     for f, entries in by_file.items():
         stats["checked_files"] += 1
-        p = Path(f)
+        rel = Path(f)
+        p = rel if rel.is_absolute() else live_tree / rel
         if not p.exists():
             stats["deleted_file"]["files"] += 1
             for _, _, tok in entries:
                 stats["deleted_file"]["messages"] += 1
                 stats["deleted_file"]["outputTokens"] += tok
             continue
+        live_cls = "live_main" if len(rel.parts) == 2 else "live_subagent"
         ids = live_ids(p)
-        missing = [(mid, tok) for mid, _, tok in entries if mid not in ids]
-        if missing:
-            stats["vanished"]["files"] += 1
-            for _, tok in missing:
-                stats["vanished"]["messages"] += 1
-                stats["vanished"]["outputTokens"] += tok
+        counted = {live_cls: 0, "vanished": 0}
+        for mid, _, tok in entries:
+            cls = live_cls if mid in ids else "vanished"
+            stats[cls]["messages"] += 1
+            stats[cls]["outputTokens"] += tok
+            counted[cls] += 1
+        for cls, n in counted.items():
+            if n:
+                stats[cls]["files"] += 1
     return stats
 
 
@@ -235,6 +247,7 @@ def main() -> int:
     tg_section = ""
     gap_section = ""
     tg_note = ""
+    gap = None
     if args.db and args.db.exists():
         tg, max_ts = tg_by_model(args.db)
         tg_note = f"DB max invoked_at: {max_ts} — run a full-scan ingest first if stale."
@@ -256,12 +269,16 @@ def main() -> int:
 
         if args.live_tree and args.live_tree.exists():
             gap = gap_decomposition(args.db, args.live_tree)
-            gap_section = "\n## Gap decomposition (why TG > any live-file scan)\n\n" + fmt_table(
+            labels = {
+                "live_main": "live_main (exists, main transcript — what splitrail scans)",
+                "live_subagent": "live_subagent (exists, subagents/** transcript)",
+                "vanished": "vanished (file exists, message.id gone)",
+                "deleted_file": "deleted_file (session file gone)",
+            }
+            gap_section = "\n## Coverage decomposition of the append-only ground truth\n\n" + fmt_table(
                 ["class", "files", "messages", "outputTokens"],
-                [["deleted_file (session file gone)", gap["deleted_file"]["files"],
-                  gap["deleted_file"]["messages"], gap["deleted_file"]["outputTokens"]],
-                 ["vanished (file exists, message.id gone)", gap["vanished"]["files"],
-                  gap["vanished"]["messages"], gap["vanished"]["outputTokens"]]]) + \
+                [[labels[c], gap[c]["files"], gap[c]["messages"], gap[c]["outputTokens"]]
+                 for c in ("live_main", "live_subagent", "vanished", "deleted_file")]) + \
                 f"\n\n{gap['checked_files']} ingest-logged files checked against the live tree.\n"
 
     # ---------------- REPORT.md ----------------
@@ -279,8 +296,9 @@ def main() -> int:
     (o / "REPORT.md").write_text("\n".join(report), encoding="utf-8")
     print(("ALL PASS ✅ " if all_pass else "FAILURES ❌ ") + "-> " + str(o / "REPORT.md"))
 
-    # possible extra finding: per-line records inflating message counts
+    # possible extra findings against ground truth
     overcount_note = ""
+    subagent_note = ""
     if args.db and args.db.exists():
         tg_msgs = totals(tg)["messageCount"]
         sr_msgs = totals(base_new)["messageCount"]
@@ -293,6 +311,20 @@ def main() -> int:
                 f"grow toward the final line) — accounting per line double-counts those "
                 f"partials. Happy to open a separate issue with per-message examples if useful."
             )
+        if gap:
+            lm, ls = gap["live_main"]["messages"], gap["live_subagent"]["messages"]
+            if ls and lm and abs(sr_msgs - lm) <= 0.05 * lm and ls > 0.05 * (lm + ls):
+                subagent_note = (
+                    f"A separate coverage finding while diffing: splitrail's totals match the "
+                    f"*main* transcripts almost exactly ({sr_msgs:,} counted vs {lm:,} "
+                    f"message.id-deduped in `projects/<slug>/<session>.jsonl`), but Claude Code "
+                    f"also writes subagent transcripts under "
+                    f"`projects/<slug>/<sessionId>/subagents/**.jsonl`, which currently hold "
+                    f"{ls:,} additional messages on my machine ({ls/(lm+ls):.0%} of live "
+                    f"messages — Task/Explore/subagent-heavy workflows). If the analyzer's "
+                    f"discovery only globs one level deep, that usage is invisible. I'll open a "
+                    f"separate issue with the layout details — it dwarfs the rewrite drift in $ terms."
+                )
 
     # ---------------- REPLY_DRAFT.md ----------------
     if args.emit_reply:
@@ -321,12 +353,14 @@ def main() -> int:
             "held its totals. That's the regression the fixture pins down. Happy to PR the scripts "
             "(runner + rewrite simulator + assertions) if useful.",
             "",
-            "Ground-truth deltas vs my append-only ingest log are in the tables below — the residual "
-            "gap is fully explained by sessions whose *files were deleted* (which 3.6.0 intentionally "
-            "prunes) plus pre-3.6.0 historical rewrites that no live-file scan can recover.",
+            "Ground-truth deltas vs my append-only ingest log (message.id-keyed, predates both "
+            "versions) are in the tables below, with every logged message classified by where it "
+            "lives now: still in a main transcript, in a subagents/** transcript, vanished from a "
+            "still-existing file, or in a deleted file (which 3.6.0 prunes by design).",
             "",
             "<!-- paste the two tables from REPORT.md here before posting -->",
             "",
+            *( [subagent_note, ""] if subagent_note else [] ),
             *( [overcount_note, ""] if overcount_note else [] ),
             "The audit layer I mentioned is now public: TraceGuard `routing_audit` "
             "(https://github.com/lizhuojunx86/traceguard, v1.1.0 “audit evidence layer”) — an "
