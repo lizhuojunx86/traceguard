@@ -1,0 +1,4 @@
+# Never commit: work/ contains a full copy of private session transcripts.
+work/
+out/
+*.log
