@@ -1,0 +1,15 @@
+# Never commit: drafts, private reply text, and anything derived from real
+# session transcripts. Only the reproducible harness belongs in the repo.
+# Mirrors splitrail-validation/.gitignore.
+work/
+out/
+*.log
+
+# Write-ups and correspondence stay local until published elsewhere.
+# Patterns without a slash match at any depth; anchored ones would not.
+DEVTO_*.md
+ISSUE_DRAFT.md
+PR_BODY.md
+REVIEW_REPLY.md
+STEPS.md
+prepare_pr.sh
