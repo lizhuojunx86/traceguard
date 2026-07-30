@@ -14,7 +14,7 @@
 set -euo pipefail
 
 REPO_URL="https://github.com/davila7/claude-code-templates.git"
-COMMIT="e54d3cdad4896d904442becec570028ba7e878f1"   # 2026-07-24
+COMMIT="67b5a00868aeea73959471b9b52b78817a9e25c6"   # main HEAD 2026-07-30; identical result at e54d3cd (2026-07-24)
 WORK=""
 KEEP=0
 
