@@ -86,6 +86,34 @@ unchanged. Use your dashboard for observability; use TraceGuard to guarantee the
 timeline underneath it. Step-by-step:
 [docs/integrations/otel-langfuse-phoenix.md](docs/integrations/otel-langfuse-phoenix.md).
 
+## Field evidence: `routing_audit`
+
+The opt-in `traceguard.routing_audit` extension applies the same discipline to
+your own agent history: it ingests Claude Code session transcripts
+(`~/.claude/projects/**/*.jsonl`) into an **append-only, `message.id`-keyed**
+trace store, so usage history stops changing underneath you. Claude Code
+rewrites session files in place on resume/compact; anything that recomputes
+totals from live files inherits that drift.
+
+Having a stable reference log turned out to be enough to audit *other* tools.
+Run against [splitrail](https://github.com/Piebald-AI/splitrail), a Rust usage
+tracker for agentic CLIs, it produced two upstream fixes:
+
+| finding | upstream |
+|---|---|
+| Totals drift because resume/compact rewrites live JSONL | [#200](https://github.com/Piebald-AI/splitrail/issues/200) → SQLite history store in 3.6.0 |
+| Subagent transcripts (`<session>/subagents/**`) sit below a depth-2 discovery cap — on this corpus, 54% of live messages and ~1/3 of the spend never entered any total | [#207](https://github.com/Piebald-AI/splitrail/issues/207) → maintainer-authored [#209](https://github.com/Piebald-AI/splitrail/pull/209) in 3.6.1 |
+
+On the subset splitrail scans, 3.6.0 and the audit log agree **token-exact —
+18,548,947 output tokens on both sides** across ~13.5k messages. Two
+independent implementations, different languages, different dedup strategies,
+same number to the digit; that exactness is what turned the remaining gap into
+a nameable defect instead of a rounding argument. The end-to-end regression
+fixture from that work was [merged upstream](https://github.com/Piebald-AI/splitrail/pull/208).
+
+Method and reproduction protocol: [`splitrail-validation/`](splitrail-validation/) ·
+write-up: [An append-only audit log caught two accounting bugs in a 216-star usage tracker](https://dev.to/lizhuojunx86/an-append-only-audit-log-caught-two-accounting-bugs-in-a-216-star-usage-tracker-38co)
+
 ## Install
 
 ```bash
