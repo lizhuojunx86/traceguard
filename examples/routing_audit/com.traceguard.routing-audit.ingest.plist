@@ -5,8 +5,13 @@
     <key>Label</key>
     <string>com.traceguard.routing-audit.ingest</string>
 
+    <!-- Invoke via /bin/bash rather than exec'ing the script directly:
+         when launchd spawns the script as the program (shebang path), uv
+         aborts at startup with "Current directory does not exist" before
+         the ingest runs. The bash wrapper sidesteps that spawn context. -->
     <key>ProgramArguments</key>
     <array>
+        <string>/bin/bash</string>
         <string>__REPO_DIR__/examples/routing_audit/run_ingest.sh</string>
     </array>
 
