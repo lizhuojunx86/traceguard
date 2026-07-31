@@ -11,5 +11,6 @@ DEVTO_*.md
 ISSUE_DRAFT.md
 PR_BODY.md
 REVIEW_REPLY.md
+REPLY_*.md
 STEPS.md
 prepare_pr.sh
