@@ -90,6 +90,16 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         help="append a JSON-line run record (date, new rows, new cost, errors) to PATH",
     )
+    parser.add_argument(
+        "--usage-report-history",
+        nargs="?",
+        const="",
+        default=None,
+        metavar="PATH",
+        help="after the run, append the six-field usage-drift-log record "
+        "(clauderank spec, see routing_audit.usage_report) to PATH "
+        "(default: ~/.usage-report-history.jsonl)",
+    )
     args = parser.parse_args(argv)
 
     if args.rollback:
@@ -117,6 +127,18 @@ def main(argv: list[str] | None = None) -> int:
     print(format_report(stats, wrote=write))
     if args.log_file:
         append_run_log(args.log_file, stats, wrote=write, error=error)
+    if args.usage_report_history is not None:
+        from traceguard.routing_audit.usage_report import emit
+
+        record, warning = emit(
+            args.source, args.db, history_path=args.usage_report_history or None
+        )
+        print(
+            f"usage-report-history: {record['month']} cost_usd={record['cost_usd']} "
+            f"messages={record['messages']} corpus={record['corpus']['files']} files"
+        )
+        if warning:
+            print(f"WARNING: {warning}")
     if write:
         print(f"\ndb: {args.db} (private usage metadata — keep out of version control)")
     else:
