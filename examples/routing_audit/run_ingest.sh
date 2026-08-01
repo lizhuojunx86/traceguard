@@ -12,8 +12,19 @@ REPO="__REPO_DIR__"
 UV="__UV_BIN__"
 
 cd "$REPO/packages/traceguard"
+
+# Self-heal: Python 3.12's site module silently skips .pth files that carry
+# the macOS hidden flag, which orphans the editable install and kills the
+# scheduled run with ModuleNotFoundError (observed 2026-08-01 after a venv
+# rebuild under an iCloud-synced tree). Clearing the flag is a no-op when
+# it is already clear.
+if command -v chflags >/dev/null 2>&1; then
+  chflags nohidden .venv/lib/python*/site-packages/*.pth 2>/dev/null || true
+fi
+
 exec "$UV" run python -m traceguard.routing_audit.ingest \
   --write \
   --since 2d \
   --db "sqlite:///$REPO/traces_routing_audit.db" \
-  --log-file "$REPO/routing_audit_ingest.log"
+  --log-file "$REPO/routing_audit_ingest.log" \
+  --usage-report-history
