@@ -97,12 +97,13 @@ totals from live files inherits that drift.
 
 Having a stable reference log turned out to be enough to audit *other* tools.
 Run against [splitrail](https://github.com/Piebald-AI/splitrail), a Rust usage
-tracker for agentic CLIs, it produced two upstream fixes:
+tracker for agentic CLIs, it has produced three upstream fixes:
 
 | finding | upstream |
 |---|---|
 | Totals drift because resume/compact rewrites live JSONL | [#200](https://github.com/Piebald-AI/splitrail/issues/200) → SQLite history store in 3.6.0 |
 | Subagent transcripts (`<session>/subagents/**`) sit below a depth-2 discovery cap — on this corpus, 54% of live messages and ~1/3 of the spend never entered any total | [#207](https://github.com/Piebald-AI/splitrail/issues/207) → maintainer-authored [#209](https://github.com/Piebald-AI/splitrail/pull/209) in 3.6.1 |
+| Partial streaming snapshots summed per fingerprint, inflating input +62% / cache_read +69% on subagent transcripts (this corpus); inflation ratios predicted from the corpus before the fix branch existed, then matched on every field | [#220](https://github.com/Piebald-AI/splitrail/issues/220) → [#222](https://github.com/Piebald-AI/splitrail/pull/222), corpus-verified and merged the same day |
 
 On the subset splitrail scans, 3.6.0 and the audit log agree **token-exact —
 18,548,947 output tokens on both sides** across ~13.5k messages. Two
@@ -110,6 +111,13 @@ independent implementations, different languages, different dedup strategies,
 same number to the digit; that exactness is what turned the remaining gap into
 a nameable defect instead of a rounding argument. The end-to-end regression
 fixture from that work was [merged upstream](https://github.com/Piebald-AI/splitrail/pull/208).
+
+The same reference log now also emits the cross-tool
+[usage-drift-log](https://github.com/m1kapp/claude-rank/blob/main/docs/usage-drift-log.md)
+record each scheduled run (`--usage-report-history`) — a six-field per-run
+spec published by clauderank after the drift pattern reproduced at
+leaderboard scale ([viberank#83](https://github.com/sculptdotfun/viberank/issues/83));
+`routing_audit` is its second independent implementation.
 
 Method and reproduction protocol: [`splitrail-validation/`](splitrail-validation/) ·
 write-up: [An append-only audit log caught two accounting bugs in a 216-star usage tracker](https://dev.to/lizhuojunx86/an-append-only-audit-log-caught-two-accounting-bugs-in-a-216-star-usage-tracker-38co)
