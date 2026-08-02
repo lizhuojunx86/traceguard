@@ -2,13 +2,15 @@
 # End-to-end check: do tokscale's historical totals survive a Claude Code
 # resume/compact rewrite, or are they recomputed from live files?
 #
-#   ./run_check.sh [--version <npm-version>] [--work <dir>] [--drop <n>] [--keep]
+#   ./run_check.sh [--version <npm-version>] [--bin <path>] [--work <dir>]
+#                  [--drop <n>] [--keep]
 #
-# Installs the published tokscale npm package (pinned version), generates a
-# synthetic Claude Code corpus with a known-exact manifest under an isolated
-# fake $HOME, runs tokscale three times (cold / warm / after an in-place
-# rewrite that removes the last N assistant messages from one transcript),
-# and compares totals.
+# Installs the published tokscale npm package (pinned version) — or, with
+# --bin, uses a binary you built yourself, which is how an unreleased branch
+# or main gets verified. Generates a synthetic Claude Code corpus with a
+# known-exact manifest under an isolated fake $HOME, runs tokscale three
+# times (cold / warm / after an in-place rewrite that removes the last N
+# assistant messages from one transcript), and compares totals.
 #
 # Exit codes: 0 = history frozen (no drift), 1 = drift confirmed, 2 = unexpected.
 #
@@ -19,6 +21,7 @@
 set -euo pipefail
 
 VERSION="4.7.0"   # npm dist-tag "latest" at 2026-07-31
+BIN=""
 WORK=""
 DROP=6
 KEEP=0
@@ -26,10 +29,11 @@ KEEP=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --version) VERSION="$2"; shift 2 ;;
+    --bin) BIN="$2"; shift 2 ;;
     --work) WORK="$2"; shift 2 ;;
     --drop) DROP="$2"; shift 2 ;;
     --keep) KEEP=1; shift ;;
-    -h|--help) sed -n '2,17p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -44,12 +48,18 @@ HOME_DIR="$WORK/fake-home"
 
 echo "==> work dir: $WORK"
 
-if [[ ! -x "$WORK/node_modules/.bin/tokscale" ]]; then
-  echo "==> installing tokscale@$VERSION"
-  (cd "$WORK" && npm init -y >/dev/null 2>&1 \
-    && npm install --no-save --silent "tokscale@$VERSION" >/dev/null)
+if [[ -n "$BIN" ]]; then
+  [[ -x "$BIN" ]] || { echo "--bin is not executable: $BIN" >&2; exit 2; }
+  TOKSCALE="$(cd "$(dirname "$BIN")" && pwd)/$(basename "$BIN")"
+  echo "==> using binary: $TOKSCALE ($("$TOKSCALE" --version 2>/dev/null || echo 'version unknown'))"
+else
+  if [[ ! -x "$WORK/node_modules/.bin/tokscale" ]]; then
+    echo "==> installing tokscale@$VERSION"
+    (cd "$WORK" && npm init -y >/dev/null 2>&1 \
+      && npm install --no-save --silent "tokscale@$VERSION" >/dev/null)
+  fi
+  TOKSCALE="$WORK/node_modules/.bin/tokscale"
 fi
-TOKSCALE="$WORK/node_modules/.bin/tokscale"
 
 echo "==> generating corpus"
 rm -rf "$HOME_DIR"
