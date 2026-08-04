@@ -122,6 +122,13 @@ leaderboard scale ([viberank#83](https://github.com/sculptdotfun/viberank/issues
 Method and reproduction protocol: [`splitrail-validation/`](splitrail-validation/) ·
 write-up: [An append-only audit log caught two accounting bugs in a 216-star usage tracker](https://dev.to/lizhuojunx86/an-append-only-audit-log-caught-two-accounting-bugs-in-a-216-star-usage-tracker-38co)
 
+The same protocol pointed at
+[claude-code-templates](https://github.com/davila7/claude-code-templates)
+(30k★) found the opposite sign — a 2.36× over-count, fix submitted as
+[PR #754](https://github.com/davila7/claude-code-templates/pull/754):
+[`usage-tracker-audit/cct-dedup-check/`](usage-tracker-audit/cct-dedup-check/) ·
+write-up: [The vendor documents this bug. A 30k-star repo shipped it anyway.](https://dev.to/lizhuojunx86/the-vendor-documents-this-bug-a-30k-star-repo-shipped-it-anyway-27pb)
+
 ## Install
 
 ```bash

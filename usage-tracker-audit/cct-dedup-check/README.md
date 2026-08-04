@@ -9,6 +9,10 @@ Answer at commit `e54d3cd` (2026-07-24): once per line. On a synthetic corpus
 whose exact totals are known, every reported field equals the per-line sum to
 the token — 2.36× the ground truth for input+output.
 
+Write-up: [The vendor documents this bug. A 30k-star repo shipped it
+anyway.](https://dev.to/lizhuojunx86/the-vendor-documents-this-bug-a-30k-star-repo-shipped-it-anyway-27pb)
+· Upstream fix: [PR #754](https://github.com/davila7/claude-code-templates/pull/754)
+
 ## Why the corpus looks the way it does
 
 Claude Code writes one assistant *message* as several JSONL *lines* — one per
@@ -79,14 +83,19 @@ The reported `messagesWithUsage` (1,308) is itself the line count rather than
 the message count (540) — the same discrepancy, visible without any external
 reference.
 
-Upstream report: [`ISSUE_DRAFT.md`](ISSUE_DRAFT.md).
+Upstream report: [PR #754](https://github.com/davila7/claude-code-templates/pull/754).
 
 ## Context
 
 Part of a small audit series run from TraceGuard's `routing_audit` module — an
 append-only, `message.id`-keyed ingest of Claude Code transcripts used as a
-stable reference log. The same method produced two upstream fixes in
-[splitrail](https://github.com/Piebald-AI/splitrail)
+stable reference log. The same method has produced four shipped upstream
+fixes — three in [splitrail](https://github.com/Piebald-AI/splitrail)
 ([#200](https://github.com/Piebald-AI/splitrail/issues/200),
-[#207](https://github.com/Piebald-AI/splitrail/issues/207), both shipped in
-3.6.1); see [`../../splitrail-validation/`](../../splitrail-validation/).
+[#207](https://github.com/Piebald-AI/splitrail/issues/207),
+[#220](https://github.com/Piebald-AI/splitrail/issues/220)) and one in
+[tokscale](https://github.com/junhoyeo/tokscale)
+([#994](https://github.com/junhoyeo/tokscale/issues/994), shipped in
+[v4.9.0](https://github.com/junhoyeo/tokscale/releases/tag/v4.9.0)); see
+[`../../splitrail-validation/`](../../splitrail-validation/) and
+[`../tokscale-drift-check/`](../tokscale-drift-check/).
