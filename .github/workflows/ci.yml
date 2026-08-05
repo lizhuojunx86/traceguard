@@ -74,11 +74,18 @@ jobs:
         run: uv run ruff format --check .
 
   # Freeze guard: the tests that mechanically enforce the 1.0 contract — the
-  # frozen public surface (__all__, 28 symbols), the normalizer golden hashes,
+  # frozen public surface (__all__, 29 symbols), the normalizer golden hashes,
   # and the four look-ahead invariants. Fast and zero-tolerance; intended to be a
   # REQUIRED status check on main so the freeze is enforced by mechanism, not
   # convention. A change that needs to touch these must do so deliberately (and,
   # for __all__ / golden, accept it is a major break).
+  #
+  # The README claim guard rides along here rather than in an advisory job: for
+  # a tool that sells "your claims should match what was actually true", the
+  # README advertising a capability the code does not have is a contract defect,
+  # not a docs nit. It once drifted five releases behind (invariant 4 read
+  # "planned" for four minors after it shipped) precisely because nothing
+  # enforced it.
   contract-guard:
     runs-on: ubuntu-22.04
     defaults:
@@ -103,6 +110,7 @@ jobs:
           tests/test_normalizer_golden.py
           tests/test_validators_lookahead.py
           tests/test_validators_replay_lock.py
+          tests/test_readme_claims.py
 
   # Real open-weight backend: install the contamination-hf extra (CPU torch) and
   # run the RUN_HF-gated tests for real, so MIN-K% / Min-K%++ on a tiny model is

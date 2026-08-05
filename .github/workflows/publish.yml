@@ -1,0 +1,155 @@
+name: Publish traceguard to PyPI
+
+# Tag-triggered release for the `traceguard` SDK (packages/traceguard).
+# The root `pipeline-guardian` package is frozen and never published.
+#
+# Uses PyPI Trusted Publishing (OIDC) — no long-lived API token lives in this
+# repo or in anyone's shell history. For an audit tool, the provenance of its
+# own artifacts is part of the product claim.
+#
+# One-time setup on PyPI (Manage project -> Publishing -> Add a new publisher):
+#   Owner: lizhuojunx86 · Repository: traceguard
+#   Workflow: publish.yml · Environment: pypi
+#
+# The manual path in docs/RELEASING.md stays valid as a fallback until a
+# release has gone through this workflow end to end.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to build and publish (e.g. 1.2.0)"
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: packages/traceguard
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
+      - name: Resolve the target version
+        id: resolve
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            version="${{ inputs.version }}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "target version: $version"
+
+      # RELEASING.md step 1 is "bump the version in both places (they must
+      # match)". Checking it by hand is exactly the kind of step that gets
+      # skipped on the release that matters.
+      - name: Version agreement (tag == pyproject == __version__)
+        run: |
+          version="${{ steps.resolve.outputs.version }}"
+          pyproject=$(grep -m1 '^version = ' pyproject.toml | cut -d'"' -f2)
+          dunder=$(grep -m1 '^__version__ = ' src/traceguard/__init__.py | cut -d'"' -f2)
+          echo "tag=$version  pyproject=$pyproject  __version__=$dunder"
+          if [ "$version" != "$pyproject" ] || [ "$version" != "$dunder" ]; then
+            echo "::error::version mismatch — tag/pyproject/__version__ must agree"
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: uv sync --python 3.12
+
+      - name: Run the SDK test suite
+        run: uv run pytest -q
+
+      # Guard against the two build hazards this repo has actually hit:
+      # macOS iCloud-style "foo 2.py" sync duplicates getting swept into the
+      # sdist, and `uv build` resolving to the wrong project in this two-package
+      # repo (it must produce traceguard-*, never pipeline_guardian-*).
+      - name: Reject sync-duplicate source files
+        run: |
+          dupes=$(find src -name "* [0-9].py" -print)
+          if [ -n "$dupes" ]; then
+            echo "::error::sync-duplicate files would ship in the sdist:"
+            echo "$dupes"
+            exit 1
+          fi
+
+      - name: Build
+        run: uv build
+
+      - name: Verify the artifacts
+        run: |
+          version="${{ steps.resolve.outputs.version }}"
+          ls -l dist/
+          if ls dist/ | grep -q 'pipeline_guardian'; then
+            echo "::error::uv build produced pipeline_guardian artifacts — wrong project"
+            exit 1
+          fi
+          for f in "dist/traceguard-$version-py3-none-any.whl" "dist/traceguard-$version.tar.gz"; do
+            [ -f "$f" ] || { echo "::error::missing expected artifact: $f"; exit 1; }
+          done
+          # Stale artifacts from an earlier build must not ride along.
+          count=$(ls dist/ | wc -l)
+          [ "$count" -eq 2 ] || { echo "::error::dist/ holds $count files, expected exactly 2"; exit 1; }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: packages/traceguard/dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-22.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/traceguard
+    permissions:
+      id-token: write # required for Trusted Publishing; no token secret involved
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  verify:
+    needs: [build, publish]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Setup uv
+        uses: astral-sh/setup-uv@v3
+
+      # RELEASING.md step 6: the simple index refreshes faster than the JSON API.
+      - name: Install from PyPI and check the version round-trips
+        run: |
+          version="${{ needs.build.outputs.version }}"
+          for i in $(seq 1 10); do
+            if curl -sf "https://pypi.org/simple/traceguard/" | grep -q "traceguard-$version.tar.gz"; then
+              echo "index has $version"
+              break
+            fi
+            echo "waiting for the index to refresh ($i/10)"
+            sleep 15
+          done
+          installed=$(uv run --no-project --with "traceguard==$version" \
+            python -c "import traceguard; print(traceguard.__version__)")
+          echo "installed: $installed"
+          [ "$installed" = "$version" ] || { echo "::error::installed $installed != $version"; exit 1; }
