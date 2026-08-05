@@ -137,6 +137,13 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v3
 
+      # The runner's default interpreter is 3.10, below the package's >=3.11
+      # floor, so the install must name a version explicitly. (Learned the hard
+      # way on the 1.1.1 release: build and publish succeeded, this job failed
+      # to resolve.)
+      - name: Install Python 3.12
+        run: uv python install 3.12
+
       # RELEASING.md step 6: the simple index refreshes faster than the JSON API.
       - name: Install from PyPI and check the version round-trips
         run: |
@@ -149,7 +156,7 @@ jobs:
             echo "waiting for the index to refresh ($i/10)"
             sleep 15
           done
-          installed=$(uv run --no-project --with "traceguard==$version" \
+          installed=$(uv run --no-project --python 3.12 --with "traceguard==$version" \
             python -c "import traceguard; print(traceguard.__version__)")
           echo "installed: $installed"
           [ "$installed" = "$version" ] || { echo "::error::installed $installed != $version"; exit 1; }
