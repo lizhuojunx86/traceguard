@@ -69,12 +69,42 @@ def heading_anchors(markdown: str) -> set[str]:
     return set(found)
 
 
+# Directories that hold copies of documents rather than documents. `git
+# ls-files` already excludes them; the walk fallback has to do it by name.
+_WALK_SKIP = {
+    ".git",
+    ".venv",
+    "venv",
+    "node_modules",
+    "build",
+    "dist",
+    "splitrail-validation",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    "__pycache__",
+    "htmlcov",
+}
+
+
 def tracked_markdown() -> list[Path]:
-    """Only files git actually ships. Vendored working copies are not docs."""
-    out = subprocess.run(
-        ["git", "ls-files", "*.md"], cwd=ROOT, capture_output=True, text=True, check=True
-    )
-    return [ROOT / line for line in out.stdout.splitlines() if line]
+    """Only files git actually ships. Vendored working copies are not docs.
+
+    Falls back to a filesystem walk when git is unavailable: run from an
+    unpacked sdist there is no `.git`, and `git ls-files` exits 128.
+    """
+    try:
+        out = subprocess.run(
+            ["git", "ls-files", "*.md"], cwd=ROOT, capture_output=True, text=True, check=True
+        )
+        paths = [ROOT / line for line in out.stdout.splitlines() if line]
+        if paths:
+            return paths
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        pass
+    return [
+        p for p in sorted(ROOT.rglob("*.md")) if not _WALK_SKIP & set(p.relative_to(ROOT).parts)
+    ]
 
 
 # `](target#anchor)` — target may be empty, meaning "this same file".
