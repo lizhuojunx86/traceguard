@@ -88,6 +88,45 @@ unchanged. Use your dashboard for observability; use TraceGuard to guarantee the
 timeline underneath it. Step-by-step:
 [docs/integrations/otel-langfuse-phoenix.md](docs/integrations/otel-langfuse-phoenix.md).
 
+## Field evidence: the measurement this project started from
+
+TraceGuard exists because of one number. Polling a commercial fundamentals feed
+against a live trading strategy's own logs over four months of 2026, **41.4% of
+`epsActual` values differed between the value the vendor served first and the
+value it serves now, and 15.3% differed enough to flip a long-entry decision**.
+Those are the two numbers quoted in this README's sibling project and in the
+case study, so the record set behind them is published and the arithmetic runs
+in one command with no dependencies and no vendor account:
+
+```console
+$ python analysis/eps_revision.py
+```
+
+It prints N, the capture window, both rates with 95% Wilson intervals, the
+magnitude distribution, and a nine-point sweep showing what the flip rate would
+have been at other decision thresholds. It also re-verifies every row against
+its digest pair and exits non-zero if anything disagrees.
+
+Three things worth knowing before quoting the number:
+
+- **The capture cannot be re-run.** A first-seen vendor value is gone once it is
+  overwritten; there is no vintage endpoint. What ships is the record captured
+  at the time plus the code that turns it into the statistic, not a script that
+  pretends it can go back and collect it again.
+- **The raw values are not published**, because the vendor's terms forbid
+  redistributing data "contained in or derived from" the service. Each record
+  carries a keyed digest of each value, whether they differ, the direction and a
+  coarse magnitude bucket. That is enough to recompute 41.4% and not enough to
+  reconstruct anything the vendor sells.
+- **A second, better-designed capture gives 18.6% and 4.6%**, over a broader
+  universe and a much shorter post-print horizon. It is published in the same
+  directory. Neither number is hidden behind the other.
+
+Method, decision-flip definition, and a twelve-item limitations section:
+[docs/eps-revision-methodology.md](docs/eps-revision-methodology.md) ·
+narrative: [docs/case-studies/fmp-revision.md](docs/case-studies/fmp-revision.md)
+([中文](docs/case-studies/fmp-revision.zh.md))
+
 ## Field evidence: `routing_audit`
 
 The opt-in `traceguard.routing_audit` extension applies the same discipline to
@@ -277,6 +316,11 @@ This repo hosts two Python packages:
 Pipeline Guardian's full documentation is in
 [docs/pipeline-guardian.md](docs/pipeline-guardian.md). The two packages
 share no imports and release independently.
+
+[`analysis/`](analysis/) belongs to neither. It holds the published evidence for
+the `epsActual` revision claim — the disclosure dataset, the script that
+recomputes the two headline rates from it, and the builder that produced it from
+the private captures.
 
 ## Development
 
