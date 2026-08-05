@@ -78,21 +78,32 @@ A1 是修一次,A3 是防复发——而且形态上正好是 TraceGuard 自己�
 它的门槛结构是反的,这正是价值所在——采纳 SDK 要改代码、要信任、要长期维护,是全链条最贵的一步;
 而"我用真实数据发现了你的统计错误"对方只需看一眼 issue。**先建立方法论可信度,再谈工具采纳。**
 
-### B1. tokscale `input` 估算 issue(最近的下一步)
+### B1. tokscale `input` 估算(已发,待推动)
 
-`usage-tracker-audit/tokscale-drift-check/ISSUE_DRAFT_input_estimate.md` 已成稿且**被上游 junhoyeo 在 #1008 主动邀请**
-("deserves its own issue rather than a rider here")——这是转化率最高的一类线索,不要放凉。
+> 本节初稿把 B1 写成"待发 issue"。核实后更正:issue 早已发出。
 
-草稿自带的前置条件:**对当前 main 重测,更新 sha 与数字**(现基于 `9ceae64`,1,618 transcripts,84% 估算占比,6.26× 膨胀)。
+实际状态(2026-08-05 核实):
 
-**动作**:重测 → 更新数字 → 以 lizhuojunx86 发布。
-**验收**:issue 已发,并记录上游回应。
+- **已于 2026-08-03 发出为 [#1011](https://github.com/junhoyeo/tokscale/issues/1011)**,由 junhoyeo 在 #1008 主动邀请单开
+  ("deserves its own issue rather than a rider here")。**OPEN,零评论,两天无回应。**
+- 因此 B1 不是"发 issue",而是"推动一个沉默的 issue"。
 
-### B2. 在途项跟进
+**已完成(2026-08-05)**:在当前 main `fc7b26f`(含 #1038)上用新语料独立重测,缺陷完全成立且比例更高——
+1,504 transcripts,估算占报告 `input` 的 **87.6%**(8.09× 膨胀),其余字段逐一 byte-identical;
+独立机制预测与实测相差 **0.010%**。Harness 与两次测量已归档:
+[`usage-tracker-audit/tokscale-input-estimate-check/`](usage-tracker-audit/tokscale-input-estimate-check/)。
 
-- cct PR #754 —— 待合,跟进合并状态
-- tokscale #994 —— 已有 `REPLY_994_release.md` / `REPLY_994_verification.md` 两份回复稿,按上游动态发出
-- CCUM #226 —— 第三方已接力,观察是否需要补充证据
+**待办**:跟进评论已成稿(`FOLLOWUP_1011.md`),等确认后以 lizhuojunx86 发出。
+**验收**:评论已发,并记录上游回应。
+
+### B2. 在途项跟进(2026-08-05 核实)
+
+- **tokscale #994 已 CLOSED** —— drift 问题由 maintainer 自己的 PR #1008
+  ("keep Claude turns a transcript rewrite dropped")修复并合并。**这条线已闭环**,
+  是继 splitrail #200/#207/#220 之后的第四次上游采纳。
+- **cct PR #754 仍 OPEN** —— Greptile 给了 5/5 "safe to merge",最后一次动静是 2026-07-25 自己的回复,
+  此后 11 天 maintainer 沉默。属于需要礼貌 ping 的状态,不是需要补证据的状态。
+- CCUM —— 第三方已接力,观察是否需要补充证据。
 
 ### B3. 方法论沉淀(低优先,机会性)
 
