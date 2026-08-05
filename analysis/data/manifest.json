@@ -1,0 +1,177 @@
+{
+  "schema_version": 1,
+  "built_on": "2026-08-05",
+  "pepper_sha256": "c78370af63a965302a17b536d43657d9a64217e0d046d47cdb4cd91f8bca3ae0",
+  "decision_rule": {
+    "surprise_pct": "(eps_actual - eps_estimated) / abs(eps_estimated) * 100",
+    "threshold_v3": 2.0,
+    "threshold_v5": 10.0,
+    "router": "V3 when first-seen analyst count <= 1, else V5",
+    "tradeable": "surprise_pct > threshold (long only)",
+    "flipped": "tradeable(first_seen) != tradeable(final)",
+    "analyst_count_source": "first-seen snapshot, used for both legs",
+    "plausible_abs_eps": 50.0
+  },
+  "datasets": [
+    {
+      "id": "qt_pit_2026h1",
+      "role": "headline",
+      "file": "eps_revision_qt_pit_2026h1.csv",
+      "rows": 2163,
+      "sha256": "ff8a962a8977a5e7d9baa2a61bcbee2ff8a8d97c3c90b3f829f106f63c5a8a3b",
+      "capture_window": "2026-02-03..2026-06-03",
+      "final_reference": "FMP-current snapshot pulled 2026-06-04",
+      "first_seen_source": "quant_trade PEAD autopilot rotated logs, ~11 min poll, two accounts; first-day modal value per episode",
+      "threshold_sensitivity": [
+        {
+          "threshold_v3": 0.0,
+          "threshold_v5": 0.0,
+          "production": false,
+          "flipped": 419,
+          "rate": 0.1937
+        },
+        {
+          "threshold_v3": 1.0,
+          "threshold_v5": 5.0,
+          "production": false,
+          "flipped": 381,
+          "rate": 0.1761
+        },
+        {
+          "threshold_v3": 2.0,
+          "threshold_v5": 5.0,
+          "production": false,
+          "flipped": 381,
+          "rate": 0.1761
+        },
+        {
+          "threshold_v3": 2.0,
+          "threshold_v5": 10.0,
+          "production": true,
+          "flipped": 332,
+          "rate": 0.1535
+        },
+        {
+          "threshold_v3": 2.0,
+          "threshold_v5": 15.0,
+          "production": false,
+          "flipped": 290,
+          "rate": 0.1341
+        },
+        {
+          "threshold_v3": 2.0,
+          "threshold_v5": 20.0,
+          "production": false,
+          "flipped": 256,
+          "rate": 0.1184
+        },
+        {
+          "threshold_v3": 3.0,
+          "threshold_v5": 10.0,
+          "production": false,
+          "flipped": 333,
+          "rate": 0.154
+        },
+        {
+          "threshold_v3": 5.0,
+          "threshold_v5": 10.0,
+          "production": false,
+          "flipped": 335,
+          "rate": 0.1549
+        },
+        {
+          "threshold_v3": 5.0,
+          "threshold_v5": 25.0,
+          "production": false,
+          "flipped": 239,
+          "rate": 0.1105
+        }
+      ]
+    },
+    {
+      "id": "forward_poll_2026h2",
+      "role": "independent replication, shorter horizon",
+      "file": "eps_revision_forward_poll_2026h2.csv",
+      "rows": 5850,
+      "sha256": "f139358743bedc6bbb3f332e889dc4973e01929366044e6322cdce9b220487ab",
+      "capture_window": "2026-06-05..2026-08-05",
+      "final_reference": "latest value seen inside the polling window",
+      "first_seen_source": "vintage forward poller, hourly, value-tuple triggered, FMP earnings calendar universe, [-7d, +14d] around report date",
+      "threshold_sensitivity": [
+        {
+          "threshold_v3": 0.0,
+          "threshold_v5": 0.0,
+          "production": false,
+          "flipped": 262,
+          "rate": 0.0448
+        },
+        {
+          "threshold_v3": 1.0,
+          "threshold_v5": 5.0,
+          "production": false,
+          "flipped": 267,
+          "rate": 0.0456
+        },
+        {
+          "threshold_v3": 2.0,
+          "threshold_v5": 5.0,
+          "production": false,
+          "flipped": 273,
+          "rate": 0.0467
+        },
+        {
+          "threshold_v3": 2.0,
+          "threshold_v5": 10.0,
+          "production": true,
+          "flipped": 268,
+          "rate": 0.0458
+        },
+        {
+          "threshold_v3": 2.0,
+          "threshold_v5": 15.0,
+          "production": false,
+          "flipped": 264,
+          "rate": 0.0451
+        },
+        {
+          "threshold_v3": 2.0,
+          "threshold_v5": 20.0,
+          "production": false,
+          "flipped": 257,
+          "rate": 0.0439
+        },
+        {
+          "threshold_v3": 3.0,
+          "threshold_v5": 10.0,
+          "production": false,
+          "flipped": 270,
+          "rate": 0.0462
+        },
+        {
+          "threshold_v3": 5.0,
+          "threshold_v5": 10.0,
+          "production": false,
+          "flipped": 268,
+          "rate": 0.0458
+        },
+        {
+          "threshold_v3": 5.0,
+          "threshold_v5": 25.0,
+          "production": false,
+          "flipped": 251,
+          "rate": 0.0429
+        }
+      ]
+    }
+  ],
+  "not_published": [
+    "eps_actual",
+    "eps_estimated",
+    "revenue_actual",
+    "revenue_estimated",
+    "num_analysts_eps",
+    "grades_count",
+    "lastUpdated"
+  ],
+  "license_note": "Underlying values are FMP proprietary data; ToS 2.6.1(i) forbids distributing data 'contained in or derived from The Services'. Only keyed digests, booleans and coarse buckets are released."
+}

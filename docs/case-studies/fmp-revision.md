@@ -38,6 +38,16 @@ final.
 the ~73% / ~82% retention pair is as of the 2026-06-05 run and the FINAL leg
 drifts — see the editor's note above.)*
 
+**Check the two headline numbers yourself.** The 2,163-record set behind them
+ships in [`analysis/data/`](../../analysis/data/), with the values replaced by
+keyed digests and buckets so nothing of the vendor's is redistributed. Run
+`python analysis/eps_revision.py` for the rates, the confidence intervals and a
+threshold sweep. The exact definition of "flips a tradeable decision", and a
+twelve-item list of everything that could be wrong with the measurement, are in
+[the methodology doc](../eps-revision-methodology.md). A second, later capture
+over a broader universe and a shorter horizon gives 18.6% / 4.6%; it is
+published alongside and the difference is explained there.
+
 ---
 
 ## The setup
