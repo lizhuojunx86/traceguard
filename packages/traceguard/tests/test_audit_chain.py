@@ -222,6 +222,49 @@ def test_concurrent_first_enable_is_race_tolerant(tmp_path) -> None:
         audit.detach(eng)
 
 
+def test_concurrent_first_enable_survives_many_racers(tmp_path) -> None:
+    """Wider version of the two-thread race above, on a fresh DB each round.
+
+    ``create_all`` walks several tables and the walk is not atomic, so two
+    racers can lose to each other on *different* tables in turn: A creates t1
+    while B fails on t1, B retries and reaches t2 just as A gets there. A
+    single retry does not survive that second collision.
+
+    The interleaving is narrow — the two-thread test passed 30/30 locally while
+    failing on a slower CI runner — so this one widens it with more racers and
+    more rounds. It reds reliably against a single-retry implementation.
+    """
+    import threading
+
+    rounds = 12
+    racers = 8
+    errors: list[Exception] = []
+
+    for round_index in range(rounds):
+        url = f"sqlite:///{tmp_path / f'race-{round_index}.db'}"
+        engines = [make_engine(url) for _ in range(racers)]
+        barrier = threading.Barrier(racers)
+
+        def go(eng: Engine) -> None:
+            try:
+                barrier.wait()
+                audit.enable(eng, backfill=False)
+            except Exception as exc:  # noqa: BLE001
+                errors.append(exc)
+
+        threads = [threading.Thread(target=go, args=(e,)) for e in engines]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        for eng in engines:
+            assert audit.is_enabled(eng)
+            audit.detach(eng)
+
+    assert errors == [], f"{len(errors)} racer(s) failed, first: {errors[0]!r}"
+
+
 def test_is_enabled(engine: Engine) -> None:
     assert not audit.is_enabled(engine)  # tables don't even exist
     audit.enable(engine, backfill=False)
