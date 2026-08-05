@@ -1,7 +1,10 @@
-# Draft — reply to weltern's Clawdmeter v3.0.0 post (r/ClaudeAI, 1vfe9s9)
+# Draft — reply to weltern's Clawdmeter v3.0.0 post
 
-Status: draft, not posted. Measured 2026-08-05 against Clawdmeter at HEAD of
-`main` (clone date 2026-08-05), corpus seed 20260805.
+Target: https://www.reddit.com/r/ClaudeAI/comments/1vfe9s9/ (crossposts:
+r/ClaudeCode `1vfm1iy`, r/BuildWithClaude `1vfm15u` — reply on r/ClaudeAI only).
+
+Post this **after** the GitHub issue exists. Status: draft, not posted.
+Measured 2026-08-05 against Clawdmeter `7dd0b7b` (v3.0.0).
 
 ---
 
@@ -40,17 +43,17 @@ Fix is a few lines at each of the three sites, collapse by `message.id` before
 summing. The check that needs no corpus: the number of usage events should equal
 the number of distinct message ids, not the number of records.
 
-Happy to open an issue with the repro. It's self-contained, runs in about a
-minute, builds a synthetic $HOME and touches nothing in your real `~/.claude`.
+I opened an issue on the repo with the repro, since CONTRIBUTING asks for that
+first. It's self-contained, runs in about a minute, builds a synthetic $HOME and
+touches nothing in your real `~/.claude`.
 
 ---
 
 ## Notes for me
 
-- Reply is on weltern's post, not on the removed link post. No dev.to link in
-  the body — keep it a GitHub/measurement conversation, avoid the filter that
-  ate 1vfb2i1.
-- Follow-up if he engages: file the issue with `check_clawdmeter.py` +
-  `gen_corpus.py`, same shape as splitrail #220 and tokscale #994.
-- Fourth tracker in the series if it lands. Also the first one measured by
-  driving the vendor's own functions rather than a fixture of mine.
+- No dev.to link in the body — keep it a GitHub/measurement conversation and
+  avoid whatever filter ate 1vfb2i1.
+- No issue number in the text, so nothing to edit after filing.
+- Follow-up if he engages: offer the PR (three sites, namespaced key, one test).
+- Fourth tracker in the series if it lands, and the first measured by driving
+  the tool's own functions rather than a fixture of mine.
