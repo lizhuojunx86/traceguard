@@ -21,7 +21,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Boolean, Integer, String, Text
+from sqlalchemy import Boolean, Integer, String, Text, inspect
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -136,6 +136,15 @@ class AuditCostEvent(AuditBase):
     occurred_at: Mapped[datetime] = mapped_column(UTCDateTime(), nullable=False, default=_utcnow)
 
 
+_CREATE_ATTEMPTS = 4
+
+
+def _audit_tables_present(engine: Engine) -> bool:
+    """True when every audit table exists, whoever created it."""
+    existing = set(inspect(engine).get_table_names())
+    return all(name in existing for name in AuditBase.metadata.tables)
+
+
 def ensure_audit_tables(engine: Engine) -> None:
     """Create the audit tables if missing (idempotent, additive-only).
 
@@ -145,9 +154,25 @@ def ensure_audit_tables(engine: Engine) -> None:
 
     Concurrency: ``create_all``'s exists-check races a concurrent creator
     (TOCTOU) — e.g. two processes calling ``enable()`` at once. The loser sees
-    "table already exists"; one retry then confirms the tables are there.
+    "table already exists".
+
+    A single retry is not enough, because ``create_all`` walks several tables
+    and the walk is not atomic. Two racers can lose to each other on different
+    tables in turn: A creates t1 while B fails on t1, B retries and starts t2
+    just as A gets there, and the second collision escapes an except-block that
+    only wraps one retry. That is rare enough to pass locally and still surface
+    on a slower CI runner.
+
+    So retry in a loop, and treat "every table is now present" as success no
+    matter which racer created which table — that is the postcondition this
+    function actually promises.
     """
-    try:
-        AuditBase.metadata.create_all(engine)
-    except (OperationalError, ProgrammingError):
-        AuditBase.metadata.create_all(engine)
+    for attempt in range(_CREATE_ATTEMPTS):
+        try:
+            AuditBase.metadata.create_all(engine)
+            return
+        except (OperationalError, ProgrammingError):
+            if _audit_tables_present(engine):
+                return
+            if attempt == _CREATE_ATTEMPTS - 1:
+                raise

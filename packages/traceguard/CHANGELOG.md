@@ -7,6 +7,36 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [1.1.1] - 2026-08-05
+
+Patch: a concurrency fix in the audit evidence layer. No contract change — the
+frozen 29-symbol surface, all SPEC MUSTs, the normalize algorithm and the chain
+hash algorithm (v1) are untouched, and no dependency was added.
+
+### Fixed
+
+- `traceguard.audit.enable()` could raise `OperationalError: table
+  audit_chain_entries already exists` when several processes reached the
+  **first** `enable()` on the same database at the same time.
+
+  `ensure_audit_tables` handled the TOCTOU race with a single retry, on the
+  assumption that whoever loses the race re-runs `create_all` and finds
+  everything present. That assumption misses the case that actually bites:
+  `create_all` walks several tables and the walk is not atomic, so two racers
+  can lose to each other on *different* tables in turn — A creates `t1` while
+  B fails on `t1`; B retries and reaches `t2` just as A gets there. The second
+  collision escapes an except-block that only wraps one retry.
+
+  Now retries in a bounded loop and treats "every audit table is present" as
+  success regardless of which racer created which table, which is the
+  postcondition the function actually promises.
+
+  The window is narrow — the existing two-thread regression test passes 30/30
+  locally and still surfaced the failure once on a slower CI runner. Covered by
+  a new higher-concurrency test (8 racers × 12 rounds) that reds reliably
+  against the single-retry implementation; the original two-thread test is
+  unchanged.
+
 ## [1.1.0] - 2026-07-13
 
 First post-1.0 minor: the **audit evidence layer** (`traceguard.audit`,

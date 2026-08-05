@@ -283,7 +283,7 @@ share no imports and release independently.
 ```bash
 # SDK
 cd packages/traceguard
-uv sync && uv run pytest        # 358 tests (3 skip without the contamination-hf extra)
+uv sync && uv run pytest        # 359 tests (3 skip without the contamination-hf extra)
 
 # Pipeline Guardian (legacy)
 uv sync && uv run pytest        # 259 tests, from repo root
