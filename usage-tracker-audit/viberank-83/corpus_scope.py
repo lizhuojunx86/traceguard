@@ -14,7 +14,7 @@ frozen_vs_live.py).
 from __future__ import annotations
 
 import sys
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 _REPO = Path(__file__).resolve().parents[2]
@@ -52,6 +52,31 @@ def _report(label: str, records, fmt: str) -> None:
           f"(+{summed / total_files - 1:.1%} double counted)")
 
 
+def _churn(records) -> None:
+    """How fast new files mask a deletion in an older month.
+
+    A whole-tree `corpus.files` count only detects removal if it is not
+    outrun by ordinary work elsewhere in the tree.
+    """
+    first_seen: dict[str, str] = {}
+    for rec in records.values():
+        day = rec.invoked_at.strftime("%Y-%m-%d")
+        prior = first_seen.get(rec.source_file)
+        if prior is None or day < prior:
+            first_seen[rec.source_file] = day
+    per_day = Counter(first_seen.values())
+    per_month = Counter(day[:7] for day in first_seen.values())
+    recent = sorted(per_day)[-28:]
+    rates = sorted(per_day[d] for d in recent)
+    median = rates[len(rates) // 2]
+    print("\n── new files per active day ──")
+    print(f"last {len(recent)} active days: median {median}, "
+          f"mean {sum(rates) / len(rates):.0f}")
+    print("footprint of each month (files first seen in it):")
+    for month in sorted(per_month):
+        print(f"  {month}: {per_month[month]:>5,}")
+
+
 def main() -> int:
     records, stats = collect_records(SOURCE)
     print(f"corpus: {stats.files_main} main + {stats.files_subagent} subagent "
@@ -60,6 +85,7 @@ def main() -> int:
     print(f"records: {len(records):,}")
     for label, fmt in (("month", "%Y-%m"), ("day", "%Y-%m-%d")):
         _report(label, records, fmt)
+    _churn(records)
     return 0
 
 
