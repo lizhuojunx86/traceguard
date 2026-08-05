@@ -31,8 +31,10 @@ structurally hard:
 - **Reproducible input hashing** — one canonical `normalize_input` /
   `input_hash` implementation (sorted keys, fixed float precision, normalized
   whitespace) so identical inputs hash identically across runs and machines.
-- **Four look-ahead invariants as pure functions** — call them in pytest/CI;
-  violations raise, nothing is silently logged-and-forgotten.
+- **Four look-ahead invariants as callable validators** — call them in
+  pytest/CI; violations raise, nothing is silently logged-and-forgotten.
+  Invariants 1 and 3 are pure functions; 2 and 4 necessarily read the
+  registry/store and take an optional `engine`.
 - **Lightweight tracing** — a `@tracer.trace` decorator, a `tracer.span()`
   context manager, and `wrap_anthropic` / `wrap_openai` client wrappers that
   record every LLM/embedding/ML call (input hash, model, prompt version, output, latency,
@@ -220,11 +222,34 @@ validate_model_timing("demo-llm-2026", backtest_date, strict=True, engine=engine
 | 1 | A derived feature's `feature_as_of` ≤ the earliest timestamp of all its inputs | `validate_feature_as_of` |
 | 2 | The model used must satisfy `available_to_us_at` ≤ `feature_as_of` (strict), or carry an explicit anachronism flag (loose) | `validate_model_timing` |
 | 3 | Any time-versioned reference data (prompt templates, alias tables, lookup dictionaries) must satisfy `valid_from` ≤ `feature_as_of` | `validate_reference_timing` |
-| 4 | A locked replay set is immutable | planned (Phase 2) |
+| 4 | A locked replay set is immutable | `assert_replay_set_locked` |
 
 The full interface contract — table schemas, SDK signatures, semantics, and
 SemVer rules — lives in [docs/SPEC.md](docs/SPEC.md) (English) and
 [TRACEGUARD_SPEC.md](TRACEGUARD_SPEC.md) (Chinese original, authoritative).
+
+## Evidence layer: `traceguard.audit`
+
+Time-correct traces are only worth as much as the guarantee that they were not
+edited afterwards. The opt-in `traceguard.audit` submodule (1.1.0, experimental,
+off the frozen surface) adds that guarantee to the `traces` table:
+
+- **Append-only guard at the ORM layer** — blocks accidental UPDATE/DELETE
+  against `traces`; `cost_usd`-only updates pass, since repricing is the one
+  legal mutation the spec allows.
+- **Row hash chain** — every inserted trace is chained as
+  `sha256(prev_hash || canonical(entry))`, with the algorithm frozen by golden
+  tests. `verify_chain()` recomputes the chain in two passes and reports
+  BREAK / WARN / GAP findings.
+- **Exportable anchor** — `export_anchor()` emits the chain head for storage
+  outside the database, which is what turns tamper-*evident* into something an
+  auditor can actually check.
+- **CLI** — `python -m traceguard.audit enable|disable|verify|anchor`.
+
+Boundaries are stated rather than glossed: this is tamper-**evident**, not
+tamper-proof. Core SQL, raw drivers, and bulk APIs bypass the ORM guard, and
+without an external anchor a full-chain rewrite is undetectable. Details:
+[docs/audit.md](docs/audit.md).
 
 ## Research anchors
 
@@ -258,18 +283,23 @@ share no imports and release independently.
 ```bash
 # SDK
 cd packages/traceguard
-uv sync && uv run pytest        # 136 tests
+uv sync && uv run pytest        # 358 tests (3 skip without the contamination-hf extra)
 
 # Pipeline Guardian (legacy)
-uv sync && uv run pytest        # 246 tests, from repo root
+uv sync && uv run pytest        # 259 tests, from repo root
 ```
 
-Roadmap: [TRACEGUARD_ROADMAP.md](TRACEGUARD_ROADMAP.md) — Phase 0 (current)
-ships the tracer, registries, normalizer, and invariants 1–3; Phase 1+ adds
-drift checks, replay sets, and more client wrappers. 0.3.0 adds opt-in,
-additive extensions: OpenTelemetry export (`traceguard[otel]`),
-training-contamination groundwork (`traceguard.contamination`), and loop
-evidence-gating (`traceguard.loop`) — see
+Roadmap: [TRACEGUARD_ROADMAP.md](TRACEGUARD_ROADMAP.md). Phase 0 was accepted in
+June 2026, and **1.0.0 froze the contract**: every SPEC MUST implemented and
+enforced (invariants 1–4), a curated 29-symbol public surface held by a required
+`contract-guard` CI job, and fail-open instrumentation that never breaks or masks
+the host call. The public API is stable under SemVer from 1.0.0 onward.
+
+Everything since has been additive and opt-in, off the frozen surface:
+OpenTelemetry export and live dual-write (`traceguard[otel]`),
+training-contamination detection incl. MIN-K%++ (`traceguard.contamination`),
+loop evidence-gating (`traceguard.loop`), `wrap_openai` / `wrap_anthropic`,
+and the 1.1.0 audit evidence layer (`traceguard.audit`). Full history:
 [CHANGELOG](packages/traceguard/CHANGELOG.md).
 
 ## License
