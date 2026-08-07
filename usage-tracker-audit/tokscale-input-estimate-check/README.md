@@ -94,3 +94,31 @@ tool-result attribution") does not touch this. It stops a `<synthetic>`
 placeholder model from inheriting attribution, which is a different path; a
 normal tool result still gets its char estimate added to the API-reported
 number.
+
+## Retroactivity check (added 2026-08-07, after #1037)
+
+`retroactivity_check.sh <pre-fix-bin> <post-fix-bin> <workdir>` answers a
+different question from `run_ab.sh`: not "is the parser right now" but "does
+the correction reach numbers that were already cached".
+
+`parser_version(Claude)` was deliberately not bumped in #1037, because bumping
+it discards the `RetainObserved` turns #994 exists to keep. So a cache entry
+written by a pre-fix build is never re-parsed. Three legs share one HOME:
+
+1. pre-fix binary builds the cache
+2. post-fix binary reads the same cache — if the totals are identical, the fix
+   is not retroactive
+3. transcripts change on disk, post-fix binary re-reads them — measures how
+   much clears, and checks that nothing except `input` moves
+
+Measured on 1,513 real transcripts, v4.10.0 against v4.11.0:
+
+| state | input | vs cold-cache truth |
+|---|---|---|
+| pre-fix, cold cache | 23,132,812 | 8.18x |
+| post-fix, inherited cache | 23,132,812 | 8.18x — unchanged |
+| post-fix, 400 of 1,513 touched | 12,597,521 | 4.46x |
+| post-fix, cold cache (truth) | 2,827,429 | 1.00x |
+
+`output`, `cacheRead`, `cacheWrite` and `messageCount` are identical across
+every leg, so partial healing retires nothing.
