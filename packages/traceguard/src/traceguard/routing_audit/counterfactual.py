@@ -106,6 +106,32 @@ def parse_as_of(value: str | None) -> datetime | None:
     return dt.astimezone(timezone.utc)
 
 
+def coerce_as_of(value: datetime | str | None) -> datetime | None:
+    """Normalise an ``as_of`` freeze point to a datetime before it reaches SQL.
+
+    Guards a silent-empty-result trap. ``traces.invoked_at`` is declared
+    DATETIME, which in SQLite is NUMERIC affinity. A str bound against it that
+    happens to be convertible to a number — ``"20260705"``, ``"2026"`` — is
+    coerced to an INTEGER by that affinity, and SQLite orders every TEXT value
+    above every INTEGER, so ``invoked_at <= 20260705`` is false for every row.
+    The query returns an empty set, raises nothing, and the caller reads it as
+    "no traces in that window".
+
+    ``"2026-07-05"`` is not numeric-convertible and so happens to compare as
+    text today — the current CLI is safe only by accident of format. The type
+    hint alone does not protect a library caller, so this coerces at the one
+    place the comparison is built.
+
+    str is parsed via :func:`parse_as_of`; a bad string raises rather than
+    quietly matching nothing.
+    """
+    if value is None or isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        return parse_as_of(value)
+    raise TypeError(f"as_of must be a datetime, an ISO string, or None; got {type(value).__name__}")
+
+
 def _base_model(candidate: str) -> str:
     """Strip the ``-intro``/``-standard`` price-era suffix for identity checks."""
     for suffix in ("-intro", "-standard"):
@@ -184,6 +210,10 @@ def aggregate_unit_models(
     ``as_of`` freezes the snapshot: only traces with ``invoked_at <= as_of``
     are counted (daily ingest keeps writing, but a pinned report stays stable).
     """
+    # Every as_of-filtered read in this package funnels through here, so the
+    # coercion lives here rather than at each CLI entry point. See coerce_as_of
+    # for the SQLite affinity trap it prevents.
+    as_of = coerce_as_of(as_of)
     engine = make_engine(db_url)
     ensure_tables(engine)
     index = load_unit_index(engine)

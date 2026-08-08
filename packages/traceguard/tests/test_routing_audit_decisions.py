@@ -211,7 +211,13 @@ def test_dry_run_writes_nothing(source_root: Path, db_url: str) -> None:
     ingest(source_root, db_url, write=True)
     _tag_unit(db_url)
     stats = generate_decisions(db_url, write=False)
-    assert stats.decisions == 2 and stats.inserted == 0
+    assert stats.decisions == 2
+    # `inserted` used to be 0 here for the wrong reason: dry-run returned early
+    # before ever looking at the existing rows, so the counters a dry-run exists
+    # to show were structurally always 0. They now PREVIEW the write. This
+    # test's subject — that nothing is persisted — is the assertion below, and
+    # is unchanged. Preview coverage: test_dry_run_previews_what_a_write_changes.
+    assert stats.inserted == 2
     engine = make_engine(db_url)
     with Session(engine) as sess:
         assert sess.scalar(select(RoutingDecision).limit(1)) is None
@@ -231,3 +237,47 @@ def test_policy_default_and_unknown_via_custom_yaml(tmp_path: Path) -> None:
     # no rule → default
     assert policy.match("other", "main", "x") == ("cheap", None)
     assert Decimal("0") == Decimal("0")  # keep Decimal import meaningful
+
+
+def test_dry_run_previews_what_a_write_changes(source_root: Path, db_url: str) -> None:
+    """A dry-run whose counters cannot move is not a dry-run.
+
+    inserted/updated/manual_kept were hard-zero because generate_decisions
+    skipped the session entirely when write=False, so the operator could not see
+    what a write would do without doing it.
+    """
+    ingest(source_root, db_url, write=True)
+    _tag_unit(db_url)
+
+    preview = generate_decisions(db_url, write=False)
+    assert preview.inserted > 0 and preview.updated == 0
+
+    written = generate_decisions(db_url, write=True)
+    assert written.inserted == preview.inserted
+
+    # Second pass: the same rows now exist, so a preview must say "update".
+    second = generate_decisions(db_url, write=False)
+    assert second.updated == written.inserted and second.inserted == 0
+
+
+def test_dry_run_reports_manual_rows_it_would_keep(source_root: Path, db_url: str) -> None:
+    """manual_kept must be visible BEFORE the write, not only after it."""
+    ingest(source_root, db_url, write=True)
+    _tag_unit(db_url)
+    generate_decisions(db_url, write=True)
+
+    engine = make_engine(db_url)
+    with Session(engine) as sess:
+        row = sess.scalars(select(RoutingDecision)).first()
+        decision_id = row.decision_id
+        row.source = "manual"
+        row.reason = "hand-reviewed"
+        sess.commit()
+
+    preview = generate_decisions(db_url, write=False)
+    assert preview.manual_kept == 1
+
+    generate_decisions(db_url, write=True)
+    with Session(engine) as sess:
+        kept = sess.get(RoutingDecision, decision_id)
+        assert kept.source == "manual" and kept.reason == "hand-reviewed"

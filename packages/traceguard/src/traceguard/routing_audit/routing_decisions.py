@@ -49,7 +49,11 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from traceguard.routing_audit.models import RoutingDecision, ensure_tables
+from traceguard.routing_audit.models import (
+    RoutingAuditTaskTag,
+    RoutingDecision,
+    ensure_tables,
+)
 from traceguard.routing_audit.task_tags import load_unit_index
 from traceguard.store.models import Trace, make_engine
 
@@ -218,7 +222,11 @@ def generate_decisions(
     agg = _aggregate(engine, stats, as_of=as_of)
 
     stats.batch_id = _batch_id()
-    sess: Session | None = Session(engine) if write else None
+    # A session is opened for BOTH modes. Dry-run previously skipped it and
+    # returned inserted/updated/manual_kept as a constant 0, so the one thing a
+    # dry-run exists to show — what a write would change — was the one thing it
+    # could not show. It reads the existing rows and commits nothing.
+    sess = Session(engine)
     try:
         for (unit_id, component), a in agg.items():
             actual_model = a.model_counts.most_common(1)[0][0]
@@ -235,8 +243,6 @@ def generate_decisions(
                 bucket[1] += 1
                 bucket[2] += a.cost
 
-            if sess is None:
-                continue
             decision_id = f"{unit_id}#{component}"
             existing = sess.get(RoutingDecision, decision_id)
             if existing is not None and existing.source == "manual":
@@ -259,14 +265,22 @@ def generate_decisions(
                 batch_id=stats.batch_id,
             )
             if existing is None:
-                sess.add(RoutingDecision(decision_id=decision_id, source="generated", **values))
                 stats.inserted += 1
+                if write:
+                    sess.add(
+                        RoutingDecision(decision_id=decision_id, source="generated", **values)
+                    )
             else:
-                for k, v in values.items():
-                    setattr(existing, k, v)
                 stats.updated += 1
-        if sess is not None:
+                if write:
+                    for k, v in values.items():
+                        setattr(existing, k, v)
+        if write:
             sess.commit()
+        else:
+            # Nothing was staged, but roll back explicitly so a dry-run can
+            # never leave a dirty session behind.
+            sess.rollback()
     finally:
         if sess is not None:
             sess.close()
@@ -355,6 +369,20 @@ def import_decisions_csv(csv_path: Path | str, db_url: str | None = None) -> Dec
     return stats
 
 
+def _tag_provenance_line(tag_sources: "Counter[str]") -> str:
+    """One line naming the evidence grade behind the numbers above it."""
+    n = sum(tag_sources.values())
+    if not n:
+        return "tag provenance: no task tags behind these decisions"
+    parts = ", ".join(
+        f"{src} {cnt} ({cnt / n:.0%})" for src, cnt in sorted(tag_sources.items())
+    )
+    line = f"tag provenance: {parts}"
+    if tag_sources.get("heuristic"):
+        line += "  — heuristic tags are unreviewed; task_type may be wrong"
+    return line
+
+
 def format_report(db_url: str | None = None) -> str:
     """Deviation-rate report: by task_type, plus a task_type × actual_model pivot."""
     engine = make_engine(db_url)
@@ -370,6 +398,22 @@ def format_report(db_url: str | None = None) -> str:
     manual = sum(1 for d in decisions if d.source == "manual")
     dev_cost = sum((d.cost_usd or Decimal("0") for d in dev), Decimal("0"))
 
+    # Provenance of the task tags these decisions rest on. A report spanning
+    # both a hand-reviewed window and a heuristic-backfilled one is two
+    # different evidence grades under one number, and the number must never
+    # appear without saying so — same rule as printing what a cost total
+    # excludes. Counted over the units actually behind these decisions, not the
+    # whole tag table, so it describes THIS report.
+    unit_ids = {d.decision_id.rsplit("#", 1)[0] for d in decisions}
+    with Session(engine) as sess:
+        tag_sources = Counter(
+            src for (src,) in sess.execute(
+                select(RoutingAuditTaskTag.source).where(
+                    RoutingAuditTaskTag.unit_id.in_(unit_ids)
+                )
+            )
+        )
+
     # by task_type
     by_tt: dict[str, list[Any]] = defaultdict(lambda: [0, 0, Decimal("0")])
     for d in decisions:
@@ -384,6 +428,7 @@ def format_report(db_url: str | None = None) -> str:
         f"decisions: {total} | deviations: {len(dev)} "
         f"({len(dev) / total:.1%}) | manual-reviewed: {manual}",
         f"total deviation cost: ${dev_cost:.4f}",
+        _tag_provenance_line(tag_sources),
         "",
         "deviation rate by task_type:",
         f"{'task_type':<20} {'decisions':>9} {'deviations':>10} {'rate':>7} {'dev_cost_usd':>13}",

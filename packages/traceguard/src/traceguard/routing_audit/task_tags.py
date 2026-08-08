@@ -280,6 +280,22 @@ def iter_session_units(
                 )
 
 
+def _db_exists(db_url: str | None) -> bool:
+    """True if the target DB is already materialised.
+
+    A dry-run must not create a database file as a side effect of previewing.
+    For a SQLite URL that means checking the path before connecting, because
+    connecting is what creates it. Anything else is assumed reachable.
+    """
+    url = db_url or DEFAULT_DB
+    if not url.startswith("sqlite"):
+        return True
+    path = url.split("///", 1)[-1].split("?", 1)[0]
+    if not path or path == ":memory:":
+        return False
+    return Path(path).exists()
+
+
 def tag_heuristic(
     source: Path | str = DEFAULT_SOURCE,
     db_url: str | None = None,
@@ -299,39 +315,54 @@ def tag_heuristic(
         units.append((unit, task_type))
         stats.by_type[task_type] = stats.by_type.get(task_type, 0) + 1
     stats.units = len(units)
-    if not write:
+
+    if not write and not _db_exists(db_url):
+        # Nothing to compare against, and a dry-run must not materialise a
+        # database just to say so. Every unit would be an insert.
+        stats.inserted = len(units)
         return stats
 
     engine = make_engine(db_url)
-    ensure_tables(engine)
-    stats.batch_id = _batch_id()
+    if write:
+        ensure_tables(engine)
+    stats.batch_id = _batch_id() if write else None
+    # The session is opened in BOTH modes. A dry-run that returns before
+    # touching the DB reports inserted/updated/manual_kept as a structural 0 —
+    # exactly the counters a dry-run exists to show. Same blind spot as
+    # routing_decisions.generate had; fixed the same way, and it commits
+    # nothing unless write=True.
     with Session(engine) as sess:
         for unit, task_type in units:
             existing = sess.get(RoutingAuditTaskTag, unit.unit_id)
             if existing is None:
-                sess.add(
-                    RoutingAuditTaskTag(
-                        unit_id=unit.unit_id,
-                        session_id=unit.session_id,
-                        project=unit.project,
-                        ts_start=unit.ts_start,
-                        ts_end=unit.ts_end,
-                        n_turns=unit.n_turns,
-                        task_type=task_type,
-                        source="heuristic",
-                        batch_id=stats.batch_id,
-                    )
-                )
                 stats.inserted += 1
+                if write:
+                    sess.add(
+                        RoutingAuditTaskTag(
+                            unit_id=unit.unit_id,
+                            session_id=unit.session_id,
+                            project=unit.project,
+                            ts_start=unit.ts_start,
+                            ts_end=unit.ts_end,
+                            n_turns=unit.n_turns,
+                            task_type=task_type,
+                            source="heuristic",
+                            batch_id=stats.batch_id,
+                        )
+                    )
             elif existing.source == "manual":
                 stats.manual_kept += 1
             else:
-                existing.task_type = task_type
-                existing.ts_end = unit.ts_end
-                existing.n_turns = unit.n_turns
-                existing.batch_id = stats.batch_id
                 stats.updated += 1
-        sess.commit()
+                if write:
+                    existing.task_type = task_type
+                    existing.ts_end = unit.ts_end
+                    existing.n_turns = unit.n_turns
+                    existing.batch_id = stats.batch_id
+        if write:
+            sess.commit()
+        else:
+            sess.rollback()
     return stats
 
 

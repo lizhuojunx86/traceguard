@@ -195,3 +195,84 @@ def test_is_substantive_consult() -> None:
     assert not _is_substantive_consult("好")
     assert not _is_substantive_consult("开始 Phase 3")
     assert _is_substantive_consult("请制定一个对齐和上线的方案")
+
+
+# ---------------------------------------------------------------------------
+# as_of coercion — the SQLite NUMERIC-affinity silent-empty trap.
+#
+# traces.invoked_at is declared DATETIME → NUMERIC affinity in SQLite. A bound
+# str that converts to a number ("20260705") is coerced to an INTEGER by that
+# affinity, and SQLite sorts every TEXT value above every INTEGER, so
+# `invoked_at <= 20260705` is false for every row. Empty result, no error.
+#
+# "2026-06-06" survives today only because it is NOT numeric-convertible, so it
+# falls through to a text comparison — the CLI is safe by accident of format,
+# not by design. These tests pin the coercion that makes it safe on purpose.
+# ---------------------------------------------------------------------------
+
+
+def test_as_of_numeric_string_does_not_silently_return_empty(
+    source_root: Path, db_url: str
+) -> None:
+    """The trap itself: a numeric-convertible date string must still match rows."""
+    from traceguard.routing_audit.counterfactual import aggregate_unit_models
+
+    ingest(source_root, db_url, write=True)
+    _tag(db_url)
+
+    baseline = list(aggregate_unit_models(db_url))
+    assert baseline, "fixture must produce at least one aggregate for this test to mean anything"
+
+    # 20260606 IS convertible to an integer — the exact shape that silently
+    # matches nothing when passed straight through to SQL.
+    coerced = list(aggregate_unit_models(db_url, as_of="20260606"))
+    assert coerced, (
+        "as_of='20260606' returned an empty set — the SQLite affinity trap is back; "
+        "a numeric-looking freeze point must not silently exclude every row"
+    )
+    assert len(coerced) == len(baseline)
+
+
+def test_as_of_string_and_datetime_agree(source_root: Path, db_url: str) -> None:
+    from traceguard.routing_audit.counterfactual import aggregate_unit_models, parse_as_of
+
+    ingest(source_root, db_url, write=True)
+    _tag(db_url)
+
+    as_str = list(aggregate_unit_models(db_url, as_of="2026-06-06"))
+    as_dt = list(aggregate_unit_models(db_url, as_of=parse_as_of("2026-06-06")))
+    assert len(as_str) == len(as_dt) == 1
+
+
+def test_as_of_before_the_data_excludes_everything(source_root: Path, db_url: str) -> None:
+    """The other direction: a genuine empty result must still be reachable.
+
+    Without this, a coercion bug that made every as_of match everything would
+    pass the trap test above.
+    """
+    from traceguard.routing_audit.counterfactual import aggregate_unit_models
+
+    ingest(source_root, db_url, write=True)
+    _tag(db_url)
+
+    assert list(aggregate_unit_models(db_url, as_of="20260604")) == []
+    assert list(aggregate_unit_models(db_url, as_of=datetime(2026, 6, 4, tzinfo=timezone.utc))) == []
+
+
+def test_as_of_rejects_junk_instead_of_matching_nothing(source_root: Path, db_url: str) -> None:
+    from traceguard.routing_audit.counterfactual import aggregate_unit_models
+
+    ingest(source_root, db_url, write=True)
+    with pytest.raises(ValueError, match="as-of"):
+        list(aggregate_unit_models(db_url, as_of="not-a-date"))
+    with pytest.raises(TypeError):
+        list(aggregate_unit_models(db_url, as_of=20260606))
+
+
+def test_blind_premium_accepts_a_string_as_of(source_root: Path, db_url: str) -> None:
+    """blind.py reaches the same comparison through compute_counterfactuals."""
+    from traceguard.routing_audit.blind import intra_tier_premium
+
+    ingest(source_root, db_url, write=True)
+    _tag(db_url)
+    intra_tier_premium(db_url, as_of="20260606")  # must not raise, must not be silently empty-by-trap

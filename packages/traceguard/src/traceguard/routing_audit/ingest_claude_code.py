@@ -107,12 +107,16 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any, Iterator
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from traceguard.registry.models import register_model
-from traceguard.routing_audit.models import RoutingAuditIngestLog, ensure_tables
-from traceguard.routing_audit.pricing import KNOWN_RELEASED_AT, compute_cost_usd
+from traceguard.routing_audit.models import (
+    RoutingAuditIngestLog,
+    RoutingAuditTaskTag,
+    ensure_tables,
+)
+from traceguard.routing_audit.pricing import KNOWN_RELEASED_AT, compute_cost_usd, price_for
 from traceguard.sdk.normalizer import input_hash
 from traceguard.store.models import ModelRegistryEntry, Trace, make_engine
 
@@ -163,7 +167,15 @@ class IngestStats:
     already_ingested: int = 0
     written: int = 0
     written_cost: Decimal = Decimal("0")  # list-price cost of rows written this run
-    missing_price: int = 0
+    # Rows written this run whose cost_usd is NULL. written_cost silently
+    # excludes them, so the two MUST be reported together — a total that omits
+    # its own exclusions reads as complete when it is not.
+    written_unpriced: int = 0
+    missing_price: int = 0  # records whose cost could not be computed, any cause
+    # model_id -> record count, for models with no PRICES entry specifically.
+    # Narrower than missing_price, which also counts records with absent usage
+    # or an unknown speed tier; only this one means "the price table is stale".
+    unpriced_models: dict[str, int] = field(default_factory=dict)
     batch_id: str | None = None
     warnings: list[str] = field(default_factory=list)
     ts_min: datetime | None = None
@@ -407,6 +419,12 @@ def _accumulate(stats: IngestStats, rec: ParsedRecord) -> None:
     cost = compute_cost_usd(rec.model_id, rec.usage)
     if cost is None and rec.model_id is not None:
         stats.missing_price += 1
+    # Distinct from the counter above: this fires only when the price TABLE has
+    # no entry for the model, which is the one cause that needs a human to edit
+    # pricing.py. compute_cost_usd also returns None for absent usage and for
+    # unknown speed tiers, and lumping those together would bury the signal.
+    if rec.model_id is not None and price_for(rec.model_id, rec.invoked_at) is None:
+        stats.unpriced_models[rec.model_id] = stats.unpriced_models.get(rec.model_id, 0) + 1
     key = (rec.model_id or "(none)", rec.project, rec.component)
     agg = stats.per_key.setdefault(key, [0, 0, 0, Decimal("0")])
     agg[0] += 1
@@ -468,6 +486,109 @@ def _build_trace(rec: ParsedRecord) -> Trace:
     )
 
 
+# Every warning this module can emit, by kind. A warning is prefixed with its
+# kind so consumers (and tests) can classify one without parsing prose.
+#
+# The point is the friction: adding a new alarm requires registering it here
+# first. A test asserts that every warning produced carries a REGISTERED kind,
+# which keeps the "an unexpected alarm appeared" signal that a fixture-specific
+# expected-set assertion would only relocate — that version has to be edited
+# every time a legitimate new alarm is added, so it decays into a rubber stamp.
+WARNING_KINDS: frozenset[str] = frozenset({
+    "unpriced_model",     # model observed with no pricing.PRICES entry
+    "registry_freeze",    # traces predate the frozen available_to_us_at
+    "tag_coverage",       # too few traces sit inside a tagged unit window
+    "tag_staleness",      # newest tag lags the newest trace
+    "tag_table_empty",    # tagging has never run against this store
+})
+
+
+def warn(kind: str, message: str) -> str:
+    """Format a warning tagged with its registered kind."""
+    if kind not in WARNING_KINDS:
+        raise ValueError(
+            f"unregistered warning kind {kind!r}; add it to WARNING_KINDS with a "
+            f"one-line comment saying what it means"
+        )
+    return f"[{kind}] {message}"
+
+
+# Tag-coverage watchdog thresholds. A stage that stops producing is invisible
+# unless something treats "produced nothing" as the anomaly.
+TAG_COVERAGE_FLOOR = 0.80        # fraction of traces inside a tagged unit window
+TAG_STALENESS_DAYS = 7           # newest tag may lag the newest trace by this much
+
+
+def tag_coverage_warnings(engine: Any) -> list[str]:
+    """Alarm when the task-tagging stage has silently stopped keeping up.
+
+    Untagged traces are skipped by routing_decisions BEFORE the tier lookup, so
+    a stalled tagger does not surface as a wrong verdict — it surfaces as no
+    verdict at all, which reads exactly like "nothing to report". Between
+    2026-07-03 and 2026-08-08 the tagger produced nothing while 31,142 traces
+    accumulated; every downstream report stayed green, and adding claude-opus-5
+    to the routing policy changed nothing because all 23 of its sessions were
+    untagged.
+
+    Two independent signals, because they fail differently: coverage catches a
+    tagger that runs but skips work, staleness catches one that stopped running.
+    Both are returned as warnings so they ride the run log rather than stdout —
+    the same delivery fix the unpriced-model alarm needed.
+    """
+    out: list[str] = []
+    with Session(engine) as sess:
+        total = sess.scalar(select(func.count()).select_from(Trace)) or 0
+        if not total:
+            return out
+
+        covered = sess.scalar(
+            select(func.count()).select_from(Trace).where(
+                select(RoutingAuditTaskTag.unit_id)
+                .where(
+                    RoutingAuditTaskTag.session_id
+                    == Trace.output_parsed["session_id"].as_string(),
+                    RoutingAuditTaskTag.ts_start <= Trace.invoked_at,
+                    or_(
+                        RoutingAuditTaskTag.ts_end.is_(None),
+                        RoutingAuditTaskTag.ts_end > Trace.invoked_at,
+                    ),
+                )
+                .exists()
+            )
+        ) or 0
+        coverage = covered / total
+        if coverage < TAG_COVERAGE_FLOOR:
+            out.append(warn(
+                "tag_coverage",
+                f"task-tag coverage {coverage:.1%} ({covered}/{total} traces inside a "
+                f"tagged unit window) is below the {TAG_COVERAGE_FLOOR:.0%} floor; "
+                f"{total - covered} traces are invisible to routing_decisions",
+            ))
+
+        newest_tag = sess.scalar(select(func.max(RoutingAuditTaskTag.ts_start)))
+        newest_trace = sess.scalar(select(func.max(Trace.invoked_at)))
+        if newest_trace is not None and newest_tag is None:
+            out.append(warn(
+                "tag_table_empty",
+                f"task-tag table is EMPTY while traces run to "
+                f"{newest_trace:%Y-%m-%d}; every trace is invisible to routing_decisions",
+            ))
+        elif newest_tag is not None and newest_trace is not None:
+            if newest_tag.tzinfo is None:
+                newest_tag = newest_tag.replace(tzinfo=timezone.utc)
+            if newest_trace.tzinfo is None:
+                newest_trace = newest_trace.replace(tzinfo=timezone.utc)
+            lag = (newest_trace - newest_tag).days
+            if lag > TAG_STALENESS_DAYS:
+                out.append(warn(
+                    "tag_staleness",
+                    f"task tagging is {lag} days behind: newest tag "
+                    f"{newest_tag:%Y-%m-%d}, newest trace {newest_trace:%Y-%m-%d} "
+                    f"(threshold {TAG_STALENESS_DAYS}d) — run tag_heuristic",
+                ))
+    return out
+
+
 def new_batch_id() -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     return f"cc-{stamp}-{uuid_mod.uuid4().hex[:6]}"
@@ -493,6 +614,32 @@ def ingest(
     records, stats = collect_records(
         source_root, include_subagents=include_subagents, since=since
     )
+
+    # A model with no PRICES entry gets cost_usd = NULL and then vanishes from
+    # every cost rollup without failing anything. That is correct behaviour in
+    # compute_cost_usd — refusing to guess a price is the point — but nothing
+    # was watching the refusal.
+    #
+    # This warning goes into stats.warnings specifically because that is the
+    # field append_run_log() serialises. The pre-existing missing_price counter
+    # only ever reached format_report()'s stdout, which on a scheduled run is
+    # buried under a several-thousand-row table; the machine-readable trail the
+    # job actually keeps showed zero warnings for the whole period. claude-opus-5
+    # was unpriced from 2026-07-25 to 2026-08-08 and the counter fired ten times
+    # into that log without anyone seeing it.
+    #
+    # Raised before the dry-run return so `--dry-run` surfaces it too: finding
+    # out a model is unpriced should not require committing to a write.
+    for model_id, count in sorted(stats.unpriced_models.items()):
+        first_seen = stats.models_first_seen.get(model_id)
+        seen = first_seen.isoformat() if first_seen else "unknown"
+        stats.warnings.append(warn(
+            "unpriced_model",
+            f"model {model_id}: no entry in pricing.PRICES — {count} record(s) in this "
+            f"batch will be written with cost_usd = NULL and excluded from every cost "
+            f"total; first observed {seen}. Verify the list price against the official "
+            f"announcement, add it to pricing.py, then backfill with reprice.py.",
+        ))
     if not write:
         return stats
 
@@ -513,11 +660,12 @@ def ingest(
         for model_id, first_seen in sorted(stats.models_first_seen.items()):
             entry = sess.get(ModelRegistryEntry, model_id)
             if entry is not None and first_seen < entry.available_to_us_at:
-                stats.warnings.append(
+                stats.warnings.append(warn(
+                    "registry_freeze",
                     f"model {model_id}: observed invoked_at {first_seen.isoformat()} predates "
                     f"registered available_to_us_at {entry.available_to_us_at.isoformat()}; "
-                    "registry is insert-only — re-run into a fresh DB for correct timing"
-                )
+                    "registry is insert-only — re-run into a fresh DB for correct timing",
+                ))
 
     stats.batch_id = batch_id or new_batch_id()
     with Session(engine) as sess:
@@ -529,6 +677,8 @@ def ingest(
                 sess.flush()  # populate trace.trace_id
                 if trace.cost_usd is not None:
                     stats.written_cost += trace.cost_usd
+                else:
+                    stats.written_unpriced += 1
                 sess.add(
                     RoutingAuditIngestLog(
                         batch_id=stats.batch_id,
@@ -542,6 +692,11 @@ def ingest(
                 )
             sess.commit()
             stats.written += len(chunk)
+
+    # After the write: coverage is measured against the traces this run just
+    # added, not the state before it. Called pre-write it would read an empty
+    # table on a first ingest and report nothing.
+    stats.warnings.extend(tag_coverage_warnings(engine))
     return stats
 
 
@@ -595,6 +750,11 @@ def append_run_log(
         "records": stats.records,
         "written": stats.written,
         "new_cost_usd": f"{stats.written_cost:.6f}",
+        # new_cost_usd covers only priced rows. These two travel with it so a
+        # reader of this log can never mistake the total for the whole batch.
+        "written_unpriced": stats.written_unpriced,
+        "unpriced_models": stats.unpriced_models,
+        "missing_price": stats.missing_price,
         "already_ingested": stats.already_ingested,
         "files_main": stats.files_main,
         "files_subagent": stats.files_subagent,
@@ -631,11 +791,19 @@ def format_report(stats: IngestStats, *, wrote: bool) -> str:
             f"records: {stats.records} distinct messages "
             f"({stats.error_records} api-error) | already ingested: "
             f"{stats.already_ingested} | written: {stats.written} "
-            f"(new cost ${stats.written_cost:.4f})"
+            # The total and what it excludes always print together. A bare
+            # "new cost $X" reads as the full cost of the batch even when rows
+            # were written with cost_usd = NULL and left out of it.
+            f"(new cost ${stats.written_cost:.4f} over "
+            f"{stats.written - stats.written_unpriced} priced rows; "
+            f"{stats.written_unpriced} unpriced and excluded)"
         ),
     ]
     if stats.missing_price:
-        lines.append(f"WARNING: {stats.missing_price} records have a model with no price entry")
+        lines.append(
+            f"WARNING: {stats.missing_price} records could not be priced "
+            f"(no price entry, missing usage, or unknown speed tier)"
+        )
     for warning in stats.warnings:
         lines.append(f"WARNING: {warning}")
     if stats.ts_min and stats.ts_max:
