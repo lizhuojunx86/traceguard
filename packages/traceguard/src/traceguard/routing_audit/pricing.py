@@ -120,35 +120,52 @@ def price_for(model_id: str | None, invoked_at: datetime | None = None) -> Model
 def cache_creation_split(usage: Mapping[str, Any]) -> tuple[int, int]:
     """Split cache-creation tokens into (5-minute, 1-hour) TTL buckets.
 
-    TWO UPSTREAM SHAPES, both real, both must be read:
+    TWO SHAPES, in TWO DIFFERENT POPULATIONS. Both measurements below are
+    correct; an earlier revision of this docstring said "this corpus" and let
+    one word stand for both, which is how they came to look contradictory.
 
-    * nested — ``{"cache_creation": {"ephemeral_5m_input_tokens": N,
-      "ephemeral_1h_input_tokens": M}}``. The Messages API response shape.
-    * flat — ``{"cache_creation_5m": N, "cache_creation_1h": M}``. Reported in
-      some Claude Code builds. **Not present in this corpus.**
+    ============================  ========  ==========================================
+    population                    shape     who reads it
+    ============================  ========  ==========================================
+    ``~/.claude/projects``        nested    ``ingest`` at FIRST pricing
+    transcript JSONL                        ``{"cache_creation": {"ephemeral_*"}}``
+    ``traces.output_parsed``      flat      ANY recompute-from-store
+    (the store)                             ``cache_creation_5m`` / ``_1h``
+    ============================  ========  ==========================================
 
-    MEASURED, 2026-08-08, and it corrected this docstring rather than
-    confirming it. An earlier revision asserted the opposite — that 58,194 of
-    58,210 rows carried the flat form, that zero carried the nested one, that
-    the 1-hour multiplier was therefore a constant no code path could reach,
-    and that the store was $1,393.49 low as a result. Every part of that is
-    wrong. Driving ``compute_cost_usd`` over ~/.claude/projects twice, once
-    with the flat keys present and once with them stripped, changed the total
-    by **$0.00** across 34,234 distinct messages carrying 142,957,275 one-hour
-    cache tokens, because **34,234 of 34,234 records carry the nested form and
-    none carry the flat one**. The nested branch has always fired. The 2.0
-    multiplier has always been applied. Harness:
-    ``usage-tracker-audit/part4-routing-audit/settle_cache_split.py``.
+    They differ because **ingest flattens on write** (ingest_claude_code, the
+    ``meta["usage"]`` block): it reads the nested keys and stores them flat.
 
-    So flat support is insurance against a shape this corpus does not contain,
-    not a fix for a live defect. Keep it — the shape is real in the wild and
-    costs four lines — but do not attribute any money to it.
+    Measured 2026-08-08, both populations:
+
+    * Transcripts: **34,234 of 34,234 messages carry the nested form, none the
+      flat one.** Driving ``compute_cost_usd`` over them twice, once with the
+      flat keys present and once stripped, changed the total by **$0.00**
+      across 142,957,275 one-hour cache tokens. Harness:
+      ``usage-tracker-audit/part4-routing-audit/settle_cache_split.py``.
+    * Store: **58,194 of 58,210 rows carry the flat form, none the nested one.**
+
+    THE CONCLUSION THAT FOLLOWS, and it is two statements, not one:
+
+    1. **First pricing was never wrong.** ingest reads nested, the nested branch
+       has always fired, the 2.0 multiplier has always been applied. No money
+       was ever mispriced on the way in, and an earlier claim that the store was
+       $1,393.49 low across 27,130 traces is void — it measured what a
+       flat-blind reader *would* compute, not what any reader ever did.
+    2. **Flat support is load-bearing for the recompute path**, which is a
+       different reader. Every row a reprice touches is flat, so a flat-blind
+       recompute would silently reprice 1-hour writes at the 5-minute rate.
+       ``rp-20260808T041211Z-e92e55`` moved $88.75 over 3,918 store rows; that
+       run is itself the proof the store is flat, since a nested store could
+       not have changed a single row.
+
+    So: not "insurance against a shape we do not have". One population has each
+    shape, and each has a reader that must handle it.
 
     What cannot be checked: ``~/.claude/projects`` is a rolling window, and the
-    store holds rows back to 2026-05-30 whose transcripts are gone. If the
-    flat form was ever written, it was written there, and nothing that survives
-    can say. ``traces`` keeps no ``usage`` block, so those rows cannot be
-    re-derived either. Absence of evidence, recorded as such.
+    store holds rows back to 2026-05-30 whose transcripts are gone. Whether the
+    transcript shape was ever different for those is unknowable — the store's
+    flattened copy cannot answer it. Absence of evidence, recorded as such.
 
     Prefer nested when a record carries both, since that is the API's own
     wording.

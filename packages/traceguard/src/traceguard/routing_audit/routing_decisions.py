@@ -49,6 +49,7 @@ import yaml
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from traceguard.routing_audit.ingest_claude_code import warn
 from traceguard.routing_audit.models import (
     RoutingAuditTaskTag,
     RoutingDecision,
@@ -140,7 +141,9 @@ class DecisionStats:
     deviations: int = 0
     inserted: int = 0
     updated: int = 0
-    manual_kept: int = 0
+    # Manual rows are no longer skipped: their DERIVED half is recomputed while
+    # reason/outcome/source are preserved. The counter name says what is kept.
+    manual_refreshed: int = 0
     skipped_api_error: int = 0
     skipped_untagged: int = 0
     deviation_cost: Decimal = Decimal("0")
@@ -148,6 +151,43 @@ class DecisionStats:
     policy_path: str = ""
     # task_type -> [decisions, deviations, dev_cost]
     by_task_type: dict[str, list[Any]] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
+    # decision_id -> {column: (stored, recomputed)} for rows that had drifted
+    drifted: dict[str, dict[str, tuple[Any, Any]]] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Column partition. Every column of routing_decisions belongs to exactly one
+# set, and a test asserts the partition is EXACT — a newly added column fails
+# the build until its author classifies it, rather than silently defaulting
+# into the protected bucket.
+#
+# Why this exists: until 2026-08-08 `generate` skipped manual rows entirely to
+# protect hand-entered reason/outcome. That also froze their expected_tier /
+# actual_tier / deviation / cost_usd at whichever batch first wrote them. The
+# consequence was not cost drift — it was that the 96 rows a human had looked
+# at most carefully became permanently exempt from routing policy. Their
+# `deviation` verdict could never respond to a policy revision again, and they
+# were 60% of all deviations. Annotating a deviation froze the judgement that
+# it WAS one.
+MANUAL_COLUMNS: frozenset[str] = frozenset({
+    "reason",    # free text a human wrote about this verdict
+    "outcome",   # adopted / rework / discarded / unknown — a human's call
+    "source",    # "manual" marks the row as annotated; only import_csv sets it
+})
+
+DERIVED_COLUMNS: frozenset[str] = frozenset({
+    "ts", "unit_id", "session_id", "project", "component", "task_type",
+    "expected_tier", "expected_model",          # from the policy
+    "actual_model", "actual_tier", "deviation",  # policy vs observed
+    "n_traces", "cost_usd",                      # from traces
+    "batch_id",  # which regeneration last computed the derived half of this row
+})
+
+# Neither hand-written nor recomputed: the row's identity and the moment it
+# first existed. Forcing these into DERIVED would rewrite created_at on every
+# rebuild and destroy the only record of when a decision first appeared.
+IDENTITY_COLUMNS: frozenset[str] = frozenset({"decision_id", "created_at"})
 
 
 def _batch_id() -> str:
@@ -223,7 +263,7 @@ def generate_decisions(
 
     stats.batch_id = _batch_id()
     # A session is opened for BOTH modes. Dry-run previously skipped it and
-    # returned inserted/updated/manual_kept as a constant 0, so the one thing a
+    # returned inserted/updated/manual_refreshed as a constant 0, so the one thing a
     # dry-run exists to show — what a write would change — was the one thing it
     # could not show. It reads the existing rows and commits nothing.
     sess = Session(engine)
@@ -245,9 +285,6 @@ def generate_decisions(
 
             decision_id = f"{unit_id}#{component}"
             existing = sess.get(RoutingDecision, decision_id)
-            if existing is not None and existing.source == "manual":
-                stats.manual_kept += 1
-                continue
             values = dict(
                 ts=a.ts,
                 unit_id=unit_id,
@@ -264,6 +301,30 @@ def generate_decisions(
                 cost_usd=a.cost,
                 batch_id=stats.batch_id,
             )
+            # `values` contains only DERIVED_COLUMNS, so applying it to a manual
+            # row refreshes the machine half and cannot touch reason / outcome /
+            # source. That is the whole point: a human annotation must not
+            # exempt a row from the policy it was annotating.
+            assert set(values) <= DERIVED_COLUMNS, (
+                f"generate would write non-derived columns: {sorted(set(values) - DERIVED_COLUMNS)}"
+            )
+            if existing is not None:
+                # Divergence watchdog. Fixing the manual-row freeze made
+                # recomputation REACH every row; it does not stop a derived
+                # table from silently drifting from its source in some other
+                # way. This run's own before/after is the cheapest place to
+                # notice: whatever differs here was wrong in the table until
+                # now, and nothing else was watching. The freeze itself only
+                # surfaced because a printed total disagreed with a stored one,
+                # and that comparison existed nowhere machine-readable.
+                drift = {
+                    col: (getattr(existing, col), new)
+                    for col, new in values.items()
+                    if col != "batch_id" and getattr(existing, col) != new
+                }
+                if drift:
+                    stats.drifted[decision_id] = drift
+
             if existing is None:
                 stats.inserted += 1
                 if write:
@@ -271,10 +332,23 @@ def generate_decisions(
                         RoutingDecision(decision_id=decision_id, source="generated", **values)
                     )
             else:
-                stats.updated += 1
+                if existing.source == "manual":
+                    stats.manual_refreshed += 1
+                else:
+                    stats.updated += 1
                 if write:
                     for k, v in values.items():
                         setattr(existing, k, v)
+        if stats.drifted:
+            cols = sorted({c for d in stats.drifted.values() for c in d})
+            stats.warnings.append(warn(
+                "derived_drift",
+                f"{len(stats.drifted)} decision row(s) held derived values that "
+                f"disagreed with a fresh recompute (columns: {', '.join(cols)}). "
+                f"{'Corrected by this run.' if write else 'Run with --write to correct.'} "
+                f"A derived table that diverges from its source is not visible "
+                f"unless something compares them.",
+            ))
         if write:
             sess.commit()
         else:
@@ -476,7 +550,9 @@ def _format_gen_stats(stats: DecisionStats, *, wrote: bool) -> str:
         f"({stats.deviations / stats.decisions:.1%} of decisions)"
         if stats.decisions
         else "decisions: 0",
-        f"inserted: {stats.inserted} | updated: {stats.updated} | manual kept: {stats.manual_kept}",
+        f"inserted: {stats.inserted} | updated: {stats.updated} "
+        f"| manual rows refreshed (human columns preserved): {stats.manual_refreshed}",
+        *[f"WARNING: {w}" for w in stats.warnings],
         f"deviation cost: ${stats.deviation_cost:.4f}",
         f"skipped: {stats.skipped_api_error} api-error, {stats.skipped_untagged} untagged traces",
     ]

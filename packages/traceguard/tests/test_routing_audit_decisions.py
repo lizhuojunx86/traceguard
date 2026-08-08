@@ -177,12 +177,15 @@ def test_export_import_manual_roundtrip(source_root: Path, db_url: str, tmp_path
     assert d.source == "manual" and d.outcome == "adopted"
     assert d.reason.startswith("intentional")
 
-    # Regeneration must not overwrite the manual row.
+    # Regeneration must not overwrite the HUMAN columns of a manual row.
+    # It used to skip the row entirely (manual_kept), which also froze the
+    # derived half — see test_manual_rows_get_their_derived_columns_refreshed.
     stats2 = generate_decisions(db_url, write=True)
-    assert stats2.manual_kept == 1
+    assert stats2.manual_refreshed == 1
     with Session(engine) as sess:
         d = sess.get(RoutingDecision, f"{SESS}#s01#workflow-subagent")
     assert d.source == "manual" and d.outcome == "adopted"
+    assert d.reason.startswith("intentional")
 
 
 def test_import_rejects_bad_outcome(source_root: Path, db_url: str, tmp_path: Path) -> None:
@@ -242,7 +245,7 @@ def test_policy_default_and_unknown_via_custom_yaml(tmp_path: Path) -> None:
 def test_dry_run_previews_what_a_write_changes(source_root: Path, db_url: str) -> None:
     """A dry-run whose counters cannot move is not a dry-run.
 
-    inserted/updated/manual_kept were hard-zero because generate_decisions
+    inserted/updated/manual_refreshed were hard-zero because generate_decisions
     skipped the session entirely when write=False, so the operator could not see
     what a write would do without doing it.
     """
@@ -261,7 +264,7 @@ def test_dry_run_previews_what_a_write_changes(source_root: Path, db_url: str) -
 
 
 def test_dry_run_reports_manual_rows_it_would_keep(source_root: Path, db_url: str) -> None:
-    """manual_kept must be visible BEFORE the write, not only after it."""
+    """manual_refreshed must be visible BEFORE the write, not only after it."""
     ingest(source_root, db_url, write=True)
     _tag_unit(db_url)
     generate_decisions(db_url, write=True)
@@ -275,9 +278,198 @@ def test_dry_run_reports_manual_rows_it_would_keep(source_root: Path, db_url: st
         sess.commit()
 
     preview = generate_decisions(db_url, write=False)
-    assert preview.manual_kept == 1
+    assert preview.manual_refreshed == 1
 
     generate_decisions(db_url, write=True)
     with Session(engine) as sess:
         kept = sess.get(RoutingDecision, decision_id)
         assert kept.source == "manual" and kept.reason == "hand-reviewed"
+
+
+# ---------------------------------------------------------------------------
+# Column partition: human columns are never recomputed, derived columns always
+# are. Before 2026-08-08 `generate` skipped manual rows wholesale, so a human
+# annotation also froze expected_tier / actual_tier / deviation / cost_usd —
+# the 96 annotated rows became permanently exempt from routing policy, and they
+# were 60% of all deviations.
+# ---------------------------------------------------------------------------
+
+
+def test_routing_decisions_columns_are_exactly_partitioned() -> None:
+    """Every column belongs to exactly one set; a new column must be classified.
+
+    Needs no fixture and no data. Adding a column to RoutingDecision fails this
+    until its author decides whether a human writes it or a machine derives it —
+    the choice that, made by default, created the frozen-island bug.
+    """
+    from traceguard.routing_audit.routing_decisions import (
+        DERIVED_COLUMNS,
+        IDENTITY_COLUMNS,
+        MANUAL_COLUMNS,
+    )
+
+    actual = {c.name for c in RoutingDecision.__table__.columns}
+    declared = MANUAL_COLUMNS | DERIVED_COLUMNS | IDENTITY_COLUMNS
+
+    assert not (actual - declared), (
+        f"unclassified column(s) {sorted(actual - declared)}: add each to "
+        f"MANUAL_COLUMNS (a human writes it, never recomputed) or "
+        f"DERIVED_COLUMNS (recomputed on every generate) or IDENTITY_COLUMNS"
+    )
+    assert not (declared - actual), (
+        f"declared column(s) that no longer exist: {sorted(declared - actual)}"
+    )
+    # Exactly one set each — no column may be both protected and recomputed.
+    for a, b in (
+        (MANUAL_COLUMNS, DERIVED_COLUMNS),
+        (MANUAL_COLUMNS, IDENTITY_COLUMNS),
+        (DERIVED_COLUMNS, IDENTITY_COLUMNS),
+    ):
+        assert not (a & b), f"column in two sets: {sorted(a & b)}"
+
+
+def test_manual_rows_get_their_derived_columns_refreshed(
+    source_root: Path, db_url: str, tmp_path: Path
+) -> None:
+    """A manual annotation must not exempt the row from the policy.
+
+    This is the regression that matters: the row keeps reason/outcome/source and
+    picks up the current verdict, cost and batch_id.
+    """
+    from traceguard.routing_audit.routing_decisions import MANUAL_COLUMNS
+
+    ingest(source_root, db_url, write=True)
+    _tag_unit(db_url)
+    generate_decisions(db_url, write=True)
+
+    engine = make_engine(db_url)
+    with Session(engine) as sess:
+        row = sess.scalars(select(RoutingDecision)).first()
+        decision_id = row.decision_id
+        # Annotate it, and corrupt every derived column so a refresh is visible.
+        row.source = "manual"
+        row.reason = "intentional — reviewed by hand"
+        row.outcome = "adopted"
+        row.deviation = not row.deviation
+        row.cost_usd = Decimal("999.999999")
+        row.expected_tier = "bogus-tier"
+        row.actual_tier = "bogus-tier"
+        row.n_traces = 12345
+        row.batch_id = "stale-batch"
+        sess.commit()
+        before_created = row.created_at
+
+    stats = generate_decisions(db_url, write=True)
+    assert stats.manual_refreshed >= 1
+
+    with Session(engine) as sess:
+        after = sess.get(RoutingDecision, decision_id)
+        # Human columns: untouched.
+        assert after.source == "manual"
+        assert after.reason == "intentional — reviewed by hand"
+        assert after.outcome == "adopted"
+        # Derived columns: recomputed.
+        assert after.cost_usd != Decimal("999.999999")
+        assert after.expected_tier != "bogus-tier"
+        assert after.actual_tier != "bogus-tier"
+        assert after.n_traces != 12345
+        assert after.batch_id == stats.batch_id, "batch_id must say when the derived half was computed"
+        # Identity: preserved.
+        assert after.created_at == before_created
+    assert MANUAL_COLUMNS == {"reason", "outcome", "source"}
+
+
+def test_generate_never_writes_a_manual_column(source_root: Path, db_url: str) -> None:
+    """Structural guard: the values dict generate builds must be derived-only."""
+    from traceguard.routing_audit.routing_decisions import DERIVED_COLUMNS, MANUAL_COLUMNS
+
+    ingest(source_root, db_url, write=True)
+    _tag_unit(db_url)
+    # generate_decisions asserts this internally; make the contract explicit
+    # here too so the intent survives a refactor of that assert.
+    assert not (DERIVED_COLUMNS & MANUAL_COLUMNS)
+    generate_decisions(db_url, write=True)
+
+
+# ---------------------------------------------------------------------------
+# Derived-drift watchdog.
+#
+# Splitting the columns made recomputation REACH every row; it does not stop a
+# derived table from diverging from its source some other way. The manual-row
+# freeze only surfaced because a printed total ($1945.1544) disagreed with a
+# stored one ($1945.2578) — a comparison that existed nowhere machine-readable.
+# ---------------------------------------------------------------------------
+
+
+def test_drift_watchdog_is_silent_on_a_freshly_generated_table(
+    source_root: Path, db_url: str
+) -> None:
+    ingest(source_root, db_url, write=True)
+    _tag_unit(db_url)
+    generate_decisions(db_url, write=True)
+
+    clean = generate_decisions(db_url, write=False)
+    assert clean.drifted == {}
+    assert not [w for w in clean.warnings if "derived_drift" in w]
+
+
+def test_drift_watchdog_names_the_columns_that_diverged(
+    source_root: Path, db_url: str
+) -> None:
+    ingest(source_root, db_url, write=True)
+    _tag_unit(db_url)
+    generate_decisions(db_url, write=True)
+
+    engine = make_engine(db_url)
+    with Session(engine) as sess:
+        row = sess.scalars(select(RoutingDecision)).first()
+        decision_id = row.decision_id
+        row.cost_usd = (row.cost_usd or Decimal("0")) + Decimal("5")
+        row.actual_tier = "tampered"
+        sess.commit()
+
+    stats = generate_decisions(db_url, write=False)
+    assert decision_id in stats.drifted
+    assert set(stats.drifted[decision_id]) == {"cost_usd", "actual_tier"}
+    hit = [w for w in stats.warnings if "derived_drift" in w]
+    assert hit and "cost_usd" in hit[0] and "actual_tier" in hit[0]
+
+
+def test_drift_watchdog_goes_quiet_once_corrected(source_root: Path, db_url: str) -> None:
+    ingest(source_root, db_url, write=True)
+    _tag_unit(db_url)
+    generate_decisions(db_url, write=True)
+
+    engine = make_engine(db_url)
+    with Session(engine) as sess:
+        row = sess.scalars(select(RoutingDecision)).first()
+        row.actual_tier = "tampered"
+        sess.commit()
+
+    assert generate_decisions(db_url, write=True).drifted
+    assert generate_decisions(db_url, write=False).drifted == {}
+
+
+def test_drift_watchdog_ignores_batch_id(source_root: Path, db_url: str) -> None:
+    """batch_id changes every run by design; counting it would make drift constant."""
+    ingest(source_root, db_url, write=True)
+    _tag_unit(db_url)
+    generate_decisions(db_url, write=True)
+    stats = generate_decisions(db_url, write=False)
+    assert all("batch_id" not in cols for cols in stats.drifted.values())
+
+
+def test_drift_warning_uses_a_registered_kind(source_root: Path, db_url: str) -> None:
+    from traceguard.routing_audit.ingest_claude_code import WARNING_KINDS
+
+    ingest(source_root, db_url, write=True)
+    _tag_unit(db_url)
+    generate_decisions(db_url, write=True)
+    engine = make_engine(db_url)
+    with Session(engine) as sess:
+        row = sess.scalars(select(RoutingDecision)).first()
+        row.actual_tier = "tampered"
+        sess.commit()
+
+    for w in generate_decisions(db_url, write=False).warnings:
+        assert w[1:].split("]", 1)[0] in WARNING_KINDS

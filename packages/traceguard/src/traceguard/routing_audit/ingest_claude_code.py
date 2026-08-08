@@ -326,6 +326,17 @@ def parse_session_file(
                 meta["raw_model"] = model_raw
                 meta["api_error_status"] = rec.get("apiErrorStatus")
             if usage is not None:
+                # FLATTENING, and it discards the shape pricing was based on.
+                # The transcript reports the TTL split nested under
+                # "cache_creation"; the store keeps it flat. cost_usd on this
+                # row was computed from the nested form, but nothing stored
+                # records that it was — so the store is close enough to
+                # RE-approximate a price and not enough to reproduce this one
+                # exactly. (pit-archive hit the same class of problem and solved
+                # it with canonical_rule_version: record WHICH rule produced a
+                # derived value, because you cannot reconstruct it afterwards.)
+                # No live loss now that cache_creation_split reads both shapes;
+                # left here for whoever changes this mapping next.
                 nested = usage.get("cache_creation") or {}
                 meta["usage"] = {
                     "input_tokens": usage.get("input_tokens"),
@@ -500,6 +511,7 @@ WARNING_KINDS: frozenset[str] = frozenset({
     "tag_coverage",       # too few traces sit inside a tagged unit window
     "tag_staleness",      # newest tag lags the newest trace
     "tag_table_empty",    # tagging has never run against this store
+    "derived_drift",      # a stored derived value disagrees with a fresh recompute
 })
 
 

@@ -683,17 +683,20 @@ def test_opus_5_is_priced_and_dated() -> None:
 # ---------------------------------------------------------------------------
 # Cache-creation TTL split: both upstream shapes, neither assumed.
 #
-# An earlier version of this comment claimed the nested {"cache_creation":
-# {...}} shape was absent from the corpus and the flat cache_creation_5m /
-# cache_creation_1h keys universal, and that 1-hour writes were therefore being
-# billed at the 5-minute rate for $1,393.49. That was asserted, never measured,
-# and it is backwards: 34,234 of 34,234 messages in ~/.claude/projects carry
-# the NESTED shape and none carry the flat one, so the 2.0x branch has always
-# fired. Driving compute_cost_usd with and without the flat keys moves the
-# total by $0.00 (usage-tracker-audit/part4-routing-audit/settle_cache_split.py).
+# The two shapes belong to two different populations, and ingest is what turns
+# one into the other:
 #
-# Both shapes are covered below anyway. Flat is real in other builds, and the
-# point of these tests is that neither shape is the one we happen to assume.
+#   ~/.claude/projects transcripts  NESTED  {"cache_creation": {"ephemeral_*"}}
+#   traces.output_parsed.usage      FLAT    cache_creation_5m / cache_creation_1h
+#
+# So a fixture's shape decides which reader it exercises. USAGE_CACHED below is
+# nested, matching what ingest actually parses; the flat cases are written out
+# explicitly, because that is the only shape a recompute-from-store ever sees.
+# A fixture in a shape its reader never receives tests a branch that cannot run.
+#
+# History of an earlier wrong claim about all this lives in
+# pricing.py :: cache_creation_split, with the harness that settled it. One
+# narrative, one place — do not restate it here.
 #
 # Multipliers verified 2026-08-08 against the platform prompt-caching page:
 # 5m write 1.25x, 1h write 2x, read 0.1x of base input.

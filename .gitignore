@@ -85,10 +85,20 @@ pepper.*
 launch/
 /traceguard_定位与CC开发Prompt.md
 
-# iCloud/file-sync duplicates: "<name> 2.<ext>" — never commit (mirrors the
-# pyproject build `exclude = ["* 2.py"]` and conftest collect_ignore_glob).
-* 2.py
-* 2.md
-* 2.yaml
-* 2.sh
-* 2.plist
+# iCloud/file-sync duplicates: "<name> 2.<ext>", "<name> 3.<ext>" — never commit
+# (mirrors the pyproject build `exclude = ["* 2.py"]` and conftest
+# collect_ignore_glob). Extension-by-extension lists kept missing new cases:
+# " 3." copies and the .json/.csv ones were all showing as untracked. Match the
+# shape, not the extension.
+* 2.*
+* 3.*
+* 4.*
+
+# Local agent/editor settings — machine-specific, not project source.
+.claude/settings.local.json
+
+# Scratch files from issue-filing workflows.
+**/_prefilled_issue_url.txt
+
+# Probe artefacts left by a sandbox with create-but-not-delete mounts.
+.probe.*
