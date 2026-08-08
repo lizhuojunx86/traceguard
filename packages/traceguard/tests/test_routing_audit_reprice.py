@@ -9,6 +9,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from traceguard.routing_audit.pricing import (
+    PRICES,
     SONNET5_INTRO,
     SONNET5_STANDARD,
     compute_cost_usd,
@@ -108,3 +109,102 @@ def test_reprice_standard_era(db_url: str) -> None:
     )
     # standard era: (1000*3 + 2000*15)/1e6
     assert cost == (Decimal(1000) * Decimal(3) + Decimal(2000) * Decimal(15)) / Decimal(1_000_000)
+
+
+# ---------------------------------------------------------------------------
+# recompute_costs — correcting rows that ALREADY hold a value.
+#
+# reprice_null_costs cannot do this: it filters cost_usd IS NULL and hard-codes
+# old_cost_usd=None, because it only ever performs a deferred FIRST write.
+# ---------------------------------------------------------------------------
+
+FLAT_1H = {
+    "input_tokens": 0, "output_tokens": 0, "cache_read_input_tokens": 0,
+    "cache_creation_input_tokens": 10_000,
+    "cache_creation_5m": 0, "cache_creation_1h": 10_000,
+}
+
+
+def test_recompute_rewrites_a_wrong_existing_cost(db_url: str) -> None:
+    from traceguard.routing_audit.reprice import recompute_costs
+
+    engine = make_engine(db_url)
+    day = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    # A cost stored under the old all-5m rule (1.25x on the whole lot).
+    p = PRICES["claude-opus-4-8"]
+    wrong = (10_000 * p.input_per_mtok * p.cache_write_5m_mult) / Decimal(1_000_000)
+    tid = _insert(engine, model_id="claude-opus-4-8", invoked_at=day,
+                  usage=FLAT_1H, cost=wrong.quantize(Decimal("0.000001")))
+
+    dry = recompute_costs(db_url)
+    assert dry.changed == 1 and dry.written == 0
+    assert dry.delta > 0, "dry-run must report a non-zero delta, not always 0"
+    assert dry.old_total == wrong.quantize(Decimal("0.000001"))
+
+    stats = recompute_costs(db_url, write=True)
+    assert stats.changed == 1 and stats.written == 1
+
+    right = (10_000 * p.input_per_mtok * p.cache_write_1h_mult) / Decimal(1_000_000)
+    with Session(engine) as sess:
+        assert sess.get(Trace, tid).cost_usd == right.quantize(Decimal("0.000001"))
+
+
+def test_recompute_logs_the_real_old_value_and_rolls_back(db_url: str) -> None:
+    """The whole point: old_cost_usd must be the prior value, not None."""
+    from traceguard.routing_audit.models import RoutingAuditRepriceLog
+    from traceguard.routing_audit.reprice import recompute_costs
+
+    engine = make_engine(db_url)
+    day = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    stale = Decimal("0.001000")
+    tid = _insert(engine, model_id="claude-opus-4-8", invoked_at=day,
+                  usage=FLAT_1H, cost=stale)
+
+    stats = recompute_costs(db_url, write=True)
+    with Session(engine) as sess:
+        log = sess.query(RoutingAuditRepriceLog).filter_by(batch_id=stats.batch_id).one()
+        assert log.old_cost_usd == stale, "a None here would make the change irreversible"
+        assert log.new_cost_usd != stale
+
+    restored = rollback_reprice(stats.batch_id, db_url)
+    assert restored == 1
+    with Session(engine) as sess:
+        assert sess.get(Trace, tid).cost_usd == stale
+
+
+def test_recompute_is_idempotent(db_url: str) -> None:
+    from traceguard.routing_audit.reprice import recompute_costs
+
+    engine = make_engine(db_url)
+    day = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    _insert(engine, model_id="claude-opus-4-8", invoked_at=day, usage=FLAT_1H,
+            cost=Decimal("0.001000"))
+    recompute_costs(db_url, write=True)
+    again = recompute_costs(db_url)
+    assert again.changed == 0 and again.delta == Decimal("0")
+
+
+def test_recompute_never_nulls_a_row_it_can_no_longer_price(db_url: str) -> None:
+    """A regressed rule must not destroy a real number."""
+    from traceguard.routing_audit.reprice import recompute_costs
+
+    engine = make_engine(db_url)
+    day = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    kept = Decimal("0.500000")
+    tid = _insert(engine, model_id="model-with-no-price", invoked_at=day,
+                  usage=FLAT_1H, cost=kept)
+
+    stats = recompute_costs(db_url, write=True)
+    assert stats.unpriceable == 1 and stats.written == 0
+    with Session(engine) as sess:
+        assert sess.get(Trace, tid).cost_usd == kept
+
+
+def test_recompute_leaves_null_rows_to_the_other_path(db_url: str) -> None:
+    from traceguard.routing_audit.reprice import recompute_costs
+
+    engine = make_engine(db_url)
+    day = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    _insert(engine, model_id="claude-opus-4-8", invoked_at=day, usage=FLAT_1H, cost=None)
+    stats = recompute_costs(db_url, write=True)
+    assert stats.scanned == 0 and stats.written == 0

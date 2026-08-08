@@ -135,6 +135,141 @@ def reprice_null_costs(
     return stats
 
 
+@dataclass
+class RecomputeStats:
+    """Rows whose ALREADY-SET cost changes when the pricing rules are corrected."""
+
+    scanned: int = 0  # rows with a non-NULL cost that were re-derived
+    changed: int = 0  # of those, the ones whose recomputed cost differs
+    unchanged: int = 0
+    unpriceable: int = 0  # priced before, not derivable now — never silently zeroed
+    written: int = 0
+    old_total: Decimal = Decimal("0")  # summed over CHANGED rows only
+    new_total: Decimal = Decimal("0")
+    batch_id: str | None = None
+    by_model: dict[str, list[Any]] = field(default_factory=dict)  # model -> [rows, delta]
+
+    @property
+    def delta(self) -> Decimal:
+        return self.new_total - self.old_total
+
+
+def recompute_costs(
+    db_url: str | None = None,
+    *,
+    write: bool = False,
+    batch_id: str | None = None,
+    on_cost_write: Callable[..., Any] | None = None,
+) -> RecomputeStats:
+    """Re-derive cost for rows that ALREADY have one, logging the true old value.
+
+    :func:`reprice_null_costs` cannot do this. It filters on ``cost_usd IS
+    NULL`` and hard-codes ``old_cost_usd=None`` in the log, because it only
+    ever performs a deferred FIRST write. Correcting a pricing rule is a
+    different operation: the rows already hold a value, that value is wrong,
+    and the log must carry what it was or the change is irreversible.
+
+    Written for the 2026-08-08 cache-TTL correction — 1-hour cache writes had
+    been billed at the 5-minute 1.25x rate on every row in the store, because
+    the TTL split was only ever read from the nested usage shape and local data
+    only ever uses the flat one. Nothing here is specific to that: it re-derives
+    every non-NULL cost under the current rules and writes back only what
+    differs.
+
+    A row that was priced and is no longer derivable is counted under
+    ``unpriceable`` and LEFT ALONE. Overwriting a real number with NULL because
+    the rules regressed would destroy data on the strength of a bug.
+
+    Batch/rollback semantics match the NULL path, so the two together read as
+    one ordered history per trace: the deferred first write, then each
+    correction, each reversible on its own batch id.
+    """
+    stats = RecomputeStats()
+    engine = make_engine(db_url)
+    ensure_tables(engine)
+    stats.batch_id = batch_id or _batch_id()
+
+    with Session(engine) as sess:
+        rows = list(
+            sess.execute(
+                select(
+                    Trace.trace_id, Trace.model_id, Trace.output_parsed,
+                    Trace.invoked_at, Trace.cost_usd,
+                ).where(Trace.cost_usd.is_not(None))
+            )
+        )
+        stats.scanned = len(rows)
+        pending: list[tuple[int, str, Decimal, Decimal]] = []
+        for trace_id, model_id, output_parsed, invoked_at, old_cost in rows:
+            usage = (output_parsed or {}).get("usage")
+            new_cost = compute_cost_usd(model_id, usage, invoked_at)
+            if new_cost is None:
+                stats.unpriceable += 1
+                continue
+            if new_cost == old_cost:
+                stats.unchanged += 1
+                continue
+            stats.changed += 1
+            stats.old_total += old_cost
+            stats.new_total += new_cost
+            agg = stats.by_model.setdefault(model_id, [0, Decimal("0")])
+            agg[0] += 1
+            agg[1] += new_cost - old_cost
+            pending.append((trace_id, model_id, old_cost, new_cost))
+
+        if not write:
+            return stats
+
+        for start in range(0, len(pending), _WRITE_CHUNK):
+            chunk = pending[start : start + _WRITE_CHUNK]
+            for trace_id, model_id, old_cost, new_cost in chunk:
+                sess.execute(
+                    update(Trace).where(Trace.trace_id == trace_id).values(cost_usd=new_cost)
+                )
+                sess.add(
+                    RoutingAuditRepriceLog(
+                        batch_id=stats.batch_id,
+                        trace_id=trace_id,
+                        model_id=model_id,
+                        old_cost_usd=old_cost,  # the real prior value — what makes it reversible
+                        new_cost_usd=new_cost,
+                    )
+                )
+            sess.commit()
+            stats.written += len(chunk)
+            if on_cost_write is not None:
+                for trace_id, model_id, old_cost, new_cost in chunk:
+                    on_cost_write(
+                        trace_id=trace_id,
+                        event_type="pricing_rule_correction",
+                        old_value=old_cost,
+                        new_value=new_cost,
+                        batch_id=stats.batch_id,
+                        reason=f"cost recomputed under current pricing rules ({model_id})",
+                    )
+    return stats
+
+
+def format_recompute_report(stats: RecomputeStats, *, wrote: bool) -> str:
+    mode = f"WROTE batch={stats.batch_id}" if wrote else "DRY-RUN (no writes)"
+    sign = "+" if stats.delta >= 0 else "-"
+    lines = [
+        f"== routing_audit: recompute existing costs — {mode} ==",
+        f"scanned: {stats.scanned} priced rows | changed: {stats.changed} "
+        f"| unchanged: {stats.unchanged} | no longer derivable (left alone): "
+        f"{stats.unpriceable}",
+        # A delta never prints without the base it moves from.
+        f"over the {stats.changed} changed rows: ${stats.old_total:.4f} -> "
+        f"${stats.new_total:.4f}  ({sign}${abs(stats.delta):.4f})",
+        f"written: {stats.written}",
+    ]
+    if stats.by_model:
+        lines += ["", f"  {'model':<28} {'rows':>7} {'delta_usd':>12}"]
+        for model, (n, delta) in sorted(stats.by_model.items(), key=lambda kv: -kv[1][1]):
+            lines.append(f"  {model:<28} {n:>7} {delta:>12.4f}")
+    return "\n".join(lines)
+
+
 def rollback_reprice(
     batch_id: str,
     db_url: str | None = None,
@@ -201,6 +336,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--write", action="store_true", help="persist (default: dry-run)")
     parser.add_argument("--rollback", metavar="BATCH_ID", help="restore a reprice batch, then exit")
     parser.add_argument(
+        "--recompute",
+        action="store_true",
+        help="re-derive costs for rows that ALREADY have one and rewrite those that "
+        "differ under the current pricing rules (default path only fills NULLs)",
+    )
+    parser.add_argument(
         "--audit",
         action="store_true",
         help="record each cost write as a chained traceguard.audit cost event "
@@ -233,6 +374,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.rollback:
         n = rollback_reprice(args.rollback, args.db, on_cost_write=on_cost_write)
         print(f"rollback {args.rollback}: restored {n} rows to their prior cost")
+        return 0
+
+    if args.recompute:
+        rstats = recompute_costs(args.db, write=args.write, on_cost_write=on_cost_write)
+        print(format_recompute_report(rstats, wrote=args.write))
+        if not args.write:
+            print("\n(dry-run — re-run with --write to persist)")
         return 0
 
     stats = reprice_null_costs(args.db, write=args.write, on_cost_write=on_cost_write)
