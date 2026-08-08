@@ -40,7 +40,14 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
 
-from traceguard.routing_audit.pricing import cache_creation_split, compute_cost_usd
+_SRC = Path(__file__).resolve().parents[2] / "packages" / "traceguard" / "src"
+if _SRC.is_dir() and str(_SRC) not in sys.path:
+    sys.path.insert(0, str(_SRC))  # uv run treats a script outside the project as standalone
+
+from traceguard.routing_audit.pricing import (  # noqa: E402
+    cache_creation_split,
+    compute_cost_usd,
+)
 
 FLAT_KEYS = ("cache_creation_5m", "cache_creation_1h")
 
