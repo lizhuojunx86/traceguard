@@ -521,9 +521,16 @@ cared enough about to annotate are exactly the rows that stopped responding.
 deviated.**
 
 Chain closes: stored $1,945.2579 − printed $1,945.1544 = $0.1034, and the
-manual rows' own drift is $1,248.1327 − $1,248.0292 = $0.1035. So
-`$1,248.0292` is not pending, it is **void** — it assumes a refresh that cannot
-occur.
+manual rows' own drift is $1,248.1327 − $1,248.0292 = $0.1035.
+
+> **Correction, 2026-08-08.** This section originally said `$1,248.0292` was
+> "not pending, it is **void** — it assumes a refresh that cannot occur."
+> Wrong. The refresh could not occur *given the defect*; splitting the columns
+> made it occur, and $1,248.0292 is now the live stored value. I described the
+> current state of the system as a property of the system. **That is the second
+> time in this document** — §6b's $1,393.49 did the same thing, assuming every
+> stored cost had come from a path that had in fact never run. Both errors have
+> one shape: a contingent fact stated as a necessary one.
 
 ### The shape of the fix already exists in the operator's other project
 
@@ -551,6 +558,29 @@ CC captured the 425-row state before writing, so this is diffed, not reasoned:
 - **cost recompute on carried-forward rows**: **$0.0000**, because the only
   affected rows were manual ones, which do not update. That is the defect
   above, showing up as a zero.
+
+### Resolved 2026-08-08 — and the fix needed a third column class
+
+`generate` now refreshes derived columns on manual rows and leaves
+`reason`/`outcome`/`source` alone. Measured after the change: **0 deviation
+flips**, 0 human columns modified, 96/96 `batch_id` refreshed, deviation cost
+$1,248.1327 → $1,248.0292, and `stored == printed` at $1,945.1544.
+
+Zero flips is not "nothing happened" — what was removed is the exemption. The
+next policy revision reaches these rows.
+
+**The two-class split I specified was wrong.** CC used three: `decision_id` and
+`created_at` are neither human-written nor derived. Classing `created_at` as
+derived would rewrite it on every rebuild and destroy the only record of when a
+decision first appeared. The evidence is visible right now — after two
+regenerations, the manual rows still carry `created_at` = 2026-07-03 00:36:51,
+while `generated` spans 2026-07-03 → 2026-08-08.
+
+That is `first_seen_at` under another name, and it is the same rule pit-archive
+enforces: a derived record's identity includes when it was first observed, and
+that timestamp is not derivable from anything. A partition test asserts the
+three sets exactly cover the table's columns, so a new column forces its author
+to choose.
 
 ### Tag provenance now travels with the number
 

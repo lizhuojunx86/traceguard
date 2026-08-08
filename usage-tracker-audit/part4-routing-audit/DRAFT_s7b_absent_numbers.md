@@ -12,7 +12,9 @@ Checked against `traces_routing_audit.db` on 2026-08-08 at 13:13. Results:
 |---|---|---|---|
 | opus-5 rows | 5,992 | **5,992**, all now priced | ✅ |
 | opus-5 value | $1,213.85 | **$1,213.91** | ✅ 6c off, quote the measured one |
-| 1h-multiplier undercount | $1,393.49 | **$88.75** written | ❌ **DO NOT PUBLISH** |
+| 1h-multiplier undercount | $1,393.49 | **$0.00** — claim is backwards | ❌ **RETRACTED** |
+| cache shape | "58,194 flat, 0 nested" | **34,234 nested, 0 flat** | ❌ **RETRACTED** |
+| the $88.75 recompute batch | "the cache fix" | 3,907 of 3,918 rows were opus-5 | ⚠️ second-order opus-5 correction, unrelated |
 | store total | $12,588.23 | **$13,804.76** | ⚠️ pre-fix, restate everywhere |
 | 58,194 flat / 0 nested | — | not checkable from the DB | ⚠️ see below |
 | 24 rows, −69,714 / +6,977 | — | not checkable from the DB | ⚠️ see below |
@@ -83,7 +85,11 @@ cost total moved by ninety-one cents.
 645 of the 678 were opus-5. The defect demonstrated itself, unprompted, inside
 the window in which it was being written up.
 
-### A constant no code path could reach
+### A constant no code path could reach — RETRACTED, see below
+
+**This whole subsection is dead. Kept only so the retraction below has
+something to point at. Do not publish anything between here and "What
+generalises" — the replacement section follows it.**
 
 The second one is worse, and it is worse in a way I like less.
 
@@ -117,6 +123,62 @@ tokens off the bill. Trust the total alone and you throw away the 1-hour
 premium. So the total wins on quantity and the split wins on composition: cap
 the 1-hour figure at the total, give the rest to 5-minute. No token invented,
 none dropped, and the 58,170 rows where the two agree are untouched.
+
+### The number I nearly published
+
+Everything in the retracted subsection above came from a comment I wrote in my
+own pricing module. It said the local transcripts carry a flat cache-split
+shape, that 58,194 of 58,210 rows had it and zero had the nested one, that the
+2× one-hour multiplier was therefore a constant no code path could reach, and
+that the store was $1,393.49 short as a result.
+
+It reads like a measurement. It is four specific numbers in a row. I wrote it,
+and a day later I was drafting it into this post as the strongest finding in
+the section.
+
+Then I measured it. The method is the one this series has used on four other
+people's tools: drive the vendor's own function rather than reimplement it.
+Call `compute_cost_usd` twice per message, once with the flat keys as written
+and once with them stripped — stripping them reproduces the old code path
+exactly, because the old code read only the nested shape and fell back to
+"treat everything as 5-minute TTL" when it was absent. The difference between
+the two totals is what the fix is worth, with no second implementation to
+disagree with.
+
+Across 34,234 distinct messages carrying 142,957,275 one-hour cache tokens:
+
+| | |
+|---|---|
+| total, as written | $7,712.97 |
+| total, pre-fix | $7,712.97 |
+| **the fix is worth** | **$0.00** |
+
+Zero. Not small — zero, to the cent. Because the shape claim is backwards:
+**34,234 of 34,234 records carry the nested form and none carry the flat
+one.** The nested branch always fired. The 2× multiplier was never
+unreachable. There was no $1,393.49.
+
+The honest limit, which cuts the other way: `~/.claude/projects` is a rolling
+window and my store holds rows back to 2026-05-30 whose transcripts are gone.
+If the flat shape was ever written it was written there, and `traces` keeps no
+`usage` block, so those rows cannot be re-derived. I cannot prove the claim was
+never true. I can only say nothing that survives supports it, which is a
+weaker sentence than the one I nearly shipped and the only one I am entitled
+to.
+
+What made this catchable was not rigour. It was that the number had to go in a
+post, and things that go in posts get checked. The comment had sat in the
+module for a day, in a repository with 430 passing tests, none of which
+assert anything about which shape production sends. The test fixtures used the
+nested shape while the comment above them said production used flat, and every
+test passed, because a fixture agrees with whatever you build it from.
+
+I want to be plain about the shape of this, because it is the same shape as
+part 3's. There I wrote that documentation describes hazards and measurement
+finds instances, and that stacking more reading does not produce a
+measurement. A code comment is documentation. Mine asserted a distribution over
+58,210 rows that nobody had counted, and it was wrong in the direction that
+made the story better.
 
 ### What generalises
 

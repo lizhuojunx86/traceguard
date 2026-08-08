@@ -14,8 +14,9 @@ Price sources — verified against anthropic.com official pages 2026-07-02:
     Cache multipliers re-verified 2026-08-08 against the platform prompt-caching
     page: "5-minute cache write tokens are 1.25 times the base input tokens
     price / 1-hour cache write tokens are 2 times / Cache read tokens are 0.1
-    times". The 2.0 constant was always right; until 2026-08-08 no code path
-    could reach it (see cache_creation_split).
+    times". The 2.0 constant is correct and is reached on every record that
+    carries a 1-hour split; an earlier revision of this docstring claimed it
+    was unreachable, which was wrong — see cache_creation_split.
 
     opus-5 added 2026-08-08, verified against anthropic.com/news/claude-opus-5
     (published 2026-07-24): "priced at $5 per million input tokens and $25 per
@@ -123,24 +124,47 @@ def cache_creation_split(usage: Mapping[str, Any]) -> tuple[int, int]:
 
     * nested — ``{"cache_creation": {"ephemeral_5m_input_tokens": N,
       "ephemeral_1h_input_tokens": M}}``. The Messages API response shape.
-    * flat — ``{"cache_creation_5m": N, "cache_creation_1h": M}``. What the
-      local Claude Code JSONL writes, and what 58,194 of the 58,210 rows in the
-      local store actually carry. Zero rows carry the nested form.
+    * flat — ``{"cache_creation_5m": N, "cache_creation_1h": M}``. Reported in
+      some Claude Code builds. **Not present in this corpus.**
 
-    Reading only the nested form is what made ``cache_write_1h_mult`` a dead
-    constant: the "no split available" fallback fired on every single record,
-    every 1-hour cache write was billed at the 5-minute 1.25x rate, and the
-    whole store came out $1,393.49 low. Support both, and prefer nested when a
-    record somehow carries both, since that is the API's own wording.
+    MEASURED, 2026-08-08, and it corrected this docstring rather than
+    confirming it. An earlier revision asserted the opposite — that 58,194 of
+    58,210 rows carried the flat form, that zero carried the nested one, that
+    the 1-hour multiplier was therefore a constant no code path could reach,
+    and that the store was $1,393.49 low as a result. Every part of that is
+    wrong. Driving ``compute_cost_usd`` over ~/.claude/projects twice, once
+    with the flat keys present and once with them stripped, changed the total
+    by **$0.00** across 34,234 distinct messages carrying 142,957,275 one-hour
+    cache tokens, because **34,234 of 34,234 records carry the nested form and
+    none carry the flat one**. The nested branch has always fired. The 2.0
+    multiplier has always been applied. Harness:
+    ``usage-tracker-audit/part4-routing-audit/settle_cache_split.py``.
+
+    So flat support is insurance against a shape this corpus does not contain,
+    not a fix for a live defect. Keep it — the shape is real in the wild and
+    costs four lines — but do not attribute any money to it.
+
+    What cannot be checked: ``~/.claude/projects`` is a rolling window, and the
+    store holds rows back to 2026-05-30 whose transcripts are gone. If the
+    flat form was ever written, it was written there, and nothing that survives
+    can say. ``traces`` keeps no ``usage`` block, so those rows cannot be
+    re-derived either. Absence of evidence, recorded as such.
+
+    Prefer nested when a record carries both, since that is the API's own
+    wording.
 
     RECONCILIATION. ``cache_creation_input_tokens`` is the top-level billable
-    count; the split describes its composition. On 24 of 58,194 local rows they
-    disagree, in BOTH directions (a split under-reporting the total by 69,714
-    tokens, and one over-reporting it by 6,977). Taking the split at face value
-    silently drops 274,513 tokens from the bill; taking the total alone throws
-    away the 1-hour premium. So the total wins on quantity and the split wins on
-    composition: 1h is capped at the total, and whatever remains is 5m. No token
-    is ever dropped or invented, and the 58,170 consistent rows are unaffected.
+    count; the split describes its composition. A minority of rows disagree,
+    in BOTH directions. Taking the split at face value silently drops tokens
+    from the bill; taking the total alone throws away the 1-hour premium. So
+    the total wins on quantity and the split wins on composition: 1h is capped
+    at the total, and whatever remains is 5m. No token is ever dropped or
+    invented, and consistent rows are unaffected.
+
+    The counts that used to sit in this paragraph (24 of 58,194 rows, 69,714
+    and 6,977 tokens, 274,513 dropped) were carried over from the same
+    unmeasured pass as the flat/nested claim above and are not reproducible
+    from anything that survives. Re-measure before quoting them.
 
     One edge of that rule is a deliberate choice, not a fallout: when a split
     reports MORE 1-hour tokens than the total allows, ``h1`` clamps to the whole

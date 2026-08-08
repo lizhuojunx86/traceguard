@@ -681,20 +681,25 @@ def test_opus_5_is_priced_and_dated() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Cache-creation TTL split: the shape mismatch that made 2.0x unreachable.
+# Cache-creation TTL split: both upstream shapes, neither assumed.
 #
-# USAGE_CACHED above uses the NESTED {"cache_creation": {...}} shape. Zero of
-# the 58,210 rows in the local store carry it; 58,194 carry the FLAT
-# cache_creation_5m / cache_creation_1h keys. So every cache test in this file
-# exercised a branch production never takes, all of them passed, and meanwhile
-# every 1-hour cache write in the store was billed at the 5-minute 1.25x rate
-# — $1,393.49 low across 27,130 traces.
+# An earlier version of this comment claimed the nested {"cache_creation":
+# {...}} shape was absent from the corpus and the flat cache_creation_5m /
+# cache_creation_1h keys universal, and that 1-hour writes were therefore being
+# billed at the 5-minute rate for $1,393.49. That was asserted, never measured,
+# and it is backwards: 34,234 of 34,234 messages in ~/.claude/projects carry
+# the NESTED shape and none carry the flat one, so the 2.0x branch has always
+# fired. Driving compute_cost_usd with and without the flat keys moves the
+# total by $0.00 (usage-tracker-audit/part4-routing-audit/settle_cache_split.py).
+#
+# Both shapes are covered below anyway. Flat is real in other builds, and the
+# point of these tests is that neither shape is the one we happen to assume.
 #
 # Multipliers verified 2026-08-08 against the platform prompt-caching page:
 # 5m write 1.25x, 1h write 2x, read 0.1x of base input.
 # ---------------------------------------------------------------------------
 
-# The production shape. Keep this the default for new cache fixtures.
+# The shape this corpus does not carry — kept because other builds emit it.
 USAGE_FLAT_1H = {
     "input_tokens": 0,
     "output_tokens": 0,
@@ -768,7 +773,7 @@ def test_cache_creation_split_reconciles_against_the_total() -> None:
              "cache_creation_5m": 0, "cache_creation_1h": 7_459}
     assert cache_creation_split(mixed) == (1_436, 7_459)
 
-    # Consistent rows — the other 58,170 — are untouched.
+    # Rows where split and total agree are untouched.
     ok = {"cache_creation_input_tokens": 10_000,
           "cache_creation_5m": 4_000, "cache_creation_1h": 6_000}
     assert cache_creation_split(ok) == (4_000, 6_000)
