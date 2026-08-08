@@ -1,0 +1,34 @@
+fix(routing_audit): price opus-5, deliver unpriced-model warnings, unfreeze manual rows
+
+Four defects, all found while fact-checking the part 4 article, all of the
+same class: a check that existed and reported nothing.
+
+- pricing: claude-opus-5 had no PRICES entry, so 5,992 traces (10.3% of the
+  store) carried cost_usd = NULL for two weeks. Rate and release date verified
+  against anthropic.com/news/claude-opus-5. Repriced to $1,213.91.
+
+- pricing: compute_cost_usd read the 5m/1h cache split only from the nested
+  usage shape. Transcripts are nested, the store is flat, so any
+  recompute-from-store billed 1h writes at the 5m rate. Now reads both.
+  Blast radius measured: $88.75 over 3,918 rows, not the $1,393.49 first
+  claimed — see the correction in pricing.py :: cache_creation_split.
+
+- ingest: the missing_price counter incremented and was tested, but
+  append_run_log serialised only stats.warnings, which it never entered. The
+  alarm fired ten times into stdout while eighteen run-log entries recorded an
+  empty warnings list. Warnings now go through a WARNING_KINDS registry, and
+  written_cost never appears without the count it excluded.
+
+- routing_decisions: generate skipped source='manual' rows whole to protect
+  reason/outcome, freezing their derived columns too. All 96 deviations were
+  permanently exempt from the policy. Columns are now partitioned into
+  human / derived / identity, with a test asserting the three sets cover the
+  table exactly. Refreshing them produced 0 verdict flips and 0 human-column
+  changes.
+
+Also: task-tag coverage and staleness watchdogs, a derived_drift watchdog,
+dry-run counters that no longer report structural zeros, and as_of coercion
+(a numeric-looking string silently matched zero rows under SQLite's NUMERIC
+affinity).
+
+430 passed, 3 skipped.

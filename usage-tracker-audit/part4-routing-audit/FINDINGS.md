@@ -308,8 +308,14 @@ the counter.
 
 **opus-5 is now priced**, at the official $5/$25 (verified against
 `anthropic.com/news/claude-opus-5`, released 2026-07-24). 5,992 traces repriced
-to **$1,127.77**, batch `rp-20260808T030632Z-ec404e`, rollbackable. The
-acceptance invariant returns 0 rows.
+to $1,127.77, batch `rp-20260808T030632Z-ec404e`, rollbackable. The acceptance
+invariant returns 0 rows.
+
+> **Final value: $1,213.91.** The $1,127.77 above was computed through the
+> flat-key blind spot described below and was $86.13 low. Batch
+> `rp-20260808T041211Z-e92e55` corrected it. **Quote $1,213.91**, which is the
+> live measured total and happens to land 6 cents from the original hand
+> estimate of $1,213.85. Do not quote $1,127.77 or $1,213.85 as current.
 
 ### And then reconciling that number against my own found a real bug — whose only victim was this audit
 
