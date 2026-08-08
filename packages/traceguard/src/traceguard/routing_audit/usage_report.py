@@ -1,9 +1,13 @@
 """Per-run usage drift log — the cross-tool six-field record.
 
 Emits the record shape published by clauderank's usage-drift-log spec
-(``m1kapp/claude-rank/docs/usage-drift-log.md``), adopted verbatim per the
-convergence agreement in sculptdotfun/viberank#83: one JSON object appended
-per run to ``~/.usage-report-history.jsonl``, never rewritten.
+(``m1kapp/runmaxing/docs/usage-drift-log.md``, formerly ``m1kapp/claude-rank``),
+adopted verbatim per the convergence agreement in sculptdotfun/viberank#83:
+one JSON object appended per run to ``~/.usage-report-history.jsonl``, never
+rewritten.
+
+Implementation registry, the revisions viberank's adoption forced, and what
+is still open: ``docs/specs/usage-drift-log.md`` in this repo.
 
 The six-field contract::
 
@@ -15,7 +19,8 @@ The six-field contract::
 - ``cost_usd`` is month-to-date, summed from the append-only traces store —
   frozen at first sight, not recomputed from live files.
 - ``messages`` counts month-to-date *human-authored* messages, matching
-  clauderank's semantics (``cli/scripts/sess.py``): ``type == "user"``
+  clauderank's semantics (``plugins/claude-run/skills/usage-report/build.py``,
+  formerly ``cli/scripts/sess.py``): ``type == "user"``
   records, excluding ``isSidechain`` (prompts a parent agent sent) and
   excluding pure tool_result turns.
 - ``corpus.files``/``corpus.bytes`` count the transcript tree recursively
