@@ -97,6 +97,11 @@ launch/
 # Local agent/editor settings — machine-specific, not project source.
 .claude/settings.local.json
 
+# Temporary routing probes. They exist to measure whether a definition's
+# `model:` field is honoured, and they must not survive into the routing audit —
+# a probe left in place becomes a signal you manufactured yourself.
+.claude/agents/probe-*.md
+
 # Scratch files from issue-filing workflows.
 **/_prefilled_issue_url.txt
 
