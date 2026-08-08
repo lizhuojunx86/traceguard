@@ -18,13 +18,24 @@
 #   3. 已知例外类（不改政策，走"处方C=记录例外"）：huadian 创作类角色 subagent
 #      按 D-route 资产#11 允许 opus；component 粒度细化前在 deviations CSV 填
 #      reason，不放宽 workflow-subagent 的 mid 期望。
+#   v2 (2026-08-08)：tiers.frontier 增列 claude-opus-5。
+#   理由：opus-5 自 2026-07-25 进入语料（5,992 条 trace），但不在任何 tier 里，
+#   于是 actual_tier 无法解析——这批 trace 既判不出合规也判不出偏差，整整两周
+#   悬空。opus-5 是 opus-4-8 的同档继任（同为 $5/$25，官方公告 2026-07-24 称
+#   "the same as Opus 4.8"），归 frontier 与既有 opus-4-x 一致。
+#   注意：本次改动会改变 routing_decisions 的判定结果——此前 opus-5 行无 tier
+#   可判，此后按 frontier 判。96 条 source='manual' 的人工行不受影响
+#   （routing_decisions.py 对 manual 行是硬 continue，先于任何赋值）。
+#   未改动：main 默认规则的 expected_model 仍是 claude-opus-4-8。expected_model
+#   仅供报告展示、从不触发偏差（见本文件抬头），是否随新 Opus 更新属政策意图，
+#   留待 owner 决定。
 #
 # 规则匹配：一条规则可指定 project / component / task_type 中任意子集；只有
 # 全部指定项都相等才适用。适用规则里"指定项最多"的胜出，平局取本文件中靠前的
 # 一条。都不适用则用 default_tier。
 
 tiers:
-  frontier: [claude-opus-4-8, claude-opus-4-7, claude-opus-4-6, claude-opus-4-5, claude-fable-5]
+  frontier: [claude-opus-5, claude-opus-4-8, claude-opus-4-7, claude-opus-4-6, claude-opus-4-5, claude-fable-5]
   mid: [claude-sonnet-5, claude-sonnet-4-6, claude-sonnet-4-5]
   cheap: [claude-haiku-4-5-20251001, claude-haiku-4-5]
 
