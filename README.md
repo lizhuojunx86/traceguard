@@ -127,6 +127,30 @@ Method, decision-flip definition, and a twelve-item limitations section:
 narrative: [docs/case-studies/fmp-revision.md](docs/case-studies/fmp-revision.md)
 ([中文](docs/case-studies/fmp-revision.zh.md))
 
+## One-minute check: which of your agents pick their own model?
+
+A Claude Code subagent whose definition omits `model:` runs whatever the main
+thread is running. Usually that is what you want. It stops being what you want
+when a frontier model is doing work nobody would have chosen a frontier model
+for — at that point no routing decision is being made, and the cost lands
+anyway.
+
+```bash
+python -m traceguard.routing_audit.agent_lint
+# or, with nothing installed at all:
+python agent_lint.py ~/.claude/agents ./.claude/agents
+```
+
+Reads the YAML frontmatter of `.claude/agents/**/*.md` and nothing else — two
+keys, `name` and `model`. No transcripts, no network, no dependencies, ~35 ms
+on a 15-agent tree. Exits 1 if anything is unpinned, so it works as a CI gate.
+
+`model:` absent and `model: inherit` are reported separately. Both run the
+parent's model; only one of them is a decision somebody made.
+
+That answers *whether* you have the exposure. What those agents actually ran,
+and what it cost, needs a trace store —
+
 ## Field evidence: `routing_audit`
 
 The opt-in `traceguard.routing_audit` extension applies the same discipline to
@@ -154,11 +178,17 @@ a nameable defect instead of a rounding argument. The end-to-end regression
 fixture from that work was [merged upstream](https://github.com/Piebald-AI/splitrail/pull/208).
 
 The same reference log now also emits the cross-tool
-[usage-drift-log](https://github.com/m1kapp/claude-rank/blob/main/docs/usage-drift-log.md)
+[usage-drift-log](https://github.com/m1kapp/runmaxing/blob/main/docs/usage-drift-log.md)
 record each scheduled run (`--usage-report-history`) — a six-field per-run
 spec published by clauderank after the drift pattern reproduced at
 leaderboard scale ([viberank#83](https://github.com/sculptdotfun/viberank/issues/83));
 `routing_audit` is its second independent implementation.
+
+viberank became the third, and adopting it there forced six revisions —
+per-month scoping, absence is not deletion, and the multi-agent source gap
+among them. Which tool implements what, each revision and the measurement
+that forced it, and what is still open:
+[`docs/specs/usage-drift-log.md`](docs/specs/usage-drift-log.md).
 
 Method and reproduction protocol: [`splitrail-validation/`](splitrail-validation/) ·
 write-up: [An append-only audit log caught two accounting bugs in a 216-star usage tracker](https://dev.to/lizhuojunx86/an-append-only-audit-log-caught-two-accounting-bugs-in-a-216-star-usage-tracker-38co)
