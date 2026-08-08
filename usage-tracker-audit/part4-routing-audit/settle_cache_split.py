@@ -91,6 +91,10 @@ def main(argv: list[str] | None = None) -> int:
     seen: set[str] = set()
     files = records = messages = dupes = 0
     unpriced: dict[str, int] = defaultdict(int)
+    # Which shape do the records actually carry? The pricing.py docstring says
+    # flat-only; a $0.00 delta would mean nested is present and the pre-fix
+    # code already read it. Measure rather than take either on faith.
+    shape: dict[str, int] = defaultdict(int)
     tokens_1h = 0
     total_now = Decimal("0")
     total_pre = Decimal("0")
@@ -126,6 +130,23 @@ def main(argv: list[str] | None = None) -> int:
                     seen.add(key)
                 messages += 1
 
+                nested = usage.get("cache_creation") or {}
+                has_nested = any(
+                    nested.get(k) is not None
+                    for k in ("ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens")
+                )
+                has_flat = any(usage.get(k) is not None for k in FLAT_KEYS)
+                if has_nested and has_flat:
+                    shape["both"] += 1
+                elif has_nested:
+                    shape["nested only"] += 1
+                elif has_flat:
+                    shape["flat only"] += 1
+                elif usage.get("cache_creation_input_tokens"):
+                    shape["neither, but cache-creation billed"] += 1
+                else:
+                    shape["no cache creation"] += 1
+
                 invoked_at = parse_ts(rec.get("timestamp"))
                 now_usage, pre_usage = as_written_and_pre_fix(usage)
 
@@ -151,6 +172,19 @@ def main(argv: list[str] | None = None) -> int:
     print(f"records with usage    : {records:,}")
     print(f"distinct messages     : {messages:,}   (dropped {dupes:,} duplicate records)")
     print(f"1-hour cache tokens   : {tokens_1h:,}")
+    print()
+    print("which cache-split shape the records carry:")
+    for label in (
+        "nested only",
+        "flat only",
+        "both",
+        "neither, but cache-creation billed",
+        "no cache creation",
+    ):
+        if shape.get(label):
+            print(f"  {label:<36} {shape[label]:>8,}")
+    print("  (pricing.py claims flat-only. Pre-fix code read nested only, so")
+    print("   a nested-carrying corpus means the old path was never broken.)")
     print()
     print(f"total, as written     : ${total_now:,.2f}")
     print(f"total, pre-fix        : ${total_pre:,.2f}")
