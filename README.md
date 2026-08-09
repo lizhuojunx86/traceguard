@@ -320,6 +320,15 @@ tamper-proof. Core SQL, raw drivers, and bulk APIs bypass the ORM guard, and
 without an external anchor a full-chain rewrite is undetectable. Details:
 [docs/audit.md](docs/audit.md).
 
+**Where this stops.** `export_anchor()` emits the chain head; what you do with it
+afterwards is out of scope here, and that last sentence is the reason it matters.
+[tg-attest](https://github.com/lizhuojunx86/tg-attest) is the sibling project that
+closes the gap — RFC 3161 timestamps over Merkle epoch roots, selective disclosure
+of a single record without exposing the rest of the batch, and a disclosure bundle
+an auditor checks with `openssl ts` and a CA certificate they fetch themselves.
+Same point-in-time problem, aimed at EU AI Act Article 12 rather than at backtests.
+Separate repo, separate package, no code dependency in either direction.
+
 ## Research anchors
 
 TraceGuard's harness-leakage invariants are the engineering counterpart to a
