@@ -116,6 +116,17 @@ class RoutingDecision(RoutingAuditBase):
     actual_model: Mapped[str] = mapped_column(String(128), nullable=False)
     actual_tier: Mapped[str] = mapped_column(String(16), nullable=False)
     deviation: Mapped[bool] = mapped_column(Boolean, nullable=False, index=True)
+    # Three-valued verdict, authoritative over `deviation`: "compliant" /
+    # "deviation" / "unresolved:no_rule" / "unresolved:unknown_model". A
+    # decision no rule reaches, or whose actual model is in no tier, must not
+    # be scored by a fall-through default — that fabricated one compliant and
+    # one deviant verdict on rules nobody wrote (frozen corpus product-manager;
+    # live claude-code-guide). NULL on rows written before this column shipped;
+    # `generate --write` fills it. `deviation` is kept in sync for resolved
+    # rows (False on unresolved ones) because the CSV round-trip and the index
+    # key on it. Existing local DBs need the one-off, by-hand:
+    #   ALTER TABLE routing_decisions ADD COLUMN verdict VARCHAR(32)
+    verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
     n_traces: Mapped[int] = mapped_column(Integer, nullable=False)
     cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 6), nullable=True)

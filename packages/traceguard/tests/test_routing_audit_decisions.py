@@ -89,18 +89,18 @@ def _tag_unit(db_url: str, task_type: str = "coding-implement") -> None:
 
 def test_policy_match_specificity() -> None:
     policy = load_policy()
-    # main (no matching task_type rule) → frontier
-    tier, model = policy.match("huadian", "main", "coding-implement")
-    assert tier == "frontier"
+    # main (no matching task_type rule) → frontier, via a real rule
+    tier, model, rule_idx = policy.match("huadian", "main", "coding-implement")
+    assert tier == "frontier" and rule_idx is not None
     # workflow-subagent → mid
-    tier, _ = policy.match("huadian", "workflow-subagent", "coding-implement")
+    tier, _, _ = policy.match("huadian", "workflow-subagent", "coding-implement")
     assert tier == "mid"
     # Explore → cheap (component rule)
-    tier, _ = policy.match("q", "Explore", "coding-implement")
+    tier, _, _ = policy.match("q", "Explore", "coding-implement")
     assert tier == "cheap"
     # tie-break: component=main and task_type=decision-advisor both spec=1;
     # decision-advisor appears earlier → frontier/fable either way.
-    tier, model = policy.match("q", "main", "decision-advisor")
+    tier, model, _ = policy.match("q", "main", "decision-advisor")
     assert tier == "frontier"
 
 
@@ -226,19 +226,30 @@ def test_dry_run_writes_nothing(source_root: Path, db_url: str) -> None:
         assert sess.scalar(select(RoutingDecision).limit(1)) is None
 
 
-def test_policy_default_and_unknown_via_custom_yaml(tmp_path: Path) -> None:
+def test_policy_no_rule_returns_none_not_default(tmp_path: Path) -> None:
+    """No applicable rule → (None, None, None), never default_tier.
+
+    The fall-through default fabricated verdicts in both directions (a
+    compliant product-manager and a deviant claude-code-guide, each on a rule
+    nobody wrote). default_tier is still parsed — a MATCHED rule that omits
+    expected_tier falls back to it — but it no longer stands in for a missing
+    rule.
+    """
     p = tmp_path / "pol.yaml"
     p.write_text(
         "tiers:\n  cheap: [m-cheap]\ndefault_tier: cheap\nrules:\n"
-        "  - project: special\n    component: main\n    expected_tier: cheap\n",
+        "  - project: special\n    component: main\n    expected_tier: cheap\n"
+        "  - project: tierless\n",
         encoding="utf-8",
     )
     policy = load_policy(p)
     assert isinstance(policy, Policy)
-    # specific rule matches
-    assert policy.match("special", "main", "x") == ("cheap", None)
-    # no rule → default
-    assert policy.match("other", "main", "x") == ("cheap", None)
+    # specific rule matches, and says which rule
+    assert policy.match("special", "main", "x") == ("cheap", None, 0)
+    # no rule → unresolved, NOT default
+    assert policy.match("other", "main", "x") == (None, None, None)
+    # a matched rule with no expected_tier still falls back to default_tier
+    assert policy.match("tierless", "main", "x") == ("cheap", None, 1)
     assert Decimal("0") == Decimal("0")  # keep Decimal import meaningful
 
 
@@ -473,3 +484,152 @@ def test_drift_warning_uses_a_registered_kind(source_root: Path, db_url: str) ->
 
     for w in generate_decisions(db_url, write=False).warnings:
         assert w[1:].split("]", 1)[0] in WARNING_KINDS
+
+
+# ---------------------------------------------------------------------------
+# Unresolved verdicts + the two coverage counts.
+#
+# A fall-through default fabricates verdicts in both directions: on the real
+# corpus it scored product-manager COMPLIANT and claude-code-guide DEVIANT,
+# each on a rule nobody wrote. And an actual model in no tier compared
+# "unknown" against an expected tier and produced a deviation the same way
+# (the claude-opus-5 fortnight). Whenever a verdict cannot be resolved, the
+# honest output is a third state — and the summary carries its two duals:
+# decisions no rule reached, rules no decision reached.
+# ---------------------------------------------------------------------------
+
+
+def _tree_with_subagent(tmp_path: Path, agent_type: str, model: str) -> Path:
+    """A main-thread opus trace plus one subagent trace of the given type/model."""
+    root = tmp_path / "projects"
+    proj = root / "-Users-test-Desktop-APP-huadian"
+    proj.mkdir(parents=True)
+    (proj / f"{SESS}.jsonl").write_text(
+        _assistant_line(
+            session_id=SESS, message_id="m1", uuid="u1", ts=T0, cwd=CWD,
+            model="claude-opus-4-8", usage=USAGE_SIMPLE,
+        ),
+        encoding="utf-8",
+    )
+    sub = proj / SESS / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-x1.jsonl").write_text(
+        _assistant_line(
+            session_id=SESS, message_id="m2", uuid="u2", ts=T1, cwd=CWD,
+            model=model, usage=USAGE_SIMPLE,
+        ),
+        encoding="utf-8",
+    )
+    (sub / "agent-x1.meta.json").write_text(
+        f'{{"agentType": "{agent_type}"}}', encoding="utf-8"
+    )
+    return root
+
+
+def test_no_rule_frontier_is_unresolved_not_compliant(tmp_path: Path, db_url: str) -> None:
+    """product-manager on Opus scored compliant off the default. No more."""
+    root = _tree_with_subagent(tmp_path, "product-manager", "claude-opus-4-8")
+    ingest(root, db_url, write=True)
+    _tag_unit(db_url)
+    stats = generate_decisions(db_url, write=True)
+
+    engine = make_engine(db_url)
+    with Session(engine) as sess:
+        d = sess.get(RoutingDecision, f"{SESS}#s01#product-manager")
+    assert d.verdict == "unresolved:no_rule"
+    assert d.deviation is False  # sentinel only; verdict is authoritative
+    assert d.expected_tier == "unresolved"
+    assert stats.unresolved == 1 and stats.unresolved_no_rule == 1
+    assert stats.deviations == 0
+
+
+def test_no_rule_cheap_is_unresolved_not_deviation(tmp_path: Path, db_url: str) -> None:
+    """claude-code-guide on Haiku scored DEVIANT off the default — a
+    fabricated deviation is noise in the one table the audit asks you to
+    trust. The routing was right; the policy was silent."""
+    root = _tree_with_subagent(tmp_path, "claude-code-guide", "claude-haiku-4-5-20251001")
+    ingest(root, db_url, write=True)
+    _tag_unit(db_url)
+    stats = generate_decisions(db_url, write=True)
+
+    engine = make_engine(db_url)
+    with Session(engine) as sess:
+        d = sess.get(RoutingDecision, f"{SESS}#s01#claude-code-guide")
+    assert d.verdict == "unresolved:no_rule"
+    assert d.deviation is False
+    assert stats.deviations == 0 and stats.unresolved_no_rule == 1
+
+
+def test_unknown_model_is_unresolved(tmp_path: Path, db_url: str) -> None:
+    """A rule names the expectation but the actual model is in no tier: the
+    old compare ("unknown" != expected) manufactured a deviation."""
+    root = _tree_with_subagent(tmp_path, "workflow-subagent", "claude-opus-9")
+    ingest(root, db_url, write=True)
+    _tag_unit(db_url)
+    stats = generate_decisions(db_url, write=True)
+
+    engine = make_engine(db_url)
+    with Session(engine) as sess:
+        d = sess.get(RoutingDecision, f"{SESS}#s01#workflow-subagent")
+    assert d.verdict == "unresolved:unknown_model"
+    assert d.expected_tier == "mid"  # the rule still names what was expected
+    assert d.actual_tier == "unknown"
+    assert d.deviation is False
+    assert stats.unresolved_unknown_model == 1 and stats.deviations == 0
+
+
+def test_unresolved_rows_stay_out_of_deviation_export(
+    tmp_path: Path, db_url: str
+) -> None:
+    root = _tree_with_subagent(tmp_path, "claude-code-guide", "claude-haiku-4-5-20251001")
+    ingest(root, db_url, write=True)
+    _tag_unit(db_url)
+    generate_decisions(db_url, write=True)
+    n = export_deviations_csv(tmp_path / "devs.csv", db_url)
+    assert n == 0  # unresolved is not a deviation and must not reach review
+
+
+def test_resolved_rows_carry_resolved_verdicts(source_root: Path, db_url: str) -> None:
+    ingest(source_root, db_url, write=True)
+    _tag_unit(db_url)
+    generate_decisions(db_url, write=True)
+    engine = make_engine(db_url)
+    with Session(engine) as sess:
+        by_id = {d.decision_id: d for d in sess.scalars(select(RoutingDecision))}
+    assert by_id[f"{SESS}#s01#main"].verdict == "compliant"
+    assert by_id[f"{SESS}#s01#workflow-subagent"].verdict == "deviation"
+
+
+def test_gen_stats_carry_the_two_coverage_counts(tmp_path: Path, db_url: str) -> None:
+    from traceguard.routing_audit.routing_decisions import _format_gen_stats
+
+    root = _tree_with_subagent(tmp_path, "product-manager", "claude-opus-4-8")
+    ingest(root, db_url, write=True)
+    _tag_unit(db_url)
+    stats = generate_decisions(db_url, write=False)
+
+    assert stats.unresolved == 1
+    # On this two-row corpus only the main rule fires; every other rule is in
+    # the never-matched list — including the research-explore task rule that
+    # is shadowed on the real corpus too.
+    assert stats.rules_never_matched
+    assert any("research-explore" in r for r in stats.rules_never_matched)
+
+    text = _format_gen_stats(stats, wrote=False)
+    assert "out of coverage" in text
+    assert "rules never matched" in text
+    assert "unresolved 1" in text
+
+
+def test_report_carries_verdicts_and_coverage(tmp_path: Path, db_url: str) -> None:
+    root = _tree_with_subagent(tmp_path, "claude-code-guide", "claude-haiku-4-5-20251001")
+    ingest(root, db_url, write=True)
+    _tag_unit(db_url)
+    generate_decisions(db_url, write=True)
+
+    report = format_report(db_url)
+    assert "unresolved 1" in report
+    assert "coverage vs current policy" in report
+    assert "never matched" in report
+    # the unresolved row is not silently folded into "on-policy"
+    assert "1 unresolved" in report

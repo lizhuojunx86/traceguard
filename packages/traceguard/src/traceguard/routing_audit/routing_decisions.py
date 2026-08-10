@@ -12,10 +12,19 @@ window contains several components (a main-thread stretch plus the subagents
 it spawned). Each (unit, component) gets one verdict; the *dominant* model
 (most traces) is the ``actual_model``.
 
+Verdicts are three-valued: ``compliant`` / ``deviation`` / ``unresolved``.
 Deviation = a TIER mismatch. Same-tier substitutions (opus-4-8 ↔ fable-5) are
 not deviations — the audit is about frontier/mid/cheap layering, not exact
 model identity. Records with no actual model (API errors) and traces outside
 any tagging unit are skipped and counted, never guessed.
+
+``unresolved`` exists because a fall-through default fabricates verdicts in
+both directions: on this corpus it scored product-manager compliant and
+claude-code-guide deviant, each on a rule nobody wrote. A decision that no
+rule reaches (``unresolved:no_rule``) or whose actual model is in no tier
+(``unresolved:unknown_model`` — the claude-opus-5 fortnight) gets a verdict
+that says so, and the summary carries the two coverage counts: decisions out
+of coverage, and rules that never matched.
 
 Manual loop (mirrors task_tags): ``export`` writes the deviation rows to
 ``routing_deviations.csv``; fill ``reason`` (≤200 chars) and ``outcome``
@@ -64,6 +73,17 @@ OUTCOMES = ("adopted", "rework", "discarded", "unknown")
 _REASON_MAX = 200
 _PENDING_NOTE = "(heuristic task tags — pending manual review)"
 
+# Verdict vocabulary. `deviation` (the boolean column) is kept in sync for the
+# two resolved verdicts and is False on unresolved rows; `verdict` is
+# authoritative.
+VERDICT_COMPLIANT = "compliant"
+VERDICT_DEVIATION = "deviation"
+VERDICT_UNRESOLVED_NO_RULE = "unresolved:no_rule"
+VERDICT_UNRESOLVED_UNKNOWN_MODEL = "unresolved:unknown_model"
+# Sentinel stored in the legacy NOT NULL expected_tier column when no rule
+# matched. Mirrors the existing "unknown" sentinel in actual_tier.
+UNRESOLVED_EXPECTED_TIER = "unresolved"
+
 
 @dataclass
 class Policy:
@@ -79,14 +99,22 @@ class Policy:
 
     def match(
         self, project: str, component: str, task_type: str
-    ) -> tuple[str, str | None]:
-        """Return (expected_tier, expected_model) for a (project, component, task_type).
+    ) -> tuple[str | None, str | None, int | None]:
+        """Return (expected_tier, expected_model, rule_index) for a (project, component, task_type).
 
         The applicable rule with the most specified-and-matching keys wins;
-        ties go to the earlier rule in the file. No match → default_tier.
+        ties go to the earlier rule in the file. **No match → (None, None,
+        None), never default_tier**: a fall-through default fabricates a
+        verdict a reader will trust — it scored one uncovered component
+        compliant and another deviant, on rules nobody wrote. The caller turns
+        None into an ``unresolved`` verdict; ``rule_index`` feeds the
+        rules-never-matched coverage count. ``default_tier`` is still parsed
+        (old policy files keep loading, and a matched rule that omits
+        ``expected_tier`` falls back to it) but no longer stands in for a
+        missing rule.
         """
         best_score: tuple[int, int] | None = None
-        best: tuple[str, str | None] = (self.default_tier, None)
+        best: tuple[str | None, str | None, int | None] = (None, None, None)
         for i, rule in enumerate(self.rules):
             spec = 0
             applicable = True
@@ -105,7 +133,7 @@ class Policy:
             score = (spec, -i)  # more specific, then earlier in file
             if best_score is None or score > best_score:
                 best_score = score
-                best = (rule.get("expected_tier", self.default_tier), rule.get("expected_model"))
+                best = (rule.get("expected_tier", self.default_tier), rule.get("expected_model"), i)
         return best
 
 
@@ -135,10 +163,30 @@ class _Agg:
     n: int = 0
 
 
+def _rule_desc(rule: dict[str, Any]) -> str:
+    """One-line human name for a rule: its conditions → its tier."""
+    cond = ", ".join(
+        f"{k}={rule[k]}" for k in ("project", "component", "task_type") if k in rule
+    )
+    return f"[{cond or 'always'}] → {rule.get('expected_tier', '?')}"
+
+
 @dataclass
 class DecisionStats:
     decisions: int = 0
     deviations: int = 0
+    # Decisions the policy cannot judge: no applicable rule, or an actual
+    # model outside every tier. First-class, never folded into either
+    # resolved verdict.
+    unresolved: int = 0
+    unresolved_no_rule: int = 0
+    unresolved_unknown_model: int = 0
+    unresolved_cost: Decimal = Decimal("0")
+    # rule index → decisions it matched; rules with zero hits are the dead
+    # half of the coverage report (decisions no rule reached / rules no
+    # decision reached).
+    rule_hits: dict[int, int] = field(default_factory=dict)
+    rules_never_matched: list[str] = field(default_factory=list)
     inserted: int = 0
     updated: int = 0
     # Manual rows are no longer skipped: their DERIVED half is recomputed while
@@ -180,6 +228,7 @@ DERIVED_COLUMNS: frozenset[str] = frozenset({
     "ts", "unit_id", "session_id", "project", "component", "task_type",
     "expected_tier", "expected_model",          # from the policy
     "actual_model", "actual_tier", "deviation",  # policy vs observed
+    "verdict",   # compliant / deviation / unresolved:* — authoritative
     "n_traces", "cost_usd",                      # from traces
     "batch_id",  # which regeneration last computed the derived half of this row
 })
@@ -271,17 +320,42 @@ def generate_decisions(
         for (unit_id, component), a in agg.items():
             actual_model = a.model_counts.most_common(1)[0][0]
             actual_tier = policy.tier_of(actual_model)
-            expected_tier, expected_model = policy.match(a.project, component, a.task_type)
-            deviation = actual_tier != expected_tier
+            expected_tier, expected_model, rule_idx = policy.match(
+                a.project, component, a.task_type
+            )
+            if rule_idx is not None:
+                stats.rule_hits[rule_idx] = stats.rule_hits.get(rule_idx, 0) + 1
+
+            # Three-valued verdict. Order matters only when both causes hold:
+            # no_rule wins, because without a rule there is no expectation for
+            # the unknown model to have missed.
+            if expected_tier is None:
+                verdict = VERDICT_UNRESOLVED_NO_RULE
+                deviation = False  # sentinel for the NOT NULL column; verdict is authoritative
+                expected_tier = UNRESOLVED_EXPECTED_TIER
+            elif actual_tier == "unknown":
+                verdict = VERDICT_UNRESOLVED_UNKNOWN_MODEL
+                deviation = False
+            else:
+                deviation = actual_tier != expected_tier
+                verdict = VERDICT_DEVIATION if deviation else VERDICT_COMPLIANT
 
             stats.decisions += 1
             bucket = stats.by_task_type.setdefault(a.task_type, [0, 0, Decimal("0")])
             bucket[0] += 1
-            if deviation:
+            if verdict == VERDICT_DEVIATION:
                 stats.deviations += 1
                 stats.deviation_cost += a.cost
                 bucket[1] += 1
                 bucket[2] += a.cost
+            elif verdict == VERDICT_UNRESOLVED_NO_RULE:
+                stats.unresolved += 1
+                stats.unresolved_no_rule += 1
+                stats.unresolved_cost += a.cost
+            elif verdict == VERDICT_UNRESOLVED_UNKNOWN_MODEL:
+                stats.unresolved += 1
+                stats.unresolved_unknown_model += 1
+                stats.unresolved_cost += a.cost
 
             decision_id = f"{unit_id}#{component}"
             existing = sess.get(RoutingDecision, decision_id)
@@ -297,6 +371,7 @@ def generate_decisions(
                 actual_model=actual_model,
                 actual_tier=actual_tier,
                 deviation=deviation,
+                verdict=verdict,
                 n_traces=a.n,
                 cost_usd=a.cost,
                 batch_id=stats.batch_id,
@@ -339,6 +414,13 @@ def generate_decisions(
                 if write:
                     for k, v in values.items():
                         setattr(existing, k, v)
+        # The dead half of the coverage report: rules no decision reached.
+        # (The live half — decisions no rule reached — is stats.unresolved_no_rule.)
+        stats.rules_never_matched = [
+            _rule_desc(rule)
+            for i, rule in enumerate(policy.rules)
+            if not stats.rule_hits.get(i)
+        ]
         if stats.drifted:
             cols = sorted({c for d in stats.drifted.values() for c in d})
             stats.warnings.append(warn(
@@ -457,7 +539,7 @@ def _tag_provenance_line(tag_sources: "Counter[str]") -> str:
     return line
 
 
-def format_report(db_url: str | None = None) -> str:
+def format_report(db_url: str | None = None, policy_path: Path | str | None = None) -> str:
     """Deviation-rate report: by task_type, plus a task_type × actual_model pivot."""
     engine = make_engine(db_url)
     ensure_tables(engine)
@@ -469,8 +551,30 @@ def format_report(db_url: str | None = None) -> str:
 
     total = len(decisions)
     dev = [d for d in decisions if d.deviation]
+    unresolved = [d for d in decisions if (d.verdict or "").startswith("unresolved")]
+    no_verdict = sum(1 for d in decisions if d.verdict is None)
     manual = sum(1 for d in decisions if d.source == "manual")
     dev_cost = sum((d.cost_usd or Decimal("0") for d in dev), Decimal("0"))
+    unresolved_cost = sum((d.cost_usd or Decimal("0") for d in unresolved), Decimal("0"))
+
+    # Coverage vs the CURRENT policy file, replayed over the stored rows. Two
+    # counts, and they are duals: decisions no rule reached, rules no decision
+    # reached. Stored verdicts describe the batch that wrote them; this
+    # section describes the policy as it stands now.
+    policy = load_policy(policy_path)
+    replay_hits: dict[int, int] = {}
+    replay_uncovered = 0
+    for d in decisions:
+        _tier, _model, rule_idx = policy.match(d.project, d.component, d.task_type)
+        if rule_idx is None:
+            replay_uncovered += 1
+        else:
+            replay_hits[rule_idx] = replay_hits.get(rule_idx, 0) + 1
+    never_matched = [
+        _rule_desc(rule)
+        for i, rule in enumerate(policy.rules)
+        if not replay_hits.get(i)
+    ]
 
     # Provenance of the task tags these decisions rest on. A report spanning
     # both a hand-reviewed window and a heuristic-backfilled one is two
@@ -501,6 +605,18 @@ def format_report(db_url: str | None = None) -> str:
         f"== routing deviations {_PENDING_NOTE} ==",
         f"decisions: {total} | deviations: {len(dev)} "
         f"({len(dev) / total:.1%}) | manual-reviewed: {manual}",
+        f"verdicts: compliant {total - len(dev) - len(unresolved)} "
+        f"| deviation {len(dev)} | unresolved {len(unresolved)} "
+        f"(${unresolved_cost:.4f} unjudged)",
+        *(
+            [f"note: {no_verdict} row(s) predate the verdict column — "
+             f"run `generate --write` to fill it"]
+            if no_verdict
+            else []
+        ),
+        f"coverage vs current policy: {replay_uncovered} decision(s) out of coverage "
+        f"| rules never matched: {len(never_matched)} of {len(policy.rules)}",
+        *[f"  never matched: {r}" for r in never_matched],
         f"total deviation cost: ${dev_cost:.4f}",
         _tag_provenance_line(tag_sources),
         "",
@@ -536,13 +652,15 @@ def format_report(db_url: str | None = None) -> str:
     lines.append("-" * 86)
     lines.append(
         f"note: same-tier substitutions are not deviations; "
-        f"{total - len(dev)} decisions were on-policy."
+        f"{total - len(dev) - len(unresolved)} decisions were on-policy, "
+        f"{len(unresolved)} unresolved (no verdict, not folded into either side)."
     )
     return "\n".join(lines)
 
 
 def _format_gen_stats(stats: DecisionStats, *, wrote: bool) -> str:
     mode = f"WROTE batch={stats.batch_id}" if wrote else "DRY-RUN (no writes)"
+    compliant = stats.decisions - stats.deviations - stats.unresolved
     lines = [
         f"== routing_audit: decisions generate — {mode} {_PENDING_NOTE} ==",
         f"policy: {stats.policy_path}",
@@ -550,6 +668,13 @@ def _format_gen_stats(stats: DecisionStats, *, wrote: bool) -> str:
         f"({stats.deviations / stats.decisions:.1%} of decisions)"
         if stats.decisions
         else "decisions: 0",
+        f"verdicts: compliant {compliant} | deviation {stats.deviations} "
+        f"| unresolved {stats.unresolved} "
+        f"(no rule: {stats.unresolved_no_rule}, model outside tiers: {stats.unresolved_unknown_model})",
+        f"coverage: {stats.unresolved} decision(s) out of coverage "
+        f"(${stats.unresolved_cost:.4f} unjudged) | rules never matched: "
+        f"{len(stats.rules_never_matched)}",
+        *[f"  never matched: {r}" for r in stats.rules_never_matched],
         f"inserted: {stats.inserted} | updated: {stats.updated} "
         f"| manual rows refreshed (human columns preserved): {stats.manual_refreshed}",
         *[f"WARNING: {w}" for w in stats.warnings],
