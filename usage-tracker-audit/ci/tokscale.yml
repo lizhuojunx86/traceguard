@@ -1,0 +1,34 @@
+# Transcript-accounting conformance for junhoyeo/tokscale.
+# Copy to .github/workflows/conformance.yml in the tokscale repo.
+#
+# Runs the I-7 rewrite-drift harness from lizhuojunx86/traceguard against a
+# binary built from the pushed commit (--bin is how an unreleased branch gets
+# checked — same flag the #1011 cache-migration regression gate uses).
+# Adjust the build step / binary path to your workspace layout.
+name: transcript-accounting conformance
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Build the release binary from this commit
+        run: cargo build --release
+
+      - name: Fetch the harness
+        uses: actions/checkout@v4
+        with:
+          repository: lizhuojunx86/traceguard
+          path: traceguard
+
+      - name: Run the drift check against the built binary
+        working-directory: traceguard/usage-tracker-audit/tokscale-drift-check
+        run: ./run_check.sh --bin "$GITHUB_WORKSPACE/target/release/tokscale"

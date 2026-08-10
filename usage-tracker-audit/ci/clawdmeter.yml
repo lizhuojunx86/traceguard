@@ -1,0 +1,26 @@
+# Transcript-accounting conformance for weltern/Clawdmeter.
+# Copy to .github/workflows/conformance.yml in the Clawdmeter repo.
+#
+# Runs the I-1 dedup harness from lizhuojunx86/traceguard against the pushed
+# commit: synthetic corpus, known-exact manifest, your own transcript.py
+# imported (Qt stubbed), exit 0/1. Red on v3.0.0, green since v3.0.1.
+name: transcript-accounting conformance
+
+on:
+  push:
+    branches: [main, develop]
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Fetch the harness
+        uses: actions/checkout@v4
+        with:
+          repository: lizhuojunx86/traceguard
+          path: traceguard
+
+      - name: Run the dedup check against this commit
+        working-directory: traceguard/usage-tracker-audit/clawdmeter-dedup
+        run: ./run_check.sh --commit "$GITHUB_SHA"
