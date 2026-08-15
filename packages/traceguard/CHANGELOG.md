@@ -7,7 +7,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
-## [Unreleased]
+## [1.2.0] - 2026-08-16
+
+Minor: a read-only prompt-cache efficiency audit under `traceguard.routing_audit`,
+and a metering correction in `wrap_anthropic`. The contract is untouched — the
+frozen 29-symbol surface, all SPEC MUSTs, the normalize algorithm and every
+existing signature are unchanged, and no dependency was added. `routing_audit`
+is contract-external and `tokens_in` is a nullable non-MUST field whose value
+convention the SPEC does not pin, so neither change reaches the major bar
+(SPEC §6).
+
+**Read the `wrap_anthropic` entry first if you already have a store of traces.**
+The same API call now records a larger `tokens_in` than it did in ≤1.1.1, and
+old traces are not migrated: on cache-heavy traffic the upgrade boundary is a
+break in the series, not a step in it.
 
 ### Fixed
 
