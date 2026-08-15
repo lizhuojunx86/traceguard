@@ -13,7 +13,7 @@ The first and last are traps for people writing plugins. The middle two are gaps
 
 I spend a lot of time reading agent transcripts and adding up tokens. Over the past few months that turned into ten upstream fixes across four usage trackers: splitrail (216 stars, three issues), tokscale (4.6k), Clawdmeter, viberank, plus an open PR against claude-code-templates (30k). The pattern was always the same. Claude Code rewrites session files in place on resume and compact, so anything recomputing totals from live files inherits the drift. Streaming leaves partial snapshots that get summed as if they were separate calls. Subagent transcripts sit one directory deeper than a flat glob reaches, and on one corpus 54% of messages never entered any total.
 
-Eleven of those lessons are written up as invariants in a catalog. So when DeepSeek released Harness on August 13 and the ecosystem produced roughly 2,500 plugin repositories in two days, 27 of them counting tokens, I wanted to know whether the same class of bug had been reproduced at scale.
+Eleven of those lessons are written up as invariants in a catalog. DeepSeek released Harness on August 13, and the ecosystem produced roughly 2,500 plugin repositories in two days. A curated registry snapshot covering 457 of them listed 27 that count tokens. I wanted to know whether the same class of bug had been reproduced at scale.
 
 It hadn't. That surprised me, and it is worth saying before the criticism.
 
@@ -49,7 +49,7 @@ A forked child's log contains a copy of the parent's completed prefix. The heade
 
 I expected this to be a subagent problem. I was wrong, and being wrong is the interesting part.
 
-A subagent child is stamped `origin: 'subagent'` and its delegation depth increments. But `ctx.sessions.fork()` is an ordinary user-facing action available on any session, and the child it produces has `parentSession` and `seedLength` set, `delegationDepth: 0`, and no `origin` key at all. Here is the header I actually got, from an ordinary fork I triggered by retrying a failed message:
+A subagent child is stamped `origin: 'subagent'` and its delegation depth increments. But `ctx.sessions.fork()` is an ordinary user-facing action available on any session, and the child it produces has `parentSession` and `seedLength` set, `delegationDepth: 0`, and no `origin` key at all. Here is the header I actually got, from an ordinary fork that showed up in the course of using the web UI. I wasn't trying to make one:
 
 ```json
 {"type":"session","version":0,"id":"session-e61d64ec-…",
