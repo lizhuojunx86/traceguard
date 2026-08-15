@@ -84,6 +84,78 @@ model_id = select_model("general-llm",
 A complete runnable tour (synthetic data, no API keys) lives in
 [examples/quickstart](https://github.com/lizhuojunx86/traceguard/tree/main/examples/quickstart).
 
+## Cache-efficiency audit
+
+`traceguard.routing_audit.cache_audit` turns "your prompt cache hit rate is
+low" into a number you can act on. It is a **read-only report** — it opens the
+store with SQLite `mode=ro`, writes nothing, and emits only aggregates, token
+counts and money. No prompt or answer text ever leaves the DB.
+
+It does not ingest. Fill the store first, then audit it:
+
+```bash
+# 1. once (and thereafter incrementally) — pull ~/.claude/projects into a store
+python -m traceguard.routing_audit.ingest_claude_code --db sqlite:///traces_routing_audit.db
+
+# 2. as often as you like — read it back
+python -m traceguard.routing_audit.cache_audit --db sqlite:///traces_routing_audit.db
+```
+
+Flags: `--format table|md|csv` (default `table`), `--since` / `--until`
+(inclusive ISO date or datetime; a bare date opens at 00:00 and closes at
+23:59).
+
+Four sections. First, per-model: the token-weighted hit rate
+`cache_read / (input + cache_read + cache_write_5m + cache_write_1h)`, what the
+input side actually cost at list price, and what the same prompts would have
+cost with caching switched off entirely.
+
+```
+model                       messages  prompt tok      hit rate  input cost  no-cache    saved       saved %
+claude-opus-4-8             23,759    5,535,807,891   96.1%     $4,616.39   $27,691.44  $23,075.05  83.3%
+claude-fable-5              15,291    3,583,420,473   96.2%     $5,847.08   $35,834.20  $29,987.13  83.7%
+claude-opus-5               6,316     1,750,760,343   97.7%     $1,205.08   $8,753.80   $7,548.72   86.2%
+claude-sonnet-4-5-20250929  2         42,410          0.0%      n/a         n/a         n/a         n/a
+TOTAL                       58,753    12,264,612,945  96.2%     $12,110.31  $75,044.44  $62,934.13  83.9%
+```
+
+A model with no entry in the list-price table is listed with its tokens and
+`n/a` money — prices come from `routing_audit.pricing` (including Sonnet 5's
+two price eras, resolved by `invoked_at`) and are never guessed.
+
+Second, where the idle time goes: gaps between consecutive requests inside each
+`session_id`, bucketed `<5m / 5m–1h / 1–4h / >4h`, plus an **upper bound** on
+what cache expiry costs — the `cache_creation` of every first-message-after-a-
+>1h-gap at its own TTL write multiplier. Upper bound because that figure also
+contains whatever the turn genuinely added; `usage` does not separate the two.
+
+Third, the keep-alive question, answered rather than assumed: one ping every 55
+minutes across every >1h gap, each billed as a 0.1× read of the prompt as it
+stood before the gap, against that rewrite bound. On this repo's own corpus it
+comes out as a refusal, which is the point of computing it:
+
+```
+gaps bridged                        422
+pings needed                        6,765
+ping cost                           $2,009.54
+rewrite cost avoided (upper bound)  $1,912.84
+verdict                             NOT WORTH IT: pings $2,009.54 >= avoidable rewrites $1,912.84
+```
+
+Fourth, direct API traffic — traces whose `output_parsed.source` is not
+`claude_code_session` (the SDK wrappers, harnesses). Calls, hit rate, average
+prompt length, and whether that average even reaches the model's minimum
+cacheable prefix (Opus 5 / Fable 5 512, Opus 4.8 / Sonnet 5 1,024, Opus 4.7
+2,048, Haiku 4.5 4,096 tokens — deliberately not monotonic, so a model absent
+from the table reports `unknown` rather than a guess). Below that floor a 0%
+hit rate is structural and no amount of `cache_control` will move it.
+
+The report closes with one copyable line:
+
+```
+Claude Code caching already saves us 84% ($12,110.31 vs $75,044.44 list). Checked with: python -m traceguard.routing_audit.cache_audit
+```
+
 ## Contract
 
 The binding interface contract — table schemas, SDK signatures, the four
@@ -103,7 +175,7 @@ wrapper — see
 ```bash
 cd packages/traceguard
 uv sync
-uv run pytest        # 181 tests (4 skip without the contamination-hf extra)
+uv run pytest        # 486 tests (3 skip without the contamination-hf extra)
 ```
 
 ## License
