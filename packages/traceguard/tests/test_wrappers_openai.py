@@ -127,6 +127,58 @@ def test_wrap_responses_records_trace(tg_tracer, engine):
     assert row.output_parsed["status"] == "completed"
 
 
+def test_chat_cached_tokens_are_detail_not_an_addend(tg_tracer, engine):
+    """OpenAI's prompt_tokens ALREADY includes the cached prefix, so tokens_in
+    is prompt_tokens as-is; cached_tokens is recorded as detail only. Summing
+    (which is correct for Anthropic) would double-count here."""
+    response = _fake_chat_response(prompt_tokens=1_000, completion_tokens=20)
+    response.usage.prompt_tokens_details = SimpleNamespace(cached_tokens=896)
+    client = FakeOpenAIClient(response)
+    wrapped = wrap_openai(client, project="demo", component="x", tracer=tg_tracer)
+
+    wrapped.chat.completions.create(model="gpt-x", messages=[])
+
+    with Session(engine) as sess:
+        row = sess.scalars(select(Trace)).one()
+    assert row.tokens_in == 1_000  # NOT 1_000 + 896
+    assert row.output_parsed["usage"] == {
+        "prompt_tokens": 1_000,
+        "completion_tokens": 20,
+        "cached_tokens": 896,
+    }
+
+
+def test_chat_usage_without_details_records_none(tg_tracer, engine):
+    """Older/compatible responses lack prompt_tokens_details entirely."""
+    client = FakeOpenAIClient(_fake_chat_response())
+    wrapped = wrap_openai(client, project="demo", component="x", tracer=tg_tracer)
+
+    wrapped.chat.completions.create(model="gpt-x", messages=[])
+
+    with Session(engine) as sess:
+        row = sess.scalars(select(Trace)).one()
+    assert row.tokens_in == 12
+    assert row.output_parsed["usage"]["cached_tokens"] is None
+
+
+def test_responses_cached_tokens_are_detail_not_an_addend(tg_tracer, engine):
+    responses_response = _fake_responses_response(input_tokens=500, output_tokens=9)
+    responses_response.usage.input_tokens_details = SimpleNamespace(cached_tokens=384)
+    client = FakeOpenAIClient(_fake_chat_response(), responses_response=responses_response)
+    wrapped = wrap_openai(client, project="demo", component="r", tracer=tg_tracer)
+
+    wrapped.responses.create(model="gpt-x", input="hi")
+
+    with Session(engine) as sess:
+        row = sess.scalars(select(Trace)).one()
+    assert row.tokens_in == 500  # NOT 500 + 384
+    assert row.output_parsed["usage"] == {
+        "input_tokens": 500,
+        "output_tokens": 9,
+        "cached_tokens": 384,
+    }
+
+
 def test_responses_absent_when_client_lacks_it(tg_tracer):
     client = FakeOpenAIClient(_fake_chat_response())  # no responses endpoint
     wrapped = wrap_openai(client, project="demo", component="x", tracer=tg_tracer)

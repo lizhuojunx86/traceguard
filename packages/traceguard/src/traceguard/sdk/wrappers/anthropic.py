@@ -6,6 +6,15 @@ Wraps an existing ``anthropic.Anthropic`` (sync) client so calls to
 Async client support and cost calculation land in Phase 1. The wrapper does
 not modify the response object — callers see exactly what the Anthropic SDK
 returned, just with a trace persisted as a side effect.
+
+``tokens_in`` semantics: **full prompt volume** — ``input_tokens`` plus
+``cache_read_input_tokens`` plus ``cache_creation_input_tokens``. The Messages
+API reports those three as mutually exclusive counts (a cached prompt is
+billed under the cache keys and is NOT included in ``input_tokens``), so
+recording ``input_tokens`` alone under-counts cache-heavy traffic by orders of
+magnitude. This matches the convention documented in
+:mod:`traceguard.routing_audit.ingest_claude_code`; the per-kind split is kept
+in ``output_parsed["usage"]`` so cost can be recomputed from the store.
 """
 from __future__ import annotations
 
@@ -71,22 +80,60 @@ class _WrappedMessages(_DelegatingWrapper):
             content_text = _extract_text(response)
             response_id = getattr(response, "id", None)
             stop_reason = getattr(response, "stop_reason", None)
-            span.record_output(
-                parsed={
-                    "id": response_id,
-                    "content_text": content_text,
-                    "stop_reason": stop_reason,
-                },
-                parse_status="success",
-            )
+            parsed: dict[str, Any] = {
+                "id": response_id,
+                "content_text": content_text,
+                "stop_reason": stop_reason,
+            }
 
             usage = getattr(response, "usage", None)
             if usage is not None:
+                parsed["usage"] = _usage_detail(usage)
                 span.record_perf(
-                    tokens_in=getattr(usage, "input_tokens", None),
+                    tokens_in=_prompt_tokens(usage),
                     tokens_out=getattr(usage, "output_tokens", None),
                 )
+            span.record_output(parsed=parsed, parse_status="success")
             return response
+
+
+def _prompt_tokens(usage: Any) -> int:
+    """Full prompt volume from a Messages API ``usage`` block.
+
+    The three input counts are mutually exclusive (see the module docstring),
+    so the billable prompt size is their sum. ``or 0`` rather than a getattr
+    default because the SDK returns the attribute present-but-``None`` on
+    responses that used no caching.
+    """
+    return (
+        int(getattr(usage, "input_tokens", None) or 0)
+        + int(getattr(usage, "cache_read_input_tokens", None) or 0)
+        + int(getattr(usage, "cache_creation_input_tokens", None) or 0)
+    )
+
+
+def _usage_detail(usage: Any) -> dict[str, Any]:
+    """Flatten ``usage`` into the store's flat shape, preserving the per-kind split.
+
+    Key names match the ``meta["usage"]`` block written by
+    :mod:`traceguard.routing_audit.ingest_claude_code` exactly, so a
+    wrapper-produced trace is consumable by the same recompute/reprice readers
+    (:func:`traceguard.routing_audit.pricing.compute_cost_usd`, whose
+    ``cache_creation_split`` reads this flat shape). The API reports the
+    cache-creation TTL split nested under ``usage.cache_creation``; the store
+    keeps it flat, which is the flattening that module's docstring describes.
+    """
+    nested = getattr(usage, "cache_creation", None)  # getattr(None, ...) is safe
+    return {
+        "input_tokens": getattr(usage, "input_tokens", None),
+        "output_tokens": getattr(usage, "output_tokens", None),
+        "cache_read_input_tokens": getattr(usage, "cache_read_input_tokens", None),
+        "cache_creation_input_tokens": getattr(usage, "cache_creation_input_tokens", None),
+        "cache_creation_5m": getattr(nested, "ephemeral_5m_input_tokens", None),
+        "cache_creation_1h": getattr(nested, "ephemeral_1h_input_tokens", None),
+        "service_tier": getattr(usage, "service_tier", None),
+        "speed": getattr(usage, "speed", None),
+    }
 
 
 def _extract_text(response: Any) -> str | None:

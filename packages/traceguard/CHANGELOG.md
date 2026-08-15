@@ -7,6 +7,67 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [Unreleased]
+
+### Fixed
+
+- **`wrap_anthropic` severely under-recorded `tokens_in` on cached traffic.**
+  This is a **recorded-metrics semantics change**: the same API call now writes
+  a larger `tokens_in` than it did in ≤1.1.1. Traces written by earlier
+  versions are not migrated and are not comparable to new ones for any
+  cache-heavy workload — re-derive from `output_parsed.usage` where it exists,
+  or treat the boundary as a break in the series.
+
+  The Messages API reports three **mutually exclusive** input counts:
+  `input_tokens` covers only the uncached prefix, while `cache_read_input_tokens`
+  and `cache_creation_input_tokens` cover the rest. The wrapper recorded
+  `input_tokens` alone, so any prompt served from cache was counted as a
+  fraction of its real size. Agent-shaped traffic is the worst case: in this
+  repo's own routing-audit corpus, `opus-4-8` shows 5.1M bare input tokens
+  against 5,318M cache-read — an under-count of roughly three orders of
+  magnitude, which propagates into any per-token rate, cost estimate or
+  routing decision computed from the affected traces.
+
+  `tokens_in` is now the sum of the three, i.e. **full prompt volume**. That is
+  the convention `traceguard.routing_audit.ingest_claude_code` and
+  `routing_audit.rerun` have always used, and the wrapper was the one writer
+  that disagreed. `tokens_out` is unchanged.
+
+  The streaming branch is deliberately untouched: usage is not available until
+  the caller drains the stream, so it still records `parse_status="partial"`
+  with no tokens rather than a false zero.
+
+  `wrap_openai` was checked and is **correct as-is** — OpenAI's convention is
+  the opposite. `usage.prompt_tokens` (Responses: `input_tokens`) already
+  includes the cached prefix, which `prompt_tokens_details.cached_tokens`
+  reports as a subset; summing there would double-count. No metering change on
+  that side.
+
+### Added
+
+- Both wrappers now record the per-kind usage split under
+  `output_parsed["usage"]`, so cost can be recomputed from the store instead of
+  only at write time.
+
+  For `wrap_anthropic` the keys are flat and match the block written by
+  `routing_audit.ingest_claude_code` exactly — `input_tokens`,
+  `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens`,
+  `cache_creation_5m`, `cache_creation_1h`, `service_tier`, `speed` — which
+  makes a wrapper-produced trace directly consumable by
+  `routing_audit.pricing.compute_cost_usd` (its `cache_creation_split` reads
+  this flat shape), including the 2× one-hour cache-write multiplier. The API
+  reports the TTL split nested under `usage.cache_creation`; the wrapper
+  flattens it on write, as ingest does.
+
+  For `wrap_openai` the keys are OpenAI's own (`prompt_tokens` /
+  `completion_tokens` / `cached_tokens`, and `input_tokens` /
+  `output_tokens` / `cached_tokens` on the Responses API) — deliberately not
+  remapped onto the Anthropic names, since the pricing table covers only
+  `claude-*` models and there is no reader for a cross-provider key convention.
+
+  No public API changed and no cost is computed inside either wrapper: pricing
+  stays a `routing_audit` concern (contract-external), per the layering rule.
+
 ## [1.1.1] - 2026-08-05
 
 Patch: a concurrency fix in the audit evidence layer. No contract change — the
