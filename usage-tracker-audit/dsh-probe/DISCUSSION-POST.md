@@ -63,7 +63,7 @@ It folds a corpus four ways (naive, a line-for-line transcription of `tokenUsage
 
 Corpus written with `compression: 'none'` and `packChunks: false` so the log is line-readable.
 
-Probe, protocol, and the full invariant catalog: [link]
+Probe, protocol, and the full invariant catalog: https://github.com/lizhuojunx86/traceguard/blob/main/usage-tracker-audit/dsh-probe/README.md
 
 I understand external PRs aren't being accepted right now. Happy to supply a regression fixture in whatever form is useful, or just leave the measurements here.
 
