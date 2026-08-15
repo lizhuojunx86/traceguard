@@ -1,0 +1,25 @@
+# Session logs are never committed. A real DSH transcript contains whatever you
+# talked about: file contents, command output, business context, credentials
+# pasted into a prompt. Publish the measurements, not the corpus.
+session.jsonl
+session.jsonl.zstd
+*.jsonl
+*.jsonl.zstd
+sessions/
+dsh-probe-fixture-*/
+
+# A composed config dump carries every configured route and credential
+# reference on the machine that produced it. Regenerate it, don't ship it.
+composed.yml
+baseline-config.yml
+
+# Measurement output is the publishable artifact, but it names session ids and
+# absolute cwd paths. Un-ignore a specific report once you have read it.
+probe-report.json
+
+# Scaffolding for the work, not a product of it.
+CLAUDE-CODE-PROMPT.md
+
+__pycache__/
+*.pyc
+.DS_Store

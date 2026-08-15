@@ -1,0 +1,33 @@
+# DSH 记账探针 —— cordis 补丁层
+#
+# 用法：dsh --patch ./probe.patch.yml web
+#
+# 格式依据 vendor/include/src/index.ts :: applyEntryPatches ——
+# 补丁是一个扁平的 PatchOptions 列表（{id, name?, config?, disabled?}），
+# 不是带 `replace:` / `insert:` 包装的结构。`insert` 只用于新增行。
+#
+# 两条硬规则：
+#   1. 覆盖按 key 整体赋值（target[key] = value），config 不做深合并 ——
+#      所以必须重述该行需要的全部 key，包括 root。
+#   2. `name` 是可选护栏：写了但与目标行不符，补丁会被【跳过并告警】，
+#      而不是报错。写上它，是为了让 base bundle 改名时你能立刻看见。
+
+# 明文 JSONL + 一行一事件，外部行读取器才能直接读、seq 连续性才能直接断言。
+# root 没有默认值，必须显式给绝对路径。
+- id: session-persistence-jsonl
+  name: '@deepseek-ai/dsh-session-persistence-jsonl'
+  config:
+    root: /Users/lizhuojun/dsh-probe/sessions
+    compression: none
+    packChunks: false
+
+# 刻意不覆盖 compaction-basic。
+#
+# 调低 thresholdRatio 看似能省 token，实际有踩坑风险：README 明确写了
+# 「retainRatio 不低于 thresholdRatio 会导致插件加载失败」，且
+# 「重试后仍回不到阈值以下就抛错」。把两个比例一起压小，很容易撞上
+# 压缩循环或加载失败，而这两种故障都会污染探针语料。
+#
+# 用 /compact 手动触发即可 —— command-compact 的契约原文就是
+# 「即使在自动压力之下，也摘要一段有用的较旧跨度」，这正是我们要的：
+# 确定性、便宜、不改任何压缩策略。
