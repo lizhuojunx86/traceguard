@@ -160,6 +160,29 @@ trace store, so usage history stops changing underneath you. Claude Code
 rewrites session files in place on resume/compact; anything that recomputes
 totals from live files inherits that drift.
 
+From that log it scores each `(unit, component)` routing decision against a
+policy file you write: the tier the policy expected, the model that actually
+ran, and a verdict. The verdict has three shapes rather than two — `compliant`,
+`deviation`, and `unresolved`, the last split into `no_rule` (nothing in the
+policy matched) and `unknown_model` (the model sits outside every tier). A
+default that quietly resolves those cases fabricates verdicts in both
+directions: on this corpus it scored one component compliant and another
+deviant, each against a rule nobody had written.
+
+Current corpus, 789 decisions: 627 compliant, 160 deviation, 2
+`unresolved:no_rule`, 0 `unresolved:unknown_model`. The two unresolved classes
+are counted apart because they decay differently. `unknown_model` is an
+operational gap that clears itself once the tier table catches up; `no_rule`
+stays until somebody writes a rule or decides the case belongs outside policy.
+
+The summary carries two coverage counts next to them: decisions no rule
+reached, and rules no decision reached. Those catch different failures,
+uncovered behavior on one side, dead or shadowed policy on the other. Brian
+Jin, whose comment prompted the three-state verdict, [put it this
+way](https://dev.to/kikashy/comment/3d3m7): "That makes unresolved much more
+than an error bucket. It becomes an observable property of the policy surface
+itself."
+
 Having a stable reference log turned out to be enough to audit *other* tools.
 Run against [splitrail](https://github.com/Piebald-AI/splitrail), a Rust usage
 tracker for agentic CLIs, it has produced three upstream fixes:
