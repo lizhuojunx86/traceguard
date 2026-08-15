@@ -216,6 +216,22 @@ def probe_release(repo: str) -> dict:
     return {"status": "ok", "tag": rel[0].get("tag_name"), "at": rel[0].get("published_at")}
 
 
+def probe_repo_activity(repo: str) -> dict:
+    """When this upstream last merged anything from anyone.
+
+    A nudge is only worth acting on if somebody is on the other end. Without
+    this the watcher tells you to go chase a repo that has not merged a pull
+    request in seven weeks, and you re-derive that fact by hand every time it
+    asks. Merged PRs rather than `pushed_at`: the question is whether the
+    maintainer processes outside contributions, not whether a bot pushed.
+    """
+    prs = gh(f"repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=20")
+    if not isinstance(prs, list):
+        return {"status": UNKNOWN}
+    merged = [p["merged_at"] for p in prs if p.get("merged_at")]
+    return {"status": "ok", "last_merge": max(merged) if merged else None}
+
+
 def probe_own_issues() -> dict:
     items = gh(f"repos/{ME}/traceguard/issues?state=open&per_page=50")
     if not isinstance(items, list):
@@ -257,6 +273,8 @@ def collect() -> dict:
         snap[f"reddit:{label}"] = {"label": label, **probe_reddit(url)}
     for repo in RELEASE_REPOS:
         snap[f"release:{repo}"] = {"label": f"{repo} latest release", **probe_release(repo)}
+    for repo in dict.fromkeys(r for r, _, _ in GH_THREADS):  # unique, order kept
+        snap[f"repo:{repo}"] = {"label": f"{repo} merge activity", **probe_repo_activity(repo)}
     snap["own:issues"] = {"label": "traceguard open issues", **probe_own_issues()}
     snap["mentions"] = {"label": "GitHub mentions (48h, outside known threads)", **probe_mentions()}
     return snap
@@ -270,6 +288,11 @@ WATCHED_FIELDS = ("comments", "external_comments", "reactions", "state", "merged
 STALE_DAYS = 7
 # Don't repeat the same nudge daily — a permanent banner stops being read.
 RENUDGE_DAYS = 7
+# An upstream that has merged nothing from anyone in this long is not going to
+# act on a bump either. Threads there are reported once as dormant and then
+# left alone, so the standing question "is anyone still on the other end?" is
+# answered by the watcher instead of by hand on every alert.
+UPSTREAM_DORMANT_DAYS = 30
 
 
 def _parse_iso(value: str | None) -> datetime | None:
@@ -281,15 +304,32 @@ def _parse_iso(value: str | None) -> datetime | None:
         return None
 
 
-def stale_nudges(prev: dict, cur: dict) -> list[tuple[str, str]]:
-    """Threads waiting on ME, as (state-key, message).
+def _upstream_idle_days(cur: dict, repo: str, now: datetime) -> int | None:
+    """Days since `repo` last merged anything. None when the probe failed."""
+    entry = cur.get(f"repo:{repo}")
+    if not isinstance(entry, dict) or entry.get("status") != "ok":
+        return None  # unknown: never suppress a nudge on a failed probe
+    last = _parse_iso(entry.get("last_merge"))
+    return (now - last).days if last else 9999  # nothing merged in the API window
+
+
+def stale_nudges(prev: dict, cur: dict) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """Threads waiting on ME, as (nudges, dormant), both keyed by state-key.
 
     This is the other half of watching: `diff` reports what someone else did,
     which is useless for a PR that is simply sitting there. Nothing in the
     upstream state ever changes to say "your move" — that has to be derived.
+
+    Derived too: whether the move is worth making. A thread whose upstream has
+    merged nothing in UPSTREAM_DORMANT_DAYS goes to the dormant list instead of
+    being nudged, and is announced exactly once — repeating "still dormant"
+    every three hours would be the same interruption the check exists to
+    remove. If that upstream starts merging again the flag clears and the
+    thread returns to the normal nudge cycle.
     """
     now = datetime.now(timezone.utc)
     out: list[tuple[str, str]] = []
+    dormant: list[tuple[str, str]] = []
     for key, entry in cur.items():
         if not key.startswith("gh:") or not isinstance(entry, dict):
             continue
@@ -310,12 +350,26 @@ def stale_nudges(prev: dict, cur: dict) -> list[tuple[str, str]]:
         if days < STALE_DAYS:
             continue
 
+        label = entry.get("label", key)
+        idle = _upstream_idle_days(cur, key[len("gh:"):].split("#")[0], now)
+        if idle is not None and idle > UPSTREAM_DORMANT_DAYS:
+            # Every dormant thread is returned so the caller can maintain the
+            # flag; only a newly dormant one carries a message to print.
+            msg = None
+            if not (prev.get(key) or {}).get("dormant_reported"):
+                where = "nothing merged in the last 20 closed PRs" if idle == 9999 \
+                    else f"upstream last merged {idle}d ago"
+                msg = f"{label}: quiet {days}d, {where} — not worth a bump"
+            dormant.append((key, msg))
+            continue
+
         last_nudge = _parse_iso((prev.get(key) or {}).get("nudged_at"))
         if last_nudge and (now - last_nudge).days < RENUDGE_DAYS:
             continue
 
-        out.append((key, f"{entry.get('label', key)}: quiet {days}d ({what}) — your move"))
-    return out
+        alive = f", upstream merged {idle}d ago" if idle is not None else ""
+        out.append((key, f"{label}: quiet {days}d ({what}{alive}) — your move"))
+    return out, dormant
 
 
 def diff(prev: dict, cur: dict) -> tuple[list[str], list[str]]:
@@ -382,7 +436,7 @@ def main() -> int:
             prev = {}
 
     alerts, unreachable = ([], []) if args.seed else diff(prev, cur)
-    nudges = [] if args.seed else stale_nudges(prev, cur)
+    nudges, dormant = ([], []) if args.seed else stale_nudges(prev, cur)
 
     # Never let an unreachable probe overwrite a good reading with nothing.
     merged = dict(prev)
@@ -392,6 +446,7 @@ def main() -> int:
         merged[key] = val
     # Carry nudge timestamps forward, stamping the ones fired this run.
     fired = {key for key, _ in nudges}
+    dormant_keys = {key for key, _ in dormant}
     for key, val in merged.items():
         if not key.startswith("gh:") or not isinstance(val, dict):
             continue
@@ -399,6 +454,12 @@ def main() -> int:
             val["nudged_at"] = cur["at"]
         elif (prev.get(key) or {}).get("nudged_at"):
             val["nudged_at"] = prev[key]["nudged_at"]
+        # Set while the upstream is dormant, dropped the moment it revives, so
+        # a project that comes back to life re-enters the nudge cycle by itself.
+        if key in dormant_keys:
+            val["dormant_reported"] = True
+        else:
+            val.pop("dormant_reported", None)
     merged["at"] = cur["at"]
     STATE.write_text(json.dumps(merged, indent=1, ensure_ascii=False), encoding="utf-8")
 
@@ -422,6 +483,9 @@ def main() -> int:
             fh.write(f"    ALERT {a}\n")
         for _, n in nudges:
             fh.write(f"    NUDGE {n}\n")
+        for _, d in dormant:
+            if d:
+                fh.write(f"    DORMANT {d}\n")
         for u in unreachable:
             fh.write(f"    UNREACHABLE {u}\n")
 
@@ -430,6 +494,9 @@ def main() -> int:
         print(f"  ALERT  {a}")
     for _, n in nudges:
         print(f"  NUDGE  {n}")
+    for _, d in dormant:
+        if d:
+            print(f"  DORMANT  {d}")
     for u in unreachable:
         print(f"  UNKNOWN  {u} (could not read; state left untouched)")
 
