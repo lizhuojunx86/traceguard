@@ -175,7 +175,7 @@ wrapper — see
 ```bash
 cd packages/traceguard
 uv sync
-uv run pytest        # 181 tests (4 skip without the contamination-hf extra)
+uv run pytest        # 486 tests (3 skip without the contamination-hf extra)
 ```
 
 ## License
