@@ -42,6 +42,12 @@ DEVTO = {  # article id -> label, for the articles worth a hand-written name
     "4346772": "dev.to #4 (routing deviations)",
     "4351188": "dev.to #5 (measured with his own code)",
     "3931693": "dev.to (epsActual, pre-series)",
+    # Deliberately unnumbered: a follow-up to part four, not a new part.
+    # Listed by hand because dev.to's ?username= index is CDN-cached and
+    # lagged behind the published article by more than an hour; the single
+    # -article endpoint and the public URL were both live the whole time.
+    # discover_devto still covers anything not named here, just later.
+    "4403128": "dev.to (follow-up: unresolved verdict)",
 }
 
 GH_THREADS = [  # (repo, number, label)
