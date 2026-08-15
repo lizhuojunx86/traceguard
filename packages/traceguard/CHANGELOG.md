@@ -45,6 +45,38 @@ Versioning policy for the interface contract is defined in
 
 ### Added
 
+- **`traceguard.routing_audit.cache_audit` — a read-only prompt-cache
+  efficiency audit.** `python -m traceguard.routing_audit.cache_audit
+  --db sqlite:///traces_routing_audit.db`, with `--format table|md|csv` and an
+  optional `--since` / `--until` window. It opens the store with SQLite
+  `mode=ro` and never writes; like `routing_audit.rerun` it emits only
+  aggregates, token counts and money — no prompt or answer text.
+
+  It answers "your prompt cache hit rate is low" in four sections: per-model
+  token-weighted hit rate with input-side list cost against a no-cache
+  counterfactual; the distribution of gaps between consecutive requests inside
+  a `session_id` (`<5m / 5m–1h / 1–4h / >4h`) with an **upper bound** on
+  cache-expiry rewrite cost; a keep-alive-ping counterfactual (one ping per 55
+  minutes across every >1h gap, billed at the 0.1× read multiplier) with an
+  explicit worth-it / not-worth-it verdict; and the non-`claude_code_session`
+  traffic, checked against each model's minimum cacheable prefix so a
+  structurally-uncacheable 0% is not mistaken for a misconfiguration.
+
+  It does **not** ingest — point it at a store `ingest_claude_code` already
+  filled. No new price table either: every figure comes from
+  `routing_audit.pricing` (`price_for`, so Sonnet 5's two price eras resolve by
+  `invoked_at`, and `cache_creation_split`, so both the flat store shape and
+  the nested transcript shape reconcile). A model with no list price, or a
+  speed tier with no published price, keeps its token counts and reports `n/a`
+  money rather than a guess.
+
+  The one new constant is `MIN_CACHEABLE_TOKENS` (Opus 5 / Fable 5 512, Opus
+  4.8 / Sonnet 5 1,024, Opus 4.7 2,048, Haiku 4.5 4,096), read from the
+  Anthropic prompt-caching reference on 2026-08-16. It is **not monotonic
+  across generations** — 4.7 needs twice its successor's prefix — so a model
+  absent from it reports `unknown` instead of being interpolated from a
+  neighbour.
+
 - Both wrappers now record the per-kind usage split under
   `output_parsed["usage"]`, so cost can be recomputed from the store instead of
   only at write time.
