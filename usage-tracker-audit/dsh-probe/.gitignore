@@ -17,6 +17,10 @@ baseline-config.yml
 # absolute cwd paths. Un-ignore a specific report once you have read it.
 probe-report.json
 
+# results/ holds reports that have been read and had their `path` fields cut
+# down to the bare filename. Nothing lands here that has not been checked.
+!results/probe-report.json
+
 # Scaffolding for the work, not a product of it.
 CLAUDE-CODE-PROMPT.md
 

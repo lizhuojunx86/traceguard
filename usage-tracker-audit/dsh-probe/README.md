@@ -82,6 +82,7 @@ Three traps that cost time, recorded so they don't cost yours:
 | file | |
 |---|---|
 | `dsh_usage_probe.py` | the probe; four folds, self-test, JSON output |
+| `results/probe-report.json` | the run behind every number above, per session |
 | `zstd_cat.mjs` | multi-frame zstd decoder, fallback for compressed corpora |
 | `probe.patch.yml` | cordis overlay: plain JSONL, one event per line |
 | `PROTOCOL.md` | corpus recipe and how to read the output |
