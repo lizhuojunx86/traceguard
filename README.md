@@ -411,8 +411,9 @@ Everything since has been additive and opt-in, off the frozen surface:
 OpenTelemetry export and live dual-write (`traceguard[otel]`),
 training-contamination detection incl. MIN-K%++ (`traceguard.contamination`),
 loop evidence-gating (`traceguard.loop`), `wrap_openai` / `wrap_anthropic`,
-and the 1.1.0 audit evidence layer (`traceguard.audit`). Full history:
-[CHANGELOG](packages/traceguard/CHANGELOG.md).
+the 1.1.0 audit evidence layer (`traceguard.audit`), and the 1.2.0 read-only
+prompt-cache efficiency audit (`traceguard.routing_audit.cache_audit`). Full
+history: [CHANGELOG](packages/traceguard/CHANGELOG.md).
 
 ## License
 
