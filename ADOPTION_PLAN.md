@@ -6,6 +6,45 @@
 
 ---
 
+## ⚠️ 状态更新 (2026-08-15) — §0 的前提事实有误,据实更正
+
+**本计划 §0 写的"2026-07-30 核实的外部信号是全渠道零 inbound"是错的。** 该结论出自
+`launch/outreach_watch.py`,而它的 dev.to 目标是硬编码的 4 个 article id;系列实际已发 5 篇
+(另有 1 篇前传),**漏掉的两篇里恰好有互动最多的一篇**。当日经 dev.to API 实测的真值:
+
+| 文章 | 外部评论 | reactions |
+|---|---|---|
+| #1 missing model line | 1 (Skillselion) | 0 |
+| #4 routing deviations (08-08) | **2** | 1 |
+| #5 measured with his own code (08-09) | 0 | 1 |
+| #2 / #3 / epsActual 前传 | 0 | 0 |
+
+两条被漏掉的评论是本计划范围内最有信息量的外部信号:
+
+- **hannune (08-08)** —— "In my pipeline the zero deviations on main thread stuck out for the
+  same reason",**拿本项目的方法查了他自己的 pipeline 并查出同类问题**(orchestrator 每次 retry
+  默认 Opus)。
+- **kikashy (08-09)** —— 建议把 "no applicable rule" 做成 first-class unresolved state;
+  **08-10 即以 `7618f1e` 落地**。外部读者的建议 48 小时内进入代码库。
+
+**对本计划的影响(仅此三条,其余排序不变):**
+
+1. **§0 的推论仍然成立,但理由要换**。B 线优先于功能,不是因为"零需求信号",而是因为
+   B 线是**唯一已经跑通读者→代码反馈回路**的活动,而 SDK 侧至今没有。
+2. **C 线启动门**:字面条件 1(外部方主动询问"能不能也查一下我们的")**未达成**——hannune
+   没有问,他直接自己动手了。但门要证明的东西(有人真的需要这个检查)已部分兑现。
+   门不下调,改为**主动测门**:回复 hannune,问他要不要一份可跑的检查器或提供 trace 样本。
+   这是零成本的门测试,不是绕过门。
+3. **09-05 复盘的第三行("两者皆否 → 两个都封存")基本可以划掉**。反馈回路已跑通一次,
+   "需求不存在"这个假设已被证伪;真正待决的是第一行与第二行之间。
+
+**工具侧已修**(08-15):watcher 改为按 username 自动发现全部文章,新增 `external_comments`
+(排除自己的回复)独立告警,新文章若已带外部评论则首次即报;脚本本身已纳入版本控制
+(`.gitignore` 对 `launch/outreach_watch.py` 开例外)。**引用外联数字前读
+`launch/outreach-state.json` 的当前值,不要引用文档里带日期的历史快照——本计划已因此错过一次。**
+
+---
+
 ## 0. 前提判断
 
 1.0/1.1 之后产品侧已经收口:契约冻结、证据层(`traceguard.audit`)已发、classifier 已翻 Stable。
