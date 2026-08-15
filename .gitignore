@@ -82,7 +82,15 @@ pepper.*
 
 # Local working material (not project source): launch/marketing notes and the
 # personal positioning/dev-prompt doc. Kept out of every commit.
-launch/
+#
+# `launch/*` rather than `launch/`: git cannot re-include a file whose parent
+# directory is excluded, and the outreach watcher needs to be versioned. It is
+# the instrument every adoption judgement is read off, and it silently
+# under-reported for a week (a hardcoded article list stopped at four of six)
+# — an unversioned dashboard has no history to catch that against. Its state,
+# logs and alert file stay ignored; only the script is tracked.
+launch/*
+!launch/outreach_watch.py
 /traceguard_定位与CC开发Prompt.md
 
 # iCloud/file-sync duplicates: "<name> 2.<ext>", "<name> 3.<ext>" — never commit
