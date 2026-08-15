@@ -9,6 +9,16 @@ effect. A client that was never wrapped is completely unaffected.
 
 Async client support and cost calculation are out of scope for this wrapper
 (mirroring the Phase 0 Anthropic wrapper).
+
+``tokens_in`` semantics: **full prompt volume**, same as ``wrap_anthropic`` —
+but reached differently, because the two providers report caching with
+opposite conventions. OpenAI's ``usage.prompt_tokens`` (Responses:
+``input_tokens``) ALREADY INCLUDES the cached prefix, which
+``prompt_tokens_details.cached_tokens`` reports as a *subset* for pricing.
+Adding the cached count here would double-count it, so the top-level field is
+recorded as-is and ``cached_tokens`` is kept in ``output_parsed["usage"]`` as
+detail only. (Anthropic is the opposite: its three input counts are mutually
+exclusive and must be summed — see ``wrappers/anthropic.py``.)
 """
 from __future__ import annotations
 
@@ -54,6 +64,33 @@ def _first_finish_reason(response: Any) -> str | None:
         return None
     reason = getattr(first, "finish_reason", None)
     return reason if isinstance(reason, str) else None
+
+
+def _chat_usage_detail(usage: Any) -> dict[str, Any]:
+    """Flatten a Chat Completions ``usage`` block, keeping the cached-prefix detail.
+
+    Field names are OpenAI's own — deliberately NOT remapped onto the
+    Anthropic/``routing_audit`` flat names, since that pricing table only
+    covers ``claude-*`` models and a cross-provider key convention has no
+    reader today. ``cached_tokens`` is a subset of ``prompt_tokens``, not an
+    addition to it (see the module docstring).
+    """
+    details = getattr(usage, "prompt_tokens_details", None)  # getattr(None, ...) is safe
+    return {
+        "prompt_tokens": getattr(usage, "prompt_tokens", None),
+        "completion_tokens": getattr(usage, "completion_tokens", None),
+        "cached_tokens": getattr(details, "cached_tokens", None),
+    }
+
+
+def _responses_usage_detail(usage: Any) -> dict[str, Any]:
+    """Flatten a Responses API ``usage`` block. See :func:`_chat_usage_detail`."""
+    details = getattr(usage, "input_tokens_details", None)
+    return {
+        "input_tokens": getattr(usage, "input_tokens", None),
+        "output_tokens": getattr(usage, "output_tokens", None),
+        "cached_tokens": getattr(details, "cached_tokens", None),
+    }
 
 
 def _responses_text(response: Any) -> str | None:
@@ -108,21 +145,20 @@ class _WrappedCompletions(_DelegatingWrapper):
                 )
                 return response
 
-            span.record_output(
-                parsed={
-                    "id": getattr(response, "id", None),
-                    "content_text": _chat_text(response),
-                    "finish_reason": _first_finish_reason(response),
-                },
-                parse_status="success",
-            )
+            parsed: dict[str, Any] = {
+                "id": getattr(response, "id", None),
+                "content_text": _chat_text(response),
+                "finish_reason": _first_finish_reason(response),
+            }
 
             usage = getattr(response, "usage", None)
             if usage is not None:
+                parsed["usage"] = _chat_usage_detail(usage)
                 span.record_perf(
                     tokens_in=getattr(usage, "prompt_tokens", None),
                     tokens_out=getattr(usage, "completion_tokens", None),
                 )
+            span.record_output(parsed=parsed, parse_status="success")
             return response
 
 
@@ -189,21 +225,20 @@ class _WrappedResponses(_DelegatingWrapper):
                 )
                 return response
 
-            span.record_output(
-                parsed={
-                    "id": getattr(response, "id", None),
-                    "content_text": _responses_text(response),
-                    "status": getattr(response, "status", None),
-                },
-                parse_status="success",
-            )
+            parsed: dict[str, Any] = {
+                "id": getattr(response, "id", None),
+                "content_text": _responses_text(response),
+                "status": getattr(response, "status", None),
+            }
 
             usage = getattr(response, "usage", None)
             if usage is not None:
+                parsed["usage"] = _responses_usage_detail(usage)
                 span.record_perf(
                     tokens_in=getattr(usage, "input_tokens", None),
                     tokens_out=getattr(usage, "output_tokens", None),
                 )
+            span.record_output(parsed=parsed, parse_status="success")
             return response
 
 
