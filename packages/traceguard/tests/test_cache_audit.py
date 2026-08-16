@@ -20,12 +20,22 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from traceguard.routing_audit.cache_audit import (
+    CAP_SWEEP_MAX,
+    CAP_SWEEP_MIN,
+    CAP_SWEEP_STEP,
     CC_SOURCE,
     DirectRow,
     MIN_CACHEABLE_TOKENS,
+    _cap_label,
+    _gaps_to_resolve,
+    _median,
     _read_only_url,
+    _tri_verdict,
+    _verdict_sentence,
+    _width_label,
     audit,
     build_sections,
+    cap_grid,
     format_audit,
     main as cache_audit_main,
     parse_bound,
@@ -557,19 +567,33 @@ def test_bucket_verdicts_can_disagree_with_the_total(db):
         _gap_session(sess, [timedelta(hours=20)], name="long", usage=read_heavy)
 
     db.fill(fill)
-    result = db.run()
+    # cap pinned at 4h: this test predates the solved cap and is about the
+    # bucket split, not about which threshold the sweep picks.
+    result = db.run(cap=timedelta(hours=4))
     g = result.gaps
     short, long = g.bucket_costs["1-4h"], g.bucket_costs[">4h"]
     assert short.ping_usd < short.rewrite_usd      # one ping, one rewrite avoided
     assert long.ping_usd > long.rewrite_usd        # 20 pings for the same rewrite
-    assert _gap_row(result, "1-4h")[5] == "ping wins"
-    assert _gap_row(result, ">4h")[5] == "ping loses"
+    # Column 6, and three-state since the lower bound arrived; "ping wins" used
+    # to live at column 5 against the upper bound alone.
+    #
+    # 1-4h reads UNDECIDED rather than the old "ping wins" and the reason is
+    # this fixture, not a regression: each session is two messages writing an
+    # identical 200,000 cache-creation tokens, so the median of the non-post-gap
+    # messages equals the post-gap message's own write and the lower bound
+    # floors to $0. The ping bill then lands inside [$0, upper] by definition.
+    # test_capped_verdict_is_worth_it_when_the_baseline_is_small covers the
+    # non-degenerate case.
+    assert g.bucket_costs["1-4h"].rewrite_usd_lower == Decimal("0")
+    assert _gap_row(result, "1-4h")[6] == "UNDECIDED"
+    assert _gap_row(result, ">4h")[6] == "NOT WORTH IT"
     # The aggregate is dominated by the long gap and refuses; the capped policy
-    # keeps the short gap's win because it stops paying at 4h.
+    # keeps the short gap's win because it stops paying at 4h. Both binary
+    # (upper-bound) properties are unchanged.
     assert g.ping_worth_it is False
     assert g.capped_worth_it is True
     assert _verdict_line(result).startswith("NOT WORTH IT")
-    assert _capped_verdict_line(result).startswith("WORTH IT")
+    assert _capped_verdict_line(result).startswith("UNDECIDED")
 
 
 def test_capped_policy_pays_for_gaps_it_abandons(db):
@@ -579,7 +603,7 @@ def test_capped_policy_pays_for_gaps_it_abandons(db):
         _gap_session(sess, [timedelta(hours=20)], usage=READ_ONLY_USAGE)
 
     db.fill(fill)
-    g = db.run().gaps
+    g = db.run(cap=timedelta(hours=4)).gaps      # pinned: see the 4h note above
     cap_pings = pings_to_bridge(timedelta(hours=4))
     assert g.pings == pings_to_bridge(timedelta(hours=20)) == 21
     assert g.capped_pings == cap_pings == 4        # 55m cadence, gave up at 4h
@@ -594,13 +618,563 @@ def test_capped_policy_banks_only_the_gaps_it_bridges(db):
         _gap_session(sess, [timedelta(hours=9)], name="abandoned")
 
     db.fill(fill)
-    g = db.run().gaps
+    g = db.run(cap=timedelta(hours=4)).gaps      # pinned: see the 4h note above
     assert (g.capped_bridged, g.capped_abandoned) == (1, 1)
     assert g.capped_rewrite_usd == g.bucket_costs["1-4h"].rewrite_usd
     assert g.capped_rewrite_usd < g.rewrite_usd
     assert g.capped_pings == pings_to_bridge(timedelta(hours=2)) + pings_to_bridge(
         timedelta(hours=4)
     )
+
+
+# ── the rewrite LOWER bound ─────────────────────────────────────────────────
+
+
+def _write_1h(tokens: int, *, prompt_extra: int = 0) -> dict:
+    """Usage that writes ``tokens`` at the 1h TTL and nothing else.
+
+    ``cache_creation_input_tokens`` is kept equal to the split because
+    pricing.cache_creation_split lets the total win on quantity — a fixture
+    that disagreed with itself would be testing the clamp, not the bound.
+    """
+    return {
+        "input_tokens": prompt_extra,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": tokens,
+        "cache_creation_5m": 0,
+        "cache_creation_1h": tokens,
+        "speed": "standard",
+    }
+
+
+def test_median_is_exact_and_stays_decimal():
+    """An even-length median is a halved sum; a float round-trip would leak."""
+    assert _median([]) == Decimal("0")
+    assert _median([7]) == Decimal("7")
+    assert _median([1, 2, 3]) == Decimal("2")
+    assert _median([1, 2]) == Decimal("1.5")
+    assert isinstance(_median([1, 2]), Decimal)
+    assert _median([3, 1, 2]) == Decimal("2")          # unsorted input
+
+
+def test_lower_bound_subtracts_the_session_baseline(db):
+    """The post-gap write is credited with an ordinary turn's worth of content."""
+
+    def fill(sess):
+        # Three non-post-gap turns writing 1,000 / 2,000 / 3,000 → median 2,000.
+        _add(sess, usage=_write_1h(1000), session_id="a", ts=T0)
+        _add(sess, usage=_write_1h(2000), session_id="a", ts=T0 + timedelta(minutes=1))
+        _add(sess, usage=_write_1h(3000), session_id="a", ts=T0 + timedelta(minutes=2))
+        _add(sess, usage=_write_1h(10_000), session_id="a", ts=T0 + timedelta(hours=3))
+
+    db.fill(fill)
+    g = db.run().gaps
+    price = PRICES[OPUS]
+    p = price.input_per_mtok
+
+    upper = 10_000 * p * price.cache_write_1h_mult / _MTOK
+    lower = (10_000 - 2000) * p * price.cache_write_1h_mult / _MTOK
+    assert g.expired_gaps == 1
+    assert g.rewrite_usd == upper
+    assert g.rewrite_usd_lower == lower
+    assert g.rewrite_tokens == 10_000
+    assert g.rewrite_tokens_lower == Decimal(8000)
+    assert g.baseline_tokens == Decimal(2000)
+
+
+def test_lower_bound_floors_at_zero_when_the_baseline_swallows_the_write(db):
+    """A post-gap turn that writes less than an ordinary one bounds at $0."""
+
+    def fill(sess):
+        _add(sess, usage=_write_1h(50_000), session_id="a", ts=T0)
+        _add(sess, usage=_write_1h(1000), session_id="a", ts=T0 + timedelta(hours=2))
+
+    db.fill(fill)
+    g = db.run().gaps
+    assert g.rewrite_usd > Decimal("0")       # the upper bound still charges it
+    assert g.rewrite_usd_lower == Decimal("0")
+    assert g.rewrite_tokens_lower == Decimal("0")
+
+
+def test_lower_bound_keeps_the_messages_own_ttl_mix(db):
+    """The residual is scaled, not reassigned to whichever TTL is cheaper."""
+    mixed = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 4000,
+        "cache_creation_5m": 1000,
+        "cache_creation_1h": 3000,
+        "speed": "standard",
+    }
+
+    def fill(sess):
+        _add(sess, usage=_write_1h(2000), session_id="a", ts=T0)
+        _add(sess, usage=mixed, session_id="a", ts=T0 + timedelta(hours=2))
+
+    db.fill(fill)
+    g = db.run().gaps
+    price = PRICES[OPUS]
+    p = price.input_per_mtok
+    upper = (
+        1000 * p * price.cache_write_5m_mult + 3000 * p * price.cache_write_1h_mult
+    ) / _MTOK
+    # baseline 2,000 of 4,000 written → exactly half survives, both TTLs alike.
+    assert g.rewrite_usd == upper
+    assert g.rewrite_usd_lower == upper * Decimal(2000) / Decimal(4000)
+
+
+def test_lower_bound_never_exceeds_the_upper_bound(db):
+    """The bracket must be a bracket, per bucket and in total."""
+
+    def fill(sess):
+        _gap_session(
+            sess,
+            [timedelta(hours=2), timedelta(hours=9), timedelta(minutes=3)],
+            usage=FLAT_USAGE,
+        )
+        _gap_session(sess, [timedelta(hours=5)], name="b", usage=READ_ONLY_USAGE)
+
+    db.fill(fill)
+    g = db.run().gaps
+    assert Decimal("0") <= g.rewrite_usd_lower <= g.rewrite_usd
+    assert g.capped_rewrite_usd_lower <= g.capped_rewrite_usd
+    for bc in g.bucket_costs.values():
+        assert Decimal("0") <= bc.rewrite_usd_lower <= bc.rewrite_usd
+
+
+def test_bucket_lower_bounds_sum_to_the_total(db):
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2), timedelta(hours=3), timedelta(hours=10)])
+
+    db.fill(fill)
+    g = db.run().gaps
+    assert sum(b.rewrite_usd_lower for b in g.bucket_costs.values()) == g.rewrite_usd_lower
+
+
+def test_unpriced_post_gap_message_contributes_to_neither_bound(db):
+    def fill(sess):
+        _add(sess, model=UNPRICED, usage=FLAT_USAGE, session_id="a", ts=T0)
+        _add(
+            sess, model=UNPRICED, usage=FLAT_USAGE, session_id="a",
+            ts=T0 + timedelta(hours=5),
+        )
+
+    db.fill(fill)
+    g = db.run().gaps
+    assert g.rewrite_unpriced == 1
+    assert g.rewrite_usd == g.rewrite_usd_lower == Decimal("0")
+    assert "contribute no money to either bound" in format_audit(db.run())
+
+
+def test_lower_bound_note_reaches_the_output(db):
+    """The assumption must be self-exposed in the report, not only the docstring."""
+
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2)])
+
+    db.fill(fill)
+    rendered = format_audit(db.run())
+    assert "LOWER BOUND, self-exposed" in rendered
+    assert "nothing in usage supports that decomposition" in rendered
+
+
+# ── the cap sweep ───────────────────────────────────────────────────────────
+
+
+def _sweep(result):
+    return next(s for s in build_sections(result) if s.key == "cap_sweep")
+
+
+def _sweep_note(result, needle: str) -> str:
+    return next(n for n in _sweep(result).notes if needle in n)
+
+
+def test_cap_grid_is_the_documented_range(db):
+    grid = cap_grid()
+    assert grid[0] == CAP_SWEEP_MIN == timedelta(hours=1)
+    assert grid[-1] == CAP_SWEEP_MAX == timedelta(hours=12)
+    assert CAP_SWEEP_STEP == timedelta(minutes=15)
+    assert len(grid) == 45                      # 1h..12h inclusive, every 15m
+    assert all(b - a == CAP_SWEEP_STEP for a, b in zip(grid, grid[1:]))
+
+
+def test_sweep_costs_every_cap_plus_the_uncapped_policy(db):
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2), timedelta(hours=20)])
+
+    db.fill(fill)
+    sweep = db.run().gaps.sweep
+    assert len(sweep.points) == len(cap_grid()) + 1
+    assert [p.cap for p in sweep.points[:-1]] == list(cap_grid())
+    assert sweep.points[-1].cap is None         # 'no cap' competes on the curve
+    assert sweep.unbounded.bridged == 2 and sweep.unbounded.abandoned == 0
+    assert len(_sweep(db.run()).rows) == len(cap_grid()) + 1
+
+
+def test_sweep_matches_the_pinned_policy_it_replaced(db):
+    """A point on the curve must equal what session_gaps computes for that cap."""
+
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2)], name="short")
+        _gap_session(sess, [timedelta(hours=9)], name="long")
+
+    db.fill(fill)
+    g = db.run(cap=timedelta(hours=4)).gaps
+    point = next(p for p in g.sweep.points if p.cap == timedelta(hours=4))
+    assert (point.pings, point.ping_usd) == (g.capped_pings, g.capped_ping_usd)
+    assert point.saved_upper == g.capped_rewrite_usd
+    assert point.saved_lower == g.capped_rewrite_usd_lower
+    assert (point.bridged, point.abandoned) == (g.capped_bridged, g.capped_abandoned)
+
+
+def test_uncapped_point_equals_the_unbounded_totals(db):
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2), timedelta(hours=20)])
+
+    db.fill(fill)
+    g = db.run(cap=None).gaps
+    assert g.cap is None and g.cap_solved is False
+    assert (g.capped_pings, g.capped_ping_usd) == (g.pings, g.ping_usd)
+    assert g.capped_rewrite_usd == g.rewrite_usd
+    assert g.capped_rewrite_usd_lower == g.rewrite_usd_lower
+    assert (g.capped_bridged, g.capped_abandoned) == (g.expired_gaps, 0)
+
+
+def test_solved_cap_is_the_argmax_and_beats_the_old_hardcoded_4h(db):
+    """The cap is now read off the curve; 4h has no privileged status."""
+
+    def fill(sess):
+        # Rewrites worth having sit at 6h, well past the retired 4h boundary.
+        for i in range(4):
+            _gap_session(
+                sess, [timedelta(hours=6)], name=f"s{i}",
+                usage=_write_1h(5_000_000, prompt_extra=1000),
+            )
+
+    db.fill(fill)
+    g = db.run().gaps
+    assert g.cap_solved is True
+    assert g.cap == max(g.sweep.points, key=lambda p: p.net_upper).cap
+    assert g.cap >= timedelta(hours=6)          # 4h would have bridged nothing
+    four_h = next(p for p in g.sweep.points if p.cap == timedelta(hours=4))
+    assert g.sweep.best.net_upper > four_h.net_upper
+
+
+def test_argmax_ties_go_to_the_smaller_cap(db):
+    """Same net, cheaper policy to run — and a deterministic answer."""
+
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=12)], usage=READ_ONLY_USAGE)
+
+    db.fill(fill)
+    sweep = db.run().gaps.sweep
+    best = sweep.best
+    tied = [p for p in sweep.points if p.net_upper == best.net_upper and p.cap]
+    assert best.cap == min(tied, key=lambda p: p.cap).cap
+
+
+def test_plateau_is_contiguous_positive_and_contains_the_argmax(db):
+    def fill(sess):
+        _gap_session(
+            sess, [timedelta(hours=3)], usage=_write_1h(2_000_000, prompt_extra=1000)
+        )
+
+    db.fill(fill)
+    sweep = db.run().gaps.sweep
+    lo, hi = sweep.plateau
+    assert lo <= sweep.best.cap <= hi
+    inside = [p for p in sweep.points if p.cap and lo <= p.cap <= hi]
+    assert all(p.net_upper > 0 for p in inside)
+    outside = [p for p in sweep.points if p.cap and not (lo <= p.cap <= hi)]
+    assert all(p.net_upper <= 0 for p in outside)
+    assert sweep.plateau_width == hi - lo
+
+
+def test_plateau_width_zero_is_reported_as_a_spike(db):
+    """The degenerate case: one grid point wins and its neighbours both lose.
+
+    Session "spike" has a 2h40m gap, so a 2h30m cap bridges nothing while a
+    2h45m cap bridges it — and 2h45m is the last cap before pings_to_bridge
+    steps from 2 to 3 at 3h. Session "drag" contributes a gap nothing can
+    bridge but whose pre-gap prompt is large enough that the extra ping at the
+    3h cap outweighs the rewrite the 2h45m cap just banked.
+    """
+
+    def fill(sess):
+        _add(sess, usage=_write_1h(0, prompt_extra=10_000), session_id="spike", ts=T0)
+        _add(
+            sess, usage=_write_1h(125_000), session_id="spike",
+            ts=T0 + timedelta(minutes=160),
+        )
+        _drag_session(sess)
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    positive = [p for p in sweep.points if p.cap and p.net_upper > 0]
+    assert [p.cap for p in positive] == [timedelta(hours=2, minutes=45)]
+    assert sweep.plateau == (
+        timedelta(hours=2, minutes=45),
+        timedelta(hours=2, minutes=45),
+    )
+    assert sweep.plateau_width == timedelta(0)
+    assert result.gaps.cap == timedelta(hours=2, minutes=45)
+    # ...and the report must say the optimum is a spike, not quietly recommend it.
+    assert "a single grid point" in _sweep_note(result, "plateau")
+    assert "2h45m" in _sweep_note(result, "argmax")
+
+
+def test_uncapped_winner_is_not_read_as_sitting_on_the_plateau(db):
+    """The plateau is a grid statistic; the argmax may live off the grid.
+
+    A 20h gap with a big rewrite and a tiny prompt: no cap on the grid bridges
+    it, so only 'no cap' banks the saving — while the short gap in the other
+    session gives the grid a positive run of its own.
+    """
+
+    def fill(sess):
+        _add(sess, usage=_write_1h(0, prompt_extra=100), session_id="far", ts=T0)
+        _add(
+            sess, usage=_write_1h(9_000_000), session_id="far",
+            ts=T0 + timedelta(hours=20),
+        )
+        _add(sess, usage=_write_1h(0, prompt_extra=100), session_id="near", ts=T0)
+        _add(
+            sess, usage=_write_1h(500_000), session_id="near",
+            ts=T0 + timedelta(hours=2),
+        )
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    assert sweep.best.cap is None                  # uncapped wins outright
+    assert result.gaps.cap is None
+    assert sweep.plateau is not None               # ...but the grid still has a run
+    assert "does not contain the winner" in _sweep_note(result, "not on the grid")
+
+
+def test_no_positive_cap_reports_no_plateau_at_all(db):
+    """Nothing to recommend: say so instead of dressing up the least-bad cap."""
+
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=8)], usage=READ_ONLY_USAGE)
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    assert all(p.net_upper <= 0 for p in sweep.points)
+    assert sweep.plateau is None and sweep.robust_plateau is None
+    assert sweep.plateau_width is None
+    assert "no plateau" in _sweep_note(result, "plateau")
+    assert "least-bad" in _sweep_note(result, "least-bad")
+
+
+def test_plateau_censoring_is_flagged_at_the_grid_edge(db):
+    """A run that ends where the sweep stops looking is not a measured width."""
+
+    def fill(sess):
+        _gap_session(
+            sess, [timedelta(hours=2)], usage=_write_1h(9_000_000, prompt_extra=1000)
+        )
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    assert sweep.plateau[1] == CAP_SWEEP_MAX
+    assert sweep.plateau_censored(sweep.plateau) is True
+    note = _sweep_note(result, "censored")
+    assert "12h ceiling" in note and "floor rather than a measurement" in note
+
+
+def _drag_session(sess, *, name="drag", prompt=1_000_000):
+    """A gap no cap on the grid can bridge, over a prompt worth pinging.
+
+    Its only job is to keep charging one more ping every time the cap crosses a
+    55-minute boundary, so a net-benefit curve built on it eventually turns
+    over inside the swept range instead of running flat to the ceiling.
+    """
+    _add(sess, usage=_write_1h(0, prompt_extra=prompt), session_id=name, ts=T0)
+    _add(
+        sess, usage=_write_1h(0, prompt_extra=1), session_id=name,
+        ts=T0 + timedelta(hours=100),
+    )
+
+
+def test_uncensored_plateau_is_not_flagged(db):
+    """A curve that turns over inside the grid reports a measured width.
+
+    One bridgeable 2h gap banking 175,000 x 2 x p, against a drag session
+    costing 100,000 x p per extra ping: the net survives cap_pings 2 and 3
+    (caps 2h..3h30m) and goes negative at 4, which the 55-minute cadence
+    reaches at 3h45m — so both plateau edges are sign changes, not grid edges.
+    """
+
+    def fill(sess):
+        _add(sess, usage=_write_1h(0, prompt_extra=1000), session_id="win", ts=T0)
+        _add(
+            sess, usage=_write_1h(175_000), session_id="win",
+            ts=T0 + timedelta(hours=2),
+        )
+        _drag_session(sess)
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    assert pings_to_bridge(timedelta(hours=3, minutes=30)) == 3
+    assert pings_to_bridge(timedelta(hours=3, minutes=45)) == 4
+    assert sweep.plateau == (timedelta(hours=2), timedelta(hours=3, minutes=30))
+    assert sweep.plateau_width == timedelta(hours=1, minutes=30)
+    assert CAP_SWEEP_MIN < sweep.plateau[0] and sweep.plateau[1] < CAP_SWEEP_MAX
+    assert sweep.plateau_censored(sweep.plateau) is False
+    assert not [n for n in _sweep(result).notes if "censored" in n]
+    assert "1h30m wide" in _sweep_note(result, "plateau")
+
+
+def test_width_and_cap_labels():
+    assert _cap_label(None) == "no cap"
+    assert _cap_label(timedelta(hours=4)) == "4h"
+    assert _cap_label(timedelta(hours=2, minutes=45)) == "2h45m"
+    assert _cap_label(timedelta(minutes=15)) == "15m"     # not "0h15m"
+    assert _width_label(None) == "n/a"
+    assert _width_label(timedelta(0)) == "0 (a single grid point)"
+    assert _width_label(timedelta(hours=10, minutes=45)) == "10h45m"
+
+
+# ── the three-state verdict ─────────────────────────────────────────────────
+
+
+def test_tri_verdict_boundaries():
+    """Both bounds are exclusive on the deciding side, so ties read UNDECIDED."""
+    lo, hi = Decimal("10"), Decimal("20")
+    assert _tri_verdict(Decimal("9"), lo, hi) == "WORTH IT"
+    assert _tri_verdict(Decimal("21"), lo, hi) == "NOT WORTH IT"
+    assert _tri_verdict(Decimal("15"), lo, hi) == "UNDECIDED"
+    assert _tri_verdict(lo, lo, hi) == "UNDECIDED"
+    assert _tri_verdict(hi, lo, hi) == "UNDECIDED"
+
+
+def test_capped_verdict_is_undecided_between_the_bounds(db):
+    """Constructed so the ping bill lands strictly inside the bracket.
+
+    Per session: one ordinary turn writing 1,000,000 tokens with a 1,000,000
+    token prompt, then a post-gap turn writing 1,050,000. Baseline 1,000,000
+    leaves a 50,000-token residual, so lower = 2 x 50,000 x p and upper =
+    2 x 1,050,000 x p, while two pings of the frozen 1,000,000-token prompt
+    cost 0.2 x 1,000,000 x p — above the floor, far below the ceiling.
+    """
+
+    def fill(sess):
+        for name in ("a", "b"):
+            _add(sess, usage=_write_1h(1_000_000), session_id=name, ts=T0)
+            _add(
+                sess, usage=_write_1h(1_050_000), session_id=name,
+                ts=T0 + timedelta(hours=2),
+            )
+
+    db.fill(fill)
+    result = db.run(cap=timedelta(hours=4))
+    g = result.gaps
+    price = PRICES[OPUS]
+    p = price.input_per_mtok
+    per_gap_upper = 1_050_000 * p * price.cache_write_1h_mult / _MTOK
+    per_gap_lower = 50_000 * p * price.cache_write_1h_mult / _MTOK
+    per_gap_ping = 2 * 1_000_000 * p * price.cache_read_mult / _MTOK
+
+    assert g.capped_rewrite_usd == 2 * per_gap_upper
+    assert g.capped_rewrite_usd_lower == 2 * per_gap_lower
+    assert g.capped_ping_usd == 2 * per_gap_ping
+    assert g.capped_rewrite_usd_lower < g.capped_ping_usd < g.capped_rewrite_usd
+    assert g.capped_verdict == "UNDECIDED"
+    # The binary property still says WORTH IT — that is the flaw, demonstrated.
+    assert g.capped_worth_it is True
+
+    line = _capped_verdict_line(result)
+    assert line.startswith("UNDECIDED: pings")
+    assert "sits inside [" in line
+    assert "will not close the band" in line   # 2 identical gaps → sign resolved
+
+
+def test_capped_verdict_is_worth_it_when_the_baseline_is_small(db):
+    """A real win: the ping bill undercuts even the pessimistic bound."""
+
+    def fill(sess):
+        _add(sess, usage=_write_1h(1000, prompt_extra=1000), session_id="a", ts=T0)
+        _add(
+            sess, usage=_write_1h(5_000_000), session_id="a",
+            ts=T0 + timedelta(hours=2),
+        )
+
+    db.fill(fill)
+    result = db.run(cap=timedelta(hours=4))
+    g = result.gaps
+    assert g.capped_ping_usd < g.capped_rewrite_usd_lower
+    assert g.capped_verdict == "WORTH IT"
+    assert _capped_verdict_line(result).startswith("WORTH IT")
+    assert "(lower bound)" in _capped_verdict_line(result)
+
+
+def test_capped_verdict_refuses_above_the_upper_bound(db):
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=11)], usage=READ_ONLY_USAGE)
+
+    db.fill(fill)
+    result = db.run(cap=timedelta(hours=12))
+    g = result.gaps
+    assert g.capped_ping_usd > g.capped_rewrite_usd
+    assert g.capped_verdict == "NOT WORTH IT"
+    assert _capped_verdict_line(result).startswith("NOT WORTH IT")
+    assert "(upper bound)" in _capped_verdict_line(result)
+
+
+def test_aggregate_verdict_line_is_untouched(db):
+    """The old two-state control must keep its exact wording."""
+
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=20)], usage=READ_ONLY_USAGE)
+
+    db.fill(fill)
+    result = db.run()
+    g = result.gaps
+    assert _verdict_line(result) == (
+        f"NOT WORTH IT: pings ${g.ping_usd.quantize(Decimal('0.01')):,} >= "
+        f"avoidable rewrites ${g.rewrite_usd.quantize(Decimal('0.01')):,}"
+    )
+
+
+def test_gaps_to_resolve_reports_a_sample_size_not_a_band_width():
+    """It answers "is this sign real", which is not "when does the band close"."""
+    assert _gaps_to_resolve([]) is None
+    assert _gaps_to_resolve([Decimal("1")]) is None          # n < 2
+    assert _gaps_to_resolve([Decimal("1"), Decimal("-1")]) is None   # mean 0
+    # Zero spread: every gap agreed, so the sign is as settled as it can get.
+    assert _gaps_to_resolve([Decimal("5")] * 4) == 4
+    # A mean swamped by its scatter needs far more than the sample in hand.
+    noisy = [Decimal("100"), Decimal("-100"), Decimal("100"), Decimal("-99")]
+    assert _gaps_to_resolve(noisy) > len(noisy)
+
+
+def test_undecided_sentence_asks_for_more_gaps_when_the_sign_is_unsettled():
+    line = _verdict_sentence(
+        "UNDECIDED", Decimal("15"), Decimal("10"), Decimal("20"), 900, 12
+    )
+    assert line.startswith("UNDECIDED: pings $15.00 sits inside [$10.00, $20.00]")
+    assert "~900 expired gaps would settle its sign, we have 12" in line
+
+
+def test_undecided_sentence_says_when_more_data_cannot_help():
+    line = _verdict_sentence(
+        "UNDECIDED", Decimal("15"), Decimal("10"), Decimal("20"), 5, 40
+    )
+    assert "more traffic of this shape will not close the band" in line
+
+
+def test_undecided_sentence_stays_bare_without_an_estimate():
+    line = _verdict_sentence(
+        "UNDECIDED", Decimal("15"), Decimal("10"), Decimal("20"), None, 1
+    )
+    assert line == "UNDECIDED: pings $15.00 sits inside [$10.00, $20.00]"
 
 
 # ── section 4: direct API traffic ───────────────────────────────────────────
@@ -662,7 +1236,7 @@ def test_empty_db_renders_every_section(db):
     assert result.total_traces == 0
     assert result.saved_pct is None
     keys = [s.key for s in build_sections(result)]
-    assert keys == ["per_model", "gaps", "ping", "direct"]
+    assert keys == ["per_model", "gaps", "ping", "cap_sweep", "direct"]
     for fmt in ("table", "md", "csv"):
         text_out = format_audit(result, fmt)
         assert "No priced Claude Code traffic" in text_out
@@ -708,6 +1282,46 @@ def test_csv_is_tidy_and_parseable(db):
     assert {"per_model", "gaps", "ping", "direct", "summary"} <= sections
     hit = next(r for r in rows if r["section"] == "per_model" and r["metric"] == "hit rate")
     assert hit["item"] == OPUS
+
+
+@pytest.mark.parametrize("fmt", ["table", "md", "csv"])
+def test_every_renderer_carries_the_cap_sweep(db, fmt):
+    """The curve is the evidence for the cap; no format may drop it."""
+
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2), timedelta(hours=9)])
+
+    db.fill(fill)
+    result = db.run()
+    out = format_audit(result, fmt)
+    # The CSV keys on section.key; the human formats print section.title.
+    assert ("cap_sweep" if fmt == "csv" else "3b. Keep-alive cap sweep") in out
+    assert "argmax" in out
+    # Every swept cap gets a line, the uncapped policy included.
+    for label in ("1h", "4h", "2h45m", "12h", "no cap"):
+        assert label in out
+    if fmt == "csv":
+        rows = list(csv.DictReader(io.StringIO(out)))
+        caps = {r["item"] for r in rows if r["section"] == "cap_sweep" and r["item"]}
+        assert len(caps) == len(cap_grid()) + 1
+        assert {"net <=", "net >=", "verdict"} <= {
+            r["metric"] for r in rows if r["section"] == "cap_sweep"
+        }
+
+
+def test_md_renderer_pads_short_rows_in_every_section(db):
+    """Section 3's two columns and 3b's nine must both survive the md table."""
+
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2)])
+
+    db.fill(fill)
+    out = format_audit(db.run(), "md")
+    header = "| cap | bridged / abandoned | pings | ping cost |"
+    assert header in out
+    for line in out.splitlines():
+        if line.startswith("| ") and line.endswith(" |"):
+            assert line.count("|") >= 3
 
 
 def test_csv_keys_are_unique_within_a_section(db):

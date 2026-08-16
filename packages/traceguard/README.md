@@ -106,7 +106,7 @@ Flags: `--format table|md|csv` (default `table`), `--since` / `--until`
 (inclusive ISO date or datetime; a bare date opens at 00:00 and closes at
 23:59).
 
-Four sections. First, per-model: the token-weighted hit rate
+Five sections. First, per-model: the token-weighted hit rate
 `cache_read / (input + cache_read + cache_write_5m + cache_write_1h)`, what the
 input side actually cost at list price, and what the same prompts would have
 cost with caching switched off entirely.
@@ -114,10 +114,14 @@ cost with caching switched off entirely.
 ```
 model                       messages  prompt tok      hit rate  input cost  no-cache    saved       saved %
 claude-opus-4-8             23,759    5,535,807,891   96.1%     $4,616.39   $27,691.44  $23,075.05  83.3%
-claude-fable-5              15,291    3,583,420,473   96.2%     $5,847.08   $35,834.20  $29,987.13  83.7%
-claude-opus-5               6,316     1,750,760,343   97.7%     $1,205.08   $8,753.80   $7,548.72   86.2%
+claude-fable-5              15,754    3,677,897,613   96.3%     $5,975.21   $36,778.98  $30,803.77  83.8%
+claude-opus-5               6,948     1,875,315,292   97.7%     $1,294.01   $9,376.58   $8,082.56   86.2%
+claude-sonnet-5             11,139    1,326,223,701   95.1%     $422.96     $2,652.45   $2,229.49   84.1%
+claude-haiku-4-5-20251001   1,573     57,312,161      93.9%     $9.76       $57.31      $47.56      83.0%
+claude-opus-4-7             64        11,045,966      96.6%     $9.04       $55.23      $46.19      83.6%
 claude-sonnet-4-5-20250929  2         42,410          0.0%      n/a         n/a         n/a         n/a
-TOTAL                       58,753    12,264,612,945  96.2%     $12,110.31  $75,044.44  $62,934.13  83.9%
+(none)                      639       0               n/a       n/a         n/a         n/a         n/a
+TOTAL                       59,878    12,483,645,034  96.3%     $12,327.38  $76,611.99  $64,284.61  83.9%
 ```
 
 A model with no entry in the list-price table is listed with its tokens and
@@ -126,46 +130,88 @@ two price eras, resolved by `invoked_at`) and are never guessed.
 
 Second, where the idle time goes: gaps between consecutive requests inside each
 `session_id`, bucketed `<5m / 5m–1h / 1–4h / >4h`, each with the money that
-bucket carries — an **upper bound** on what its cache expiries cost (the
-`cache_creation` of every first-message-after-a->1h-gap at its own TTL write
-multiplier, an upper bound because that figure also contains whatever the turn
-genuinely added; `usage` does not separate the two) against what bridging only
-that bucket would have cost in pings. Buckets inside the 1h TTL expire nothing
-and read `no expiry`, which is not the `n/a` that means no list price.
+bucket carries — a **bracket** on what its cache expiries cost, against what
+bridging only that bucket would have cost in pings. Buckets inside the 1h TTL
+expire nothing and read `no expiry`, which is not the `n/a` that means no list
+price.
 
 ```
-gap    count   share  rewrite <=  ping cost  verdict
-<5m    56,991  97.3%  no expiry   no expiry  no expiry
-5m-1h  1,182   2.0%   no expiry   no expiry  no expiry
-1-4h   183     0.3%   $886.92     $81.12     ping wins
->4h    239     0.4%   $1,025.91   $1,928.42  ping loses
+gap    count   share  rewrite >=  rewrite <=  ping cost  verdict
+<5m    58,050  97.2%  no expiry   no expiry   no expiry  no expiry
+5m-1h  1,231   2.1%   no expiry   no expiry   no expiry  no expiry
+1-4h   187     0.3%   $893.12     $897.10     $82.41     WORTH IT
+>4h    242     0.4%   $1,031.27   $1,035.97   $1,951.20  NOT WORTH IT
 ```
+
+The bracket is two assumptions, not a measurement, and the report says so.
+The **upper** bound charges the whole `cache_creation` of every
+first-message-after-a->1h-gap to the expiry, which overshoots because that
+figure also contains whatever the turn genuinely added. The **lower** bound
+first credits each of those messages with the median `cache_creation` of the
+same session's ordinary turns and charges only the remainder, floored at zero
+and priced at that message's own 5m/1h mix. `usage` supports neither split. On
+this corpus the two land 0.4% apart — but only because a post-gap write
+averages 350,257 tokens against a 1,542-token session baseline, so the narrow
+interval is a fact about this traffic and not evidence that either bound is
+tight.
 
 Third, the keep-alive question, answered rather than assumed: one ping every 55
 minutes across every >1h gap, each billed as a 0.1× read of the prompt as it
-stood before the gap, against that rewrite bound. Then the same question for a
-policy you could actually run — ping until 4h of idle, then give up — which
-pays for the pings burned on gaps that outlive the cap and banks savings only
-on the ones it bridges, so it needs no foreknowledge of how long a gap will
-turn out to be. On this repo's own corpus the two disagree, which is the point
-of computing both:
+stood before the gap. The verdict is three-state — a ping bill that lands
+*between* the two rewrite bounds gets `UNDECIDED`, because in that band the
+sign of the answer comes from the modelling choice rather than from anything
+measured. Then the same question for a policy you could actually run: ping
+until some threshold of idle, then give up, paying for the pings burned on
+gaps that outlive the cap and banking savings only on the ones it bridges.
 
 ```
-gaps bridged                                   422
-pings needed                                   6,765
-ping cost                                      $2,009.54
-rewrite cost avoided (upper bound)             $1,912.84
-verdict                                        NOT WORTH IT: pings $2,009.54 >= avoidable rewrites $1,912.84
-gaps bridged / abandoned (capped 4h)           183 / 239
-pings needed (capped 4h)                       1,153
-ping cost (capped 4h)                          $316.48
-rewrite cost avoided (capped 4h, upper bound)  $886.92
-verdict (capped 4h)                            WORTH IT: pings $316.48 < avoidable rewrites $886.92
+gaps bridged                                    429
+pings needed                                    6,856
+ping cost                                       $2,033.60
+rewrite cost avoided (upper bound)              $1,933.07
+rewrite cost avoided (lower bound)              $1,924.39
+verdict                                         NOT WORTH IT: pings $2,033.60 >= avoidable rewrites $1,933.07
+keep-alive cap                                  10h (solved)
+gaps bridged / abandoned (capped 10h)           306 / 123
+pings needed (capped 10h)                       2,191
+ping cost (capped 10h)                          $590.27
+rewrite cost avoided (capped 10h, upper bound)  $1,422.17
+rewrite cost avoided (capped 10h, lower bound)  $1,415.68
+verdict (capped 10h)                            WORTH IT: pings $590.27 < avoidable rewrites $1,415.68 (lower bound)
 ```
 
-Both verdicts lean pro-ping by construction: savings are an upper bound while
-ping cost is charged as a pure cache read of a frozen prompt. A refusal under
-that tilt is solid; an endorsement is only as wide as its margin.
+The unbounded policy still refuses, and that first `verdict` line is kept
+verbatim as the control. Everything here leans pro-ping by construction — ping
+cost is charged as a pure cache read of a frozen prompt, and a real session's
+prompt grows — so a refusal is solid and an endorsement is only as wide as its
+margin, which is now printed rather than implied.
+
+That 10h is **solved, not chosen**. An earlier version hardcoded 4h to line up
+with the `1-4h` / `>4h` bucket boundary, which is a tidy number rather than an
+answer. Section 3b costs every cap from 1h to 12h in 15-minute steps, plus an
+uncapped policy competing on equal terms, and takes the argmax of net benefit:
+
+```
+cap     bridged / abandoned  pings  ping cost  rewrite >=  rewrite <=  net >=    net <=    verdict
+1h      0 / 429              388    $105.60    $0.00       $0.00       -$105.60  -$105.60  NOT WORTH IT
+1h15m   46 / 383             388    $105.60    $205.19     $206.08     $99.59    $100.48   WORTH IT
+...
+4h      187 / 242            1,175  $321.03    $893.12     $897.10     $572.09   $576.07   WORTH IT
+...
+10h     306 / 123            2,191  $590.27    $1,415.68   $1,422.17   $825.42   $831.90   WORTH IT
+...
+12h     324 / 105            2,526  $683.16    $1,460.84   $1,467.59   $777.68   $784.43   WORTH IT
+no cap  429 / 0              6,856  $2,033.60  $1,924.39   $1,933.07   -$109.22  -$100.53  NOT WORTH IT
+```
+
+An argmax on its own is a point estimate pretending to be a recommendation, so
+the sweep also reports the **plateau** — the contiguous run of caps over which
+the net stays positive. Here it is `1h15m..12h`, 10h45m wide, which says the
+exact cap barely matters; a plateau one grid step wide would have said the
+optimum was noise in the gap distribution, and the report says that in those
+words when it happens. This particular plateau is flagged as **censored** at
+the 12h ceiling: it ends where the sweep stops looking, not at a sign change,
+so its width is a floor rather than a measurement.
 
 Fourth, direct API traffic — traces whose `output_parsed.source` is not
 `claude_code_session` (the SDK wrappers, harnesses). Calls, hit rate, average
@@ -178,7 +224,7 @@ hit rate is structural and no amount of `cache_control` will move it.
 The report closes with one copyable line:
 
 ```
-Claude Code caching already saves us 84% ($12,110.31 vs $75,044.44 list). Checked with: python -m traceguard.routing_audit.cache_audit
+Claude Code caching already saves us 84% ($12,327.38 vs $76,611.99 list). Checked with: python -m traceguard.routing_audit.cache_audit
 ```
 
 ## Contract

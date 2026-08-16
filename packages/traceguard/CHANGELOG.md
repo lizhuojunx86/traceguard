@@ -32,6 +32,42 @@ surface, the SPEC MUSTs and every existing signature are untouched.
   endorsement only as wide as its margin. That caveat is printed with the
   numbers.
 
+- **The keep-alive cap is now solved instead of hardcoded, and the rewrite
+  bound has a floor.** Both of these were holes in the entry above, and closing
+  them moved the answer.
+
+  The 4h cap was picked to line up with the `1-4h` / `>4h` bucket boundary —
+  the comment said as much. New section 3b sweeps every cap from 1h to 12h in
+  15-minute steps plus an uncapped policy, and takes the argmax of net benefit:
+  on this corpus that is **10h, not 4h** ($831.90 net against $576.07 at 4h,
+  bridging 306 of 429 gaps rather than 187). An argmax alone is a point
+  estimate pretending to be a recommendation, so the sweep also reports the
+  contiguous range over which the net stays positive — here `1h15m..12h`,
+  flagged as censored because it ends at the sweep's ceiling rather than at a
+  sign change. A plateau one grid step wide is reported as exactly that.
+
+  `_rewrite_cost` was an upper bound with nothing under it, so every verdict
+  rested on one side of an interval. A lower bound now credits each post-gap
+  message with the median `cache_creation` of its own session's ordinary turns
+  and charges only the remainder, floored at zero. The verdict is
+  correspondingly three-state: ping cost below the floor is `WORTH IT`, above
+  the ceiling `NOT WORTH IT`, and in between `UNDECIDED` — a band a two-state
+  verdict silently scores as a win. The unbounded aggregate keeps its original
+  wording as a control.
+
+  **The lower bound barely moved this corpus, and that is not good news.** It
+  narrows the total by 0.4% ($1,933.07 → $1,924.39), because a post-gap write
+  averages 350,257 tokens against a 1,542-token session baseline. The interval
+  is narrow because these two populations differ by two orders of magnitude,
+  not because either bound is tight; the report says so where the number is
+  printed. The capped verdict does clear the floor ($590.27 against $1,415.68),
+  so "capped pinging pays" survives the pessimistic reading here — but the
+  margin is now stated rather than assumed.
+
+  `session_gaps` and `audit` take a `cap` argument: a `timedelta` pins a
+  policy, `None` prices the one that never gives up, and the default solves it.
+  Sections 1 and 4 are byte-identical.
+
 ### Fixed
 
 - **`python -m traceguard.routing_audit.ingest_claude_code` silently did
