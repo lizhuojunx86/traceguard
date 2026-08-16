@@ -843,3 +843,16 @@ def format_report(stats: IngestStats, *, wrote: bool) -> str:
         f"{total[0]:>7} {total[1]:>13} {total[2]:>11} {total[3]:>11.4f}"
     )
     return "\n".join(lines)
+
+
+if __name__ == "__main__":  # pragma: no cover - delegates to the ingest CLI
+    # This module is the parser; the CLI lives in ``ingest``. People reach for
+    # the name that describes what they want to ingest, and without this guard
+    # ``python -m traceguard.routing_audit.ingest_claude_code`` imported the
+    # module, ran nothing and exited 0 — a silent no-op that looked like a
+    # successful backfill.
+    import sys
+
+    from traceguard.routing_audit.ingest import main
+
+    sys.exit(main())

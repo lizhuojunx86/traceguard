@@ -948,6 +948,34 @@ def test_warn_rejects_an_unregistered_kind() -> None:
         warn("brand_new_alarm_nobody_registered", "x")
 
 
+@pytest.mark.parametrize(
+    "module",
+    [
+        "traceguard.routing_audit",
+        "traceguard.routing_audit.ingest",
+        "traceguard.routing_audit.ingest_claude_code",
+    ],
+)
+def test_every_documented_ingest_entry_point_runs(module: str) -> None:
+    """`python -m <module> --help` must reach the CLI, not import and exit.
+
+    ``ingest_claude_code`` is the name that describes what gets ingested, so it
+    is the one people type; before it had a ``__main__`` guard it exited 0
+    printing nothing, which reads exactly like a backfill that worked.
+    """
+    import subprocess
+    import sys
+
+    proc = subprocess.run(
+        [sys.executable, "-m", module, "--help"],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert proc.returncode == 0, proc.stderr
+    assert "--write" in proc.stdout, f"{module} printed no CLI usage: {proc.stdout!r}"
+
+
 def test_registered_kinds_are_all_actually_emittable() -> None:
     """The registry must not accumulate kinds nothing emits any more.
 
