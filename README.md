@@ -88,15 +88,26 @@ unchanged. Use your dashboard for observability; use TraceGuard to guarantee the
 timeline underneath it. Step-by-step:
 [docs/integrations/otel-langfuse-phoenix.md](docs/integrations/otel-langfuse-phoenix.md).
 
+One boundary worth stating here rather than 200 lines down. TraceGuard makes a
+record correct in time; it does not make that record something a third party can
+check without trusting you. That is
+[tg-attest](https://github.com/lizhuojunx86/tg-attest) — RFC 3161 timestamps over
+Merkle epoch roots, aimed at EU AI Act Article 12 rather than at backtests.
+TraceGuard answers "could this have happened then?"; tg-attest answers "can you
+prove this record has not been edited since?". Separate repo, separate package,
+no code dependency in either direction. Detail:
+[Evidence layer](#evidence-layer-traceguardaudit).
+
 ## Field evidence: the measurement this project started from
 
 TraceGuard exists because of one number. Polling a commercial fundamentals feed
 against a live trading strategy's own logs over four months of 2026, **41.4% of
 `epsActual` values differed between the value the vendor served first and the
 value it serves now, and 15.3% differed enough to flip a long-entry decision**.
-Those are the two numbers quoted in this README's sibling project and in the
-case study, so the record set behind them is published and the arithmetic runs
-in one command with no dependencies and no vendor account:
+Those are the two numbers quoted in
+[tg-attest](https://github.com/lizhuojunx86/tg-attest) and in the case study, so
+the record set behind them is published and the arithmetic runs in one command
+with no dependencies and no vendor account:
 
 ```console
 $ python analysis/eps_revision.py
