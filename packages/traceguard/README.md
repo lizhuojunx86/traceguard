@@ -94,8 +94,9 @@ counts and money. No prompt or answer text ever leaves the DB.
 It does not ingest. Fill the store first, then audit it:
 
 ```bash
-# 1. once (and thereafter incrementally) — pull ~/.claude/projects into a store
-python -m traceguard.routing_audit.ingest_claude_code --db sqlite:///traces_routing_audit.db
+# 1. once (and thereafter incrementally) — pull ~/.claude/projects into a store.
+#    Without --write this is a dry run that parses and prints, touching nothing.
+python -m traceguard.routing_audit.ingest --write --db sqlite:///traces_routing_audit.db
 
 # 2. as often as you like — read it back
 python -m traceguard.routing_audit.cache_audit --db sqlite:///traces_routing_audit.db
@@ -124,23 +125,47 @@ A model with no entry in the list-price table is listed with its tokens and
 two price eras, resolved by `invoked_at`) and are never guessed.
 
 Second, where the idle time goes: gaps between consecutive requests inside each
-`session_id`, bucketed `<5m / 5m–1h / 1–4h / >4h`, plus an **upper bound** on
-what cache expiry costs — the `cache_creation` of every first-message-after-a-
->1h-gap at its own TTL write multiplier. Upper bound because that figure also
-contains whatever the turn genuinely added; `usage` does not separate the two.
+`session_id`, bucketed `<5m / 5m–1h / 1–4h / >4h`, each with the money that
+bucket carries — an **upper bound** on what its cache expiries cost (the
+`cache_creation` of every first-message-after-a->1h-gap at its own TTL write
+multiplier, an upper bound because that figure also contains whatever the turn
+genuinely added; `usage` does not separate the two) against what bridging only
+that bucket would have cost in pings. Buckets inside the 1h TTL expire nothing
+and read `no expiry`, which is not the `n/a` that means no list price.
+
+```
+gap    count   share  rewrite <=  ping cost  verdict
+<5m    56,991  97.3%  no expiry   no expiry  no expiry
+5m-1h  1,182   2.0%   no expiry   no expiry  no expiry
+1-4h   183     0.3%   $886.92     $81.12     ping wins
+>4h    239     0.4%   $1,025.91   $1,928.42  ping loses
+```
 
 Third, the keep-alive question, answered rather than assumed: one ping every 55
 minutes across every >1h gap, each billed as a 0.1× read of the prompt as it
-stood before the gap, against that rewrite bound. On this repo's own corpus it
-comes out as a refusal, which is the point of computing it:
+stood before the gap, against that rewrite bound. Then the same question for a
+policy you could actually run — ping until 4h of idle, then give up — which
+pays for the pings burned on gaps that outlive the cap and banks savings only
+on the ones it bridges, so it needs no foreknowledge of how long a gap will
+turn out to be. On this repo's own corpus the two disagree, which is the point
+of computing both:
 
 ```
-gaps bridged                        422
-pings needed                        6,765
-ping cost                           $2,009.54
-rewrite cost avoided (upper bound)  $1,912.84
-verdict                             NOT WORTH IT: pings $2,009.54 >= avoidable rewrites $1,912.84
+gaps bridged                                   422
+pings needed                                   6,765
+ping cost                                      $2,009.54
+rewrite cost avoided (upper bound)             $1,912.84
+verdict                                        NOT WORTH IT: pings $2,009.54 >= avoidable rewrites $1,912.84
+gaps bridged / abandoned (capped 4h)           183 / 239
+pings needed (capped 4h)                       1,153
+ping cost (capped 4h)                          $316.48
+rewrite cost avoided (capped 4h, upper bound)  $886.92
+verdict (capped 4h)                            WORTH IT: pings $316.48 < avoidable rewrites $886.92
 ```
+
+Both verdicts lean pro-ping by construction: savings are an upper bound while
+ping cost is charged as a pure cache read of a frozen prompt. A refusal under
+that tilt is solid; an endorsement is only as wide as its margin.
 
 Fourth, direct API traffic — traces whose `output_parsed.source` is not
 `claude_code_session` (the SDK wrappers, harnesses). Calls, hit rate, average

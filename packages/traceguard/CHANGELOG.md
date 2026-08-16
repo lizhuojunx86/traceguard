@@ -7,6 +7,42 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [Unreleased]
+
+Contract-external, all inside `traceguard.routing_audit`. The frozen public
+surface, the SPEC MUSTs and every existing signature are untouched.
+
+### Added
+
+- **`cache_audit` section 2 now carries money per gap bucket**, and section 3
+  answers the keep-alive question a second time for a *capped* policy: ping
+  until 4h of idle, then give up. This came out of a reader's comment on the
+  1.2.0 write-up, and it overturned that article's own conclusion. On this
+  repo's corpus the aggregate refuses (pings $2,009.54 ≥ rewrites ≤$1,912.84)
+  while the split shows why: 1–4h gaps are a win ($81.12 of pings against
+  ≤$886.92 of rewrites) drowned by >4h gaps that lose ($1,928.42 against
+  ≤$1,025.91). The capped policy pays for the pings burned on the 239 gaps it
+  abandons and still comes out ahead ($316.48 against ≤$886.92), so it needs no
+  foreknowledge of how long a gap will run.
+
+  A verdict averaged over buckets that behave differently is not a decision —
+  the same failure the article was about, one level down. Both verdicts still
+  lean pro-ping by construction (savings are an upper bound, pings are charged
+  as pure cache reads of a frozen prompt), which makes a refusal solid and an
+  endorsement only as wide as its margin. That caveat is printed with the
+  numbers.
+
+### Fixed
+
+- **`python -m traceguard.routing_audit.ingest_claude_code` silently did
+  nothing.** The module holds the parser while the CLI lives in `ingest`, and
+  it had no `__main__` guard, so the documented command imported it and exited
+  0 without a word — indistinguishable from a backfill that worked. The
+  package README documented exactly that command, and without `--write` besides.
+  The module now delegates to the real CLI, the README shows
+  `python -m traceguard.routing_audit.ingest --write`, and a test runs `--help`
+  through every documented entry point.
+
 ## [1.2.0] - 2026-08-16
 
 Minor: a read-only prompt-cache efficiency audit under `traceguard.routing_audit`,
