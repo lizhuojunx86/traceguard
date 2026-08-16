@@ -482,6 +482,127 @@ def _verdict_line(result) -> str:
     return next(row[1] for row in section.rows if row[0] == "verdict")
 
 
+def _capped_verdict_line(result) -> str:
+    section = next(s for s in build_sections(result) if s.key == "ping")
+    return next(row[1] for row in section.rows if row[0].startswith("verdict (capped"))
+
+
+def _gap_row(result, bucket: str) -> list[str]:
+    section = next(s for s in build_sections(result) if s.key == "gaps")
+    return next(row for row in section.rows if row[0] == bucket)
+
+
+# ── per-bucket money and the capped keep-alive policy ───────────────────────
+
+
+def test_bucket_costs_sum_to_the_totals(db):
+    """Splitting the money by bucket must not create or destroy any of it."""
+
+    def fill(sess):
+        _gap_session(
+            sess,
+            [
+                timedelta(minutes=1),
+                timedelta(minutes=30),
+                timedelta(hours=2),
+                timedelta(hours=3),
+                timedelta(hours=10),
+            ],
+        )
+
+    db.fill(fill)
+    g = db.run().gaps
+    assert sum(b.rewrite_usd for b in g.bucket_costs.values()) == g.rewrite_usd
+    assert sum(b.ping_usd for b in g.bucket_costs.values()) == g.ping_usd
+    assert sum(b.pings for b in g.bucket_costs.values()) == g.pings
+    assert sum(b.rewrite_unpriced for b in g.bucket_costs.values()) == g.rewrite_unpriced
+    assert sum(b.ping_unpriced for b in g.bucket_costs.values()) == g.ping_unpriced
+
+
+def test_buckets_inside_the_ttl_carry_no_money(db):
+    """Nothing expires under 1h, so those buckets get no rewrite and no ping."""
+
+    def fill(sess):
+        _gap_session(sess, [timedelta(minutes=1), timedelta(minutes=30)])
+
+    db.fill(fill)
+    result = db.run()
+    g = result.gaps
+    for name in ("<5m", "5m-1h"):
+        assert g.bucket_costs[name].rewrite_usd == Decimal("0")
+        assert g.bucket_costs[name].ping_usd == Decimal("0")
+        assert g.bucket_costs[name].pings == 0
+        # ...and the report says so in words that are not the price-less "n/a".
+        row = _gap_row(result, name)
+        assert row[3] == row[4] == row[5] == "no expiry"
+
+
+def test_bucket_verdicts_can_disagree_with_the_total(db):
+    """The point of the split: a 1-4h win hidden inside a >4h loss.
+
+    Same prompt shape in both gaps, so the difference is purely how many pings
+    the gap length demands.
+    """
+    read_heavy = {
+        "input_tokens": 0,
+        "cache_read_input_tokens": 400_000,
+        "cache_creation_input_tokens": 200_000,
+        "cache_creation_5m": 0,
+        "cache_creation_1h": 200_000,
+        "speed": "standard",
+    }
+
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2)], name="short", usage=read_heavy)
+        _gap_session(sess, [timedelta(hours=20)], name="long", usage=read_heavy)
+
+    db.fill(fill)
+    result = db.run()
+    g = result.gaps
+    short, long = g.bucket_costs["1-4h"], g.bucket_costs[">4h"]
+    assert short.ping_usd < short.rewrite_usd      # one ping, one rewrite avoided
+    assert long.ping_usd > long.rewrite_usd        # 20 pings for the same rewrite
+    assert _gap_row(result, "1-4h")[5] == "ping wins"
+    assert _gap_row(result, ">4h")[5] == "ping loses"
+    # The aggregate is dominated by the long gap and refuses; the capped policy
+    # keeps the short gap's win because it stops paying at 4h.
+    assert g.ping_worth_it is False
+    assert g.capped_worth_it is True
+    assert _verdict_line(result).startswith("NOT WORTH IT")
+    assert _capped_verdict_line(result).startswith("WORTH IT")
+
+
+def test_capped_policy_pays_for_gaps_it_abandons(db):
+    """A prospective pinger cannot see the end of a gap, so it eats the waste."""
+
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=20)], usage=READ_ONLY_USAGE)
+
+    db.fill(fill)
+    g = db.run().gaps
+    cap_pings = pings_to_bridge(timedelta(hours=4))
+    assert g.pings == pings_to_bridge(timedelta(hours=20)) == 21
+    assert g.capped_pings == cap_pings == 4        # 55m cadence, gave up at 4h
+    assert g.capped_ping_usd > Decimal("0")        # paid...
+    assert g.capped_rewrite_usd == Decimal("0")    # ...and bridged nothing
+    assert (g.capped_bridged, g.capped_abandoned) == (0, 1)
+
+
+def test_capped_policy_banks_only_the_gaps_it_bridges(db):
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2)], name="bridged")
+        _gap_session(sess, [timedelta(hours=9)], name="abandoned")
+
+    db.fill(fill)
+    g = db.run().gaps
+    assert (g.capped_bridged, g.capped_abandoned) == (1, 1)
+    assert g.capped_rewrite_usd == g.bucket_costs["1-4h"].rewrite_usd
+    assert g.capped_rewrite_usd < g.rewrite_usd
+    assert g.capped_pings == pings_to_bridge(timedelta(hours=2)) + pings_to_bridge(
+        timedelta(hours=4)
+    )
+
+
 # ── section 4: direct API traffic ───────────────────────────────────────────
 
 
@@ -587,6 +708,28 @@ def test_csv_is_tidy_and_parseable(db):
     assert {"per_model", "gaps", "ping", "direct", "summary"} <= sections
     hit = next(r for r in rows if r["section"] == "per_model" and r["metric"] == "hit rate")
     assert hit["item"] == OPUS
+
+
+def test_csv_keys_are_unique_within_a_section(db):
+    """Tidy form means (section, item, metric) identifies one value.
+
+    The capped keep-alive block repeats every metric name of the unbounded one,
+    so without a suffix the CSV would carry two rows called "ping cost" that
+    only row order tells apart — invisible to anyone loading it into a frame.
+    """
+
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2), timedelta(hours=9)])
+
+    db.fill(fill)
+    rows = [
+        r
+        for r in csv.DictReader(io.StringIO(format_audit(db.run(), "csv")))
+        if r["metric"] != "note"
+    ]
+    keys = [(r["section"], r["item"], r["metric"]) for r in rows]
+    duplicates = {k for k in keys if keys.count(k) > 1}
+    assert not duplicates, duplicates
 
 
 def test_summary_line_is_copyable(db):

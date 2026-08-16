@@ -87,10 +87,22 @@ _FIVE_MIN = timedelta(minutes=5)
 _ONE_HOUR = timedelta(hours=1)
 _FOUR_HOURS = timedelta(hours=4)
 GAP_BUCKETS: tuple[str, ...] = ("<5m", "5m-1h", "1-4h", ">4h")
+_EXPIRED_BUCKETS = frozenset(GAP_BUCKETS[2:])
+
+# Cell for a bucket where the question does not apply, kept distinct from the
+# "n/a" that means "no list price, money never guessed".
+_NO_EXPIRY = "no expiry"
 
 # Keep-alive cadence for the section-3 counterfactual: one ping just inside the
 # 1-hour TTL.
 PING_INTERVAL = timedelta(minutes=55)
+
+# Give-up threshold for the capped keep-alive policy, also in section 3. An
+# unbounded pinger pays for every gap it cannot see the end of; a capped one
+# stops after PING_CAP of idle and eats the rewrite. Set to the 1-4h/>4h bucket
+# boundary so the capped policy and the per-bucket columns in section 2 answer
+# the same question from two directions.
+PING_CAP = _FOUR_HOURS
 
 
 @dataclass(frozen=True)
@@ -316,9 +328,27 @@ def per_model(records: Iterable[Record]) -> list[ModelRow]:
 
 
 @dataclass
+class BucketCosts:
+    """The money side of one gap bucket.
+
+    Only the >1h buckets can carry money: a gap inside the TTL expires nothing,
+    so there is no rewrite to avoid and no ping worth sending.
+    """
+
+    rewrite_usd: Decimal = Decimal("0")
+    rewrite_unpriced: int = 0
+    pings: int = 0
+    ping_usd: Decimal = Decimal("0")
+    ping_unpriced: int = 0
+
+
+@dataclass
 class GapStats:
     buckets: dict[str, int] = field(
         default_factory=lambda: {name: 0 for name in GAP_BUCKETS}
+    )
+    bucket_costs: dict[str, BucketCosts] = field(
+        default_factory=lambda: {name: BucketCosts() for name in GAP_BUCKETS}
     )
     sessions: int = 0
     gaps: int = 0
@@ -329,10 +359,22 @@ class GapStats:
     ping_usd: Decimal = Decimal("0")
     pings: int = 0
     ping_unpriced: int = 0          # pre-gap messages with no price
+    # Capped policy: ping until PING_CAP of idle, then give up and let the
+    # cache expire. Costs include the pings burned on gaps that outlive the
+    # cap; savings count only the gaps it actually bridges.
+    capped_pings: int = 0
+    capped_ping_usd: Decimal = Decimal("0")
+    capped_rewrite_usd: Decimal = Decimal("0")
+    capped_bridged: int = 0
+    capped_abandoned: int = 0
 
     @property
     def ping_worth_it(self) -> bool:
         return self.ping_usd < self.rewrite_usd
+
+    @property
+    def capped_worth_it(self) -> bool:
+        return self.capped_ping_usd < self.capped_rewrite_usd
 
 
 def _bucket(gap: timedelta) -> str:
@@ -408,32 +450,53 @@ def session_gaps(records: Sequence[Record]) -> GapStats:
             continue
         by_session.setdefault(rec.session_id, []).append(rec)
 
+    cap_pings = pings_to_bridge(PING_CAP)
     for session in by_session.values():
         session.sort(key=lambda r: r.invoked_at)
         stats.sessions += 1
         for prev, cur in zip(session, session[1:]):
             gap = cur.invoked_at - prev.invoked_at
             stats.gaps += 1
-            stats.buckets[_bucket(gap)] += 1
+            bucket = _bucket(gap)
+            stats.buckets[bucket] += 1
             if gap <= _ONE_HOUR:
                 continue
             stats.expired_gaps += 1
+            bucket_costs = stats.bucket_costs[bucket]
+            bridged = gap <= PING_CAP
 
             rewrite = _rewrite_cost(cur)
             if rewrite is None:
                 stats.rewrite_unpriced += 1
+                bucket_costs.rewrite_unpriced += 1
             else:
                 stats.rewrite_usd += rewrite
+                bucket_costs.rewrite_usd += rewrite
                 m5, h1 = cache_creation_split(cur.usage or {})
                 stats.rewrite_tokens += m5 + h1
+                if bridged:
+                    stats.capped_rewrite_usd += rewrite
 
             n = pings_to_bridge(gap)
             cost = _ping_cost(prev, n)
             if cost is None:
                 stats.ping_unpriced += 1
+                bucket_costs.ping_unpriced += 1
             else:
                 stats.pings += n
                 stats.ping_usd += cost
+                bucket_costs.pings += n
+                bucket_costs.ping_usd += cost
+
+            capped_n = min(n, cap_pings)
+            capped_cost = _ping_cost(prev, capped_n)
+            if capped_cost is not None:
+                stats.capped_pings += capped_n
+                stats.capped_ping_usd += capped_cost
+            if bridged:
+                stats.capped_bridged += 1
+            else:
+                stats.capped_abandoned += 1
     return stats
 
 
@@ -677,13 +740,33 @@ def build_sections(a: CacheAudit) -> list[Section]:
 
     # 2 ── session gaps
     g = a.gaps
-    gap_rows = [
-        [name, _tok(g.buckets[name]), _pct(_ratio(g.buckets[name], g.gaps))]
-        for name in GAP_BUCKETS
-    ]
+    gap_rows = []
+    for name in GAP_BUCKETS:
+        expires = name in _EXPIRED_BUCKETS
+        bc = g.bucket_costs[name]
+        gap_rows.append(
+            [
+                name,
+                _tok(g.buckets[name]),
+                _pct(_ratio(g.buckets[name], g.gaps)),
+                _usd(bc.rewrite_usd) if expires else _NO_EXPIRY,
+                _usd(bc.ping_usd) if expires else _NO_EXPIRY,
+                (
+                    ("ping wins" if bc.ping_usd < bc.rewrite_usd else "ping loses")
+                    if expires and g.buckets[name]
+                    else _NO_EXPIRY
+                ),
+            ]
+        )
     gap_notes = [
         f"{g.sessions:,} sessions, {g.gaps:,} intervals between consecutive requests "
         f"(grouped by output_parsed.session_id, ordered by invoked_at).",
+        "Per-bucket money answers the question the totals hide: a rate averaged over "
+        "buckets that behave differently is not a decision. Rewrite is the same "
+        "UPPER bound as below, restricted to the bucket; ping is what bridging only "
+        f"that bucket's gaps would have cost. Both read '{_NO_EXPIRY}' inside the 1h "
+        "TTL, where nothing expires and there is nothing to bridge — distinct from "
+        "the 'n/a' elsewhere, which means no list price.",
         f"Cache-expiry rewrite cost, UPPER BOUND: {_usd(g.rewrite_usd)} "
         f"({_tok(g.rewrite_tokens)} cache-creation tokens across the "
         f"{g.expired_gaps:,} first-messages-after-a->1h-gap, each at its own TTL "
@@ -702,7 +785,7 @@ def build_sections(a: CacheAudit) -> list[Section]:
         Section(
             key="gaps",
             title="2. Session-internal gap distribution",
-            columns=["gap", "count", "share"],
+            columns=["gap", "count", "share", "rewrite <=", "ping cost", "verdict"],
             rows=gap_rows,
             notes=gap_notes,
         )
@@ -715,12 +798,34 @@ def build_sections(a: CacheAudit) -> list[Section]:
         else f"NOT WORTH IT: pings {_usd(g.ping_usd)} >= avoidable rewrites "
         f"{_usd(g.rewrite_usd)}"
     )
+    cap_hours = int(PING_CAP.total_seconds() // 3600)
+    capped_verdict = (
+        f"WORTH IT: pings {_usd(g.capped_ping_usd)} < avoidable rewrites "
+        f"{_usd(g.capped_rewrite_usd)}"
+        if g.capped_worth_it
+        else f"NOT WORTH IT: pings {_usd(g.capped_ping_usd)} >= avoidable rewrites "
+        f"{_usd(g.capped_rewrite_usd)}"
+    )
     ping_rows = [
         ["gaps bridged", _tok(g.expired_gaps)],
         ["pings needed", _tok(g.pings)],
         ["ping cost", _usd(g.ping_usd)],
         ["rewrite cost avoided (upper bound)", _usd(g.rewrite_usd)],
         ["verdict", verdict],
+        # Every capped row carries the suffix rather than sitting under a
+        # separator: the CSV renderer keys on this column, so two rows called
+        # "ping cost" would be told apart only by their order in the file.
+        [
+            f"gaps bridged / abandoned (capped {cap_hours}h)",
+            f"{g.capped_bridged:,} / {g.capped_abandoned:,}",
+        ],
+        [f"pings needed (capped {cap_hours}h)", _tok(g.capped_pings)],
+        [f"ping cost (capped {cap_hours}h)", _usd(g.capped_ping_usd)],
+        [
+            f"rewrite cost avoided (capped {cap_hours}h, upper bound)",
+            _usd(g.capped_rewrite_usd),
+        ],
+        [f"verdict (capped {cap_hours}h)", capped_verdict],
     ]
     ping_notes = [
         f"Counterfactual: one keep-alive every {int(PING_INTERVAL.total_seconds() // 60)} "
@@ -731,6 +836,16 @@ def build_sections(a: CacheAudit) -> list[Section]:
         "so a mid-session model switch makes the pings that preceded it worthless.",
         "Compared against an UPPER bound on rewrites, so the pro-ping side of this "
         "comparison is already given the benefit of the doubt.",
+        f"The capped block is the policy you could actually run: ping until {cap_hours}h "
+        "of idle, then give up. It pays for the pings burned on the gaps that outlive "
+        f"the cap ({g.capped_abandoned:,} of them) and banks savings only on the "
+        f"{g.capped_bridged:,} it bridges, so it needs no foreknowledge of how long a "
+        "gap will turn out to be. Where the two verdicts disagree, the unbounded one "
+        "is not the interesting answer.",
+        "Both verdicts inherit the same pro-ping tilt, which matters more when one of "
+        "them says WORTH IT: savings are an upper bound while ping cost is charged as "
+        "a pure cache read of a frozen prompt. A refusal under this tilt is solid; an "
+        "endorsement is only as wide as its margin.",
     ]
     if g.ping_unpriced:
         ping_notes.append(
