@@ -68,6 +68,50 @@ surface, the SPEC MUSTs and every existing signature are untouched.
   policy, `None` prices the one that never gives up, and the default solves it.
   Sections 1 and 4 are byte-identical.
 
+- **Mid-gap model switches are measured instead of assumed, and the sweep stops
+  overclaiming its own plateau.** Four corrections to the entry above, found by
+  recomputing its sweep table by hand.
+
+  *Model switch.* Section 3 used to list "caches are model-scoped, so a
+  mid-session switch makes the preceding pings worthless" as one of two stated
+  approximations — while both `model_id`s sat in the store the whole time. It
+  is now read off the data per gap: **18 of the 378 decidable expired gaps
+  (4.8%) came back on a different model**, and the rate climbs with idle time,
+  1.8% in `1-4h` against 7.1% in `>4h`. Those gaps bank nothing (the pings held
+  the wrong model's prefix warm) while still costing what they cost, so their
+  savings are deducted and the argmax is taken after the deduction. Section 2
+  prints the rate per bucket, 3b prints wasted pings and their cost per cap.
+  54 gaps have a NULL `model_id` on one side; they are counted, left in, and
+  never guessed at, which makes the deduction a floor on the waste.
+
+  **The direction is the point.** A session is likelier to return on a
+  different model the longer it has been away, so a policy that pays to stay
+  alive longer collects a larger share of exactly the gaps this removes.
+  Omitting it did not add noise — it pushed the cap systematically long.
+
+  *Two ranges, not one.* The plateau footnote claimed both "capping is right
+  here" and "which cap you pick does not matter" off a single number, and the
+  second claim was false: net across the positive range runs $102.13..$811.30,
+  an 8x spread. The sign-stable range keeps only the first claim; a new
+  **argmax neighbourhood** (net within `k` of the maximum, `k` default 0.10,
+  `--peak-band-tolerance`) carries the second. On this corpus that band is
+  `9h..12h`, 13 grid points, against a 44-point sign-stable range.
+
+  *Cadence disclosure.* The argmax sits on a ping-count step — 10h is the last
+  cap before `pings_to_bridge` increments, and 10h15m buys $4.07 of avoided
+  rewrite for $33.49 of pings. The sweep now flags that and states the result
+  as "cap 10h **at cadence 55m**". A `PING_INTERVAL` sweep is not done here.
+
+  *Censoring, downgraded.* The censored flag moved to the argmax neighbourhood
+  and now carries the marginal evidence: no cap above the argmax recovers to
+  it, cumulative drift out to 12h is -$48.83, and `no cap` is a further
+  -$950.86. "Censored" means the run reaches the grid edge, not that the right
+  side went unexamined — a peak past 12h is unsupported rather than excluded.
+
+  Net effect on this repo's corpus: the cap stays **10h**, net falls from
+  $830.05 to **$811.30**, and avoided rewrites at that cap from $1,425.09 to
+  $1,406.34. Sections 1 and 4 remain byte-identical.
+
 ### Fixed
 
 - **`python -m traceguard.routing_audit.ingest_claude_code` silently did

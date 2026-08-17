@@ -584,9 +584,10 @@ def test_bucket_verdicts_can_disagree_with_the_total(db):
     # floors to $0. The ping bill then lands inside [$0, upper] by definition.
     # test_capped_verdict_is_worth_it_when_the_baseline_is_small covers the
     # non-degenerate case.
+    # Column 7 since the measured 'model switch' column landed at 3.
     assert g.bucket_costs["1-4h"].rewrite_usd_lower == Decimal("0")
-    assert _gap_row(result, "1-4h")[6] == "UNDECIDED"
-    assert _gap_row(result, ">4h")[6] == "NOT WORTH IT"
+    assert _gap_row(result, "1-4h")[7] == "UNDECIDED"
+    assert _gap_row(result, ">4h")[7] == "NOT WORTH IT"
     # The aggregate is dominated by the long gap and refuses; the capped policy
     # keeps the short gap's win because it stops paying at 4h. Both binary
     # (upper-bound) properties are unchanged.
@@ -836,6 +837,9 @@ def test_uncapped_point_equals_the_unbounded_totals(db):
     db.fill(fill)
     g = db.run(cap=None).gaps
     assert g.cap is None and g.cap_solved is False
+    # Precondition, now that savings are net of cross-model gaps: this fixture
+    # never changes model, so "avoided" and "expired" coincide.
+    assert (g.switched_gaps, g.switch_undecidable) == (0, 0)
     assert (g.capped_pings, g.capped_ping_usd) == (g.pings, g.ping_usd)
     assert g.capped_rewrite_usd == g.rewrite_usd
     assert g.capped_rewrite_usd_lower == g.rewrite_usd_lower
@@ -921,9 +925,13 @@ def test_plateau_width_zero_is_reported_as_a_spike(db):
     )
     assert sweep.plateau_width == timedelta(0)
     assert result.gaps.cap == timedelta(hours=2, minutes=45)
+    # A one-point sign-stable range forces a one-point argmax neighbourhood.
+    assert sweep.peak_band == sweep.plateau
+    assert sweep.band_points(sweep.peak_band) == 1
     # ...and the report must say the optimum is a spike, not quietly recommend it.
-    assert "a single grid point" in _sweep_note(result, "plateau")
-    assert "2h45m" in _sweep_note(result, "argmax")
+    assert "1 grid point." in _sweep_note(result, "ARGMAX NEIGHBOURHOOD")
+    assert "the exact value does matter" in _sweep_note(result, "ARGMAX NEIGHBOURHOOD")
+    assert "2h45m" in _sweep_note(result, "argmax:")
 
 
 def test_uncapped_winner_is_not_read_as_sitting_on_the_plateau(db):
@@ -984,8 +992,13 @@ def test_plateau_censoring_is_flagged_at_the_grid_edge(db):
     sweep = result.gaps.sweep
     assert sweep.plateau[1] == CAP_SWEEP_MAX
     assert sweep.plateau_censored(sweep.plateau) is True
-    note = _sweep_note(result, "censored")
-    assert "12h ceiling" in note and "floor rather than a measurement" in note
+    # Censoring is now reported against the argmax neighbourhood, because that
+    # is the band whose width carries a recommendation.
+    assert sweep.peak_band[1] == CAP_SWEEP_MAX
+    note = _sweep_note(result, "censored at")
+    assert "12h ceiling" in note
+    assert "never looked at" in note      # the claim it must not make
+    assert "not excluded, it is unsupported" in note
 
 
 def _drag_session(sess, *, name="drag", prompt=1_000_000):
@@ -1029,7 +1042,7 @@ def test_uncensored_plateau_is_not_flagged(db):
     assert CAP_SWEEP_MIN < sweep.plateau[0] and sweep.plateau[1] < CAP_SWEEP_MAX
     assert sweep.plateau_censored(sweep.plateau) is False
     assert not [n for n in _sweep(result).notes if "censored" in n]
-    assert "1h30m wide" in _sweep_note(result, "plateau")
+    assert "1h30m wide" in _sweep_note(result, "SIGN-STABLE RANGE")
 
 
 def test_width_and_cap_labels():
@@ -1040,6 +1053,367 @@ def test_width_and_cap_labels():
     assert _width_label(None) == "n/a"
     assert _width_label(timedelta(0)) == "0 (a single grid point)"
     assert _width_label(timedelta(hours=10, minutes=45)) == "10h45m"
+
+
+# ── the argmax neighbourhood, split off from the sign-stable range ──────────
+
+
+def test_sign_stable_range_and_peak_band_are_different_questions(db):
+    """A wide positive run whose peak is a single grid point.
+
+    Two bridgeable gaps at 1h10m and 2h40m over tiny prompts, plus a drag
+    session costing 100,000 x p per extra ping. Net is positive from 1h15m to
+    7h15m, but the 2h40m gap only lands at the 2h45m cap — the last cap before
+    pings_to_bridge steps to 3 — so the maximum is a spike inside a long shelf.
+    That is exactly the case where reporting only the positive run would
+    license "any cap in here is the same", which is false by 3x.
+    """
+
+    def fill(sess):
+        _add(sess, usage=_write_1h(0, prompt_extra=100), session_id="early", ts=T0)
+        _add(
+            sess, usage=_write_1h(200_000), session_id="early",
+            ts=T0 + timedelta(minutes=70),
+        )
+        _add(sess, usage=_write_1h(0, prompt_extra=100), session_id="late", ts=T0)
+        _add(
+            sess, usage=_write_1h(200_000), session_id="late",
+            ts=T0 + timedelta(minutes=160),
+        )
+        _drag_session(sess)
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    peak = timedelta(hours=2, minutes=45)
+
+    assert sweep.best.cap == peak
+    assert sweep.peak_band == (peak, peak)
+    assert sweep.band_points(sweep.peak_band) == 1
+    assert sweep.peak_band_width == timedelta(0)
+    # ...while the sign-stable range is many hours wide and spans a real spread.
+    assert sweep.plateau[0] == timedelta(hours=1, minutes=15)
+    assert sweep.band_points(sweep.plateau) > 10
+    lo_net, hi_net = sweep.spread(sweep.plateau)
+    assert hi_net > 2 * lo_net
+
+    sign_note = _sweep_note(result, "SIGN-STABLE RANGE")
+    band_note = _sweep_note(result, "ARGMAX NEIGHBOURHOOD")
+    # The weaker claim must not be dressed up as the stronger one.
+    assert "does NOT say the caps in it are interchangeable" in sign_note
+    assert "1 grid point." in band_note
+    assert "the exact value does matter" in band_note
+
+
+def test_peak_band_tolerance_is_configurable(db):
+    """k widens the neighbourhood; it must not touch anything costed."""
+
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2), timedelta(hours=9)])
+
+    db.fill(fill)
+    tight = db.run(tolerance=0.01).gaps
+    loose = db.run(tolerance=0.50).gaps
+    assert tight.sweep.tolerance == 0.01 and loose.sweep.tolerance == 0.50
+    assert loose.sweep.band_points(loose.sweep.peak_band) >= tight.sweep.band_points(
+        tight.sweep.peak_band
+    )
+    # The curve itself, the cap and the money are identical.
+    assert tight.cap == loose.cap
+    assert tight.capped_ping_usd == loose.capped_ping_usd
+    assert [p.net_upper for p in tight.sweep.points] == [
+        p.net_upper for p in loose.sweep.points
+    ]
+    assert "k=1%" in _sweep_note(db.run(tolerance=0.01), "ARGMAX NEIGHBOURHOOD")
+
+
+def test_no_peak_means_no_neighbourhood(db):
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=8)], usage=READ_ONLY_USAGE)
+
+    db.fill(fill)
+    result = db.run()
+    assert result.gaps.sweep.peak_band is None
+    assert result.gaps.sweep.peak_band_width is None
+    assert "no peak to have a neighbourhood" in _sweep_note(result, "no peak")
+
+
+# ── the argmax sits on a ping-count step ────────────────────────────────────
+
+
+def test_argmax_on_ping_step_is_self_exposed(db):
+    """When the cadence picks the winner, the report must name the cadence."""
+
+    def fill(sess):
+        _add(sess, usage=_write_1h(0, prompt_extra=100), session_id="a", ts=T0)
+        _add(
+            sess, usage=_write_1h(200_000), session_id="a",
+            ts=T0 + timedelta(minutes=160),
+        )
+        _drag_session(sess)
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    assert sweep.best.cap == timedelta(hours=2, minutes=45)
+    # 2h45m is the last cap at 2 pings; 3h needs 3.
+    assert pings_to_bridge(sweep.best.cap) == 2
+    assert pings_to_bridge(sweep.best.cap + CAP_SWEEP_STEP) == 3
+    assert sweep.argmax_on_ping_step is True
+
+    note = _sweep_note(result, "PING-COUNT STEP")
+    assert "cap 2h45m at cadence 55m" in note
+    assert "does not search it" in note
+    here, nxt = sweep.step_after_argmax
+    assert nxt.cap == timedelta(hours=3)
+    assert nxt.pings > here.pings
+
+
+def test_argmax_off_a_ping_step_says_nothing(db):
+    """No claim when the cadence is not what decided it."""
+
+    def fill(sess):
+        _add(sess, usage=_write_1h(0, prompt_extra=100), session_id="a", ts=T0)
+        _add(
+            sess, usage=_write_1h(200_000), session_id="a",
+            ts=T0 + timedelta(minutes=130),
+        )
+        _drag_session(sess)
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    assert pings_to_bridge(sweep.best.cap) == pings_to_bridge(
+        sweep.best.cap + CAP_SWEEP_STEP
+    )
+    assert sweep.argmax_on_ping_step is False
+    assert not [n for n in _sweep(result).notes if "PING-COUNT STEP" in n]
+
+
+# ── what lies beyond the 12h ceiling ────────────────────────────────────────
+
+
+def test_censored_band_shows_the_marginal_rather_than_shrugging(db):
+    """'Censored' must not be allowed to read as 'we did not look'."""
+
+    def fill(sess):
+        _gap_session(
+            sess, [timedelta(hours=2)], usage=_write_1h(9_000_000, prompt_extra=1000)
+        )
+        # A gap past the ceiling, so the off-grid observation is strictly worse
+        # rather than merely equal — that is the point being made.
+        _drag_session(sess)
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    assert sweep.peak_band[1] == CAP_SWEEP_MAX
+
+    # Every gap is bridged from 2h on, so nothing above the argmax recovers.
+    assert sweep.best_above_argmax is not None
+    assert sweep.best_above_argmax.net_upper <= sweep.best.net_upper
+    assert sweep.drift_to_ceiling < Decimal("0")
+    assert sweep.drift_off_grid < Decimal("0")     # 'no cap' is strictly worse
+    assert len(sweep.marginals_after_argmax) == sum(
+        1 for p in sweep.grid_points if p.cap > sweep.best.cap
+    )
+
+    note = _sweep_note(result, "censored at")
+    assert "never looked at" in note
+    assert "cumulative drift" in note
+    assert "not excluded, it is unsupported" in note
+
+
+def test_drift_metrics_are_none_when_the_argmax_is_the_last_cap(db):
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=13)], usage=_write_1h(9_000_000))
+
+    db.fill(fill)
+    sweep = db.run().gaps.sweep
+    if sweep.best.cap == CAP_SWEEP_MAX:
+        assert sweep.marginals_after_argmax == []
+        assert sweep.drift_to_ceiling is None
+        assert sweep.best_above_argmax is None
+    assert sweep.drift_off_grid is not None       # 'no cap' always exists
+
+
+# ── model switch: measured, not assumed ─────────────────────────────────────
+
+
+def test_model_switch_is_read_off_the_store(db):
+    """Both model_ids were always there; this stops calling it an assumption."""
+
+    def fill(sess):
+        # same model across the gap
+        _add(sess, model=OPUS, usage=_write_1h(1000), session_id="same", ts=T0)
+        _add(
+            sess, model=OPUS, usage=_write_1h(50_000), session_id="same",
+            ts=T0 + timedelta(hours=2),
+        )
+        # model changed across the gap
+        _add(sess, model=OPUS, usage=_write_1h(1000), session_id="switch", ts=T0)
+        _add(
+            sess, model=SONNET, usage=_write_1h(50_000), session_id="switch",
+            ts=T0 + timedelta(hours=2),
+        )
+        # NULL model_id on the far side — undecidable, never guessed
+        _add(sess, model=OPUS, usage=_write_1h(1000), session_id="unknown", ts=T0)
+        _add(
+            sess, model=None, usage=_write_1h(50_000), session_id="unknown",
+            ts=T0 + timedelta(hours=2),
+        )
+
+    db.fill(fill)
+    g = db.run().gaps
+    assert (g.switched_gaps, g.same_model_gaps, g.switch_undecidable) == (1, 1, 1)
+    assert g.switch_rate == pytest.approx(0.5)      # of DECIDABLE gaps only
+    bc = g.bucket_costs["1-4h"]
+    assert (bc.switched, bc.same_model, bc.switch_undecidable) == (1, 1, 1)
+    assert bc.switch_rate == pytest.approx(0.5)
+
+
+def test_cross_model_gap_banks_nothing_but_still_pays(db):
+    """The pings were sent; what they bought was the wrong model's cache."""
+
+    def fill(sess):
+        _add(sess, model=OPUS, usage=_write_1h(0, prompt_extra=10_000),
+             session_id="a", ts=T0)
+        _add(
+            sess, model=SONNET, usage=_write_1h(500_000), session_id="a",
+            ts=T0 + timedelta(hours=2),
+        )
+
+    db.fill(fill)
+    g = db.run(cap=timedelta(hours=4)).gaps
+    point = next(p for p in g.sweep.points if p.cap == timedelta(hours=4))
+
+    assert g.switched_gaps == 1
+    assert point.saved_upper == Decimal("0")        # banks nothing...
+    assert point.gross_saved_upper > Decimal("0")   # ...though the write was real
+    assert point.ping_usd > Decimal("0")            # ...and the bill still stands
+    assert point.wasted_pings == pings_to_bridge(timedelta(hours=2)) == 2
+    assert point.wasted_usd == point.ping_usd
+    assert point.net_upper < 0
+    # Section 2 still prices the expiry: it measures cost, not recoverability.
+    assert g.rewrite_usd > Decimal("0")
+    assert g.capped_rewrite_usd == Decimal("0")
+    assert g.capped_gross_rewrite_usd == g.rewrite_usd
+
+
+def test_undecidable_switch_is_counted_and_left_in(db):
+    """No model_id to compare is not evidence of a switch — count, do not guess."""
+
+    def fill(sess):
+        _add(sess, model=None, usage=_write_1h(0, prompt_extra=1000),
+             session_id="a", ts=T0)
+        _add(
+            sess, model=OPUS, usage=_write_1h(500_000), session_id="a",
+            ts=T0 + timedelta(hours=2),
+        )
+
+    db.fill(fill)
+    g = db.run(cap=timedelta(hours=4)).gaps
+    assert (g.switched_gaps, g.switch_undecidable) == (0, 1)
+    assert g.switch_rate is None                     # no decidable gaps at all
+    point = next(p for p in g.sweep.points if p.cap == timedelta(hours=4))
+    assert point.wasted_pings == 0                   # not assumed wasted...
+    assert point.saved_upper == point.gross_saved_upper   # ...so nothing deducted
+    assert "never guessed" in format_audit(db.run())
+
+
+def test_every_gap_cross_model_leaves_nothing_to_save(db):
+    """The extreme: pinging is pure cost at every cap on the grid."""
+
+    def fill(sess):
+        for i, hours in enumerate((2, 3, 9)):
+            _add(sess, model=OPUS, usage=_write_1h(0, prompt_extra=10_000),
+                 session_id=f"s{i}", ts=T0)
+            _add(
+                sess, model=SONNET, usage=_write_1h(500_000), session_id=f"s{i}",
+                ts=T0 + timedelta(hours=hours),
+            )
+
+    db.fill(fill)
+    result = db.run()
+    g = result.gaps
+    sweep = g.sweep
+    assert (g.switched_gaps, g.same_model_gaps) == (3, 0)
+    assert g.switch_rate == 1.0
+    for p in sweep.points:
+        assert p.saved_upper == Decimal("0") and p.saved_lower == Decimal("0")
+        assert p.net_upper == -p.ping_usd
+        assert p.wasted_pings == p.pings and p.wasted_usd == p.ping_usd
+    assert sweep.plateau is None and sweep.peak_band is None
+    assert g.capped_verdict == "NOT WORTH IT"
+    assert "no plateau" in _sweep_note(result, "no plateau")
+
+
+def test_cross_model_deduction_moves_the_argmax(db):
+    """The correction is directional, so it can and does move the answer.
+
+    Session "near" is a 2h same-model gap worth bridging. Session "far" is an
+    8h gap with a far bigger rewrite that the session came back from on another
+    model. Before the deduction the sweep pays 8 pings to reach it; after, that
+    rewrite is unbankable and the cheaper short cap wins.
+    """
+
+    def fill(sess):
+        _add(sess, model=OPUS, usage=_write_1h(0, prompt_extra=1000),
+             session_id="near", ts=T0)
+        _add(
+            sess, model=OPUS, usage=_write_1h(100_000), session_id="near",
+            ts=T0 + timedelta(hours=2),
+        )
+        _add(sess, model=OPUS, usage=_write_1h(0, prompt_extra=10_000),
+             session_id="far", ts=T0)
+        _add(
+            sess, model=SONNET, usage=_write_1h(5_000_000), session_id="far",
+            ts=T0 + timedelta(hours=8),
+        )
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    assert sweep.gross_best.cap >= timedelta(hours=8)  # what the old accounting chose
+    assert sweep.best.cap <= timedelta(hours=4)     # what measuring the switch says
+    assert sweep.best.cap != sweep.gross_best.cap
+    assert result.gaps.cap == sweep.best.cap        # ...and the report follows it
+    # The deduction at the NEW argmax is zero — it never reaches the far gap —
+    # so the report has to state the movement, not a difference at one point.
+    assert sweep.best.net_upper == sweep.best.gross_net_upper
+    note = _sweep_note(result, "THE DEDUCTION MOVED THE ANSWER")
+    assert "the argmax is taken after it" in note
+    assert "falls hardest on the long caps" in note
+
+
+def test_model_switch_reaches_every_part_of_the_report(db):
+    """Measured in section 2, deducted in 3b, and directional in the footnotes."""
+
+    def fill(sess):
+        _add(sess, model=OPUS, usage=_write_1h(0, prompt_extra=10_000),
+             session_id="a", ts=T0)
+        _add(
+            sess, model=SONNET, usage=_write_1h(500_000), session_id="a",
+            ts=T0 + timedelta(hours=2),
+        )
+        _gap_session(sess, [timedelta(hours=3)], name="b")
+
+    db.fill(fill)
+    result = db.run()
+    rendered = format_audit(result)
+
+    assert _gap_row(result, "1-4h")[3].startswith("50.0% (1/2)")
+    assert "model switch' is measured, not assumed" in rendered
+    assert "THE DIRECTION MATTERS MORE THAN THE SIZE" in rendered
+    assert "pushed the cap systematically long" in rendered
+    assert "cross-model gaps (measured)" in [r[0] for r in _ping_rows(result)]
+    assert any(
+        r[0].startswith("pings wasted on cross-model gaps") for r in _ping_rows(result)
+    )
+
+
+def _ping_rows(result):
+    return next(s for s in build_sections(result) if s.key == "ping").rows
 
 
 # ── the three-state verdict ─────────────────────────────────────────────────
@@ -1300,12 +1674,17 @@ def test_every_renderer_carries_the_cap_sweep(db, fmt):
     # Every swept cap gets a line, the uncapped policy included.
     for label in ("1h", "4h", "2h45m", "12h", "no cap"):
         assert label in out
+    assert "SIGN-STABLE RANGE" in out
+    assert "ARGMAX NEIGHBOURHOOD" in out
     if fmt == "csv":
         rows = list(csv.DictReader(io.StringIO(out)))
         caps = {r["item"] for r in rows if r["section"] == "cap_sweep" and r["item"]}
         assert len(caps) == len(cap_grid()) + 1
-        assert {"net <=", "net >=", "verdict"} <= {
+        assert {"net <=", "net >=", "verdict", "cross-model waste"} <= {
             r["metric"] for r in rows if r["section"] == "cap_sweep"
+        }
+        assert "model switch" in {
+            r["metric"] for r in rows if r["section"] == "gaps"
         }
 
 
@@ -1365,6 +1744,21 @@ def test_main_prints_every_format(db, capsys, fmt):
     assert cache_audit_main(["--db", db.url, "--format", fmt]) == 0
     out = capsys.readouterr().out
     assert OPUS in out
+
+
+def test_main_accepts_a_peak_band_tolerance(db, capsys):
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2), timedelta(hours=9)])
+
+    db.fill(fill)
+    assert cache_audit_main(["--db", db.url, "--peak-band-tolerance", "0.25"]) == 0
+    assert "k=25%" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("bad", ["0", "1", "-0.1", "1.5"])
+def test_main_rejects_a_tolerance_outside_the_open_unit_interval(db, capsys, bad):
+    assert cache_audit_main(["--db", db.url, "--peak-band-tolerance", bad]) == 2
+    assert "strictly between 0 and 1" in capsys.readouterr().err
 
 
 def test_main_rejects_a_bad_window(db, capsys):

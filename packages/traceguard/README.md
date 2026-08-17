@@ -114,14 +114,14 @@ cost with caching switched off entirely.
 ```
 model                       messages  prompt tok      hit rate  input cost  no-cache    saved       saved %
 claude-opus-4-8             23,759    5,535,807,891   96.1%     $4,616.39   $27,691.44  $23,075.05  83.3%
-claude-fable-5              15,754    3,677,897,613   96.3%     $5,975.21   $36,778.98  $30,803.77  83.8%
-claude-opus-5               6,948     1,875,315,292   97.7%     $1,294.01   $9,376.58   $8,082.56   86.2%
-claude-sonnet-5             11,139    1,326,223,701   95.1%     $422.96     $2,652.45   $2,229.49   84.1%
+claude-fable-5              15,958    3,744,394,764   96.3%     $6,057.40   $37,443.95  $31,386.54  83.8%
+claude-opus-5               7,309     1,929,288,473   97.7%     $1,331.44   $9,646.44   $8,315.00   86.2%
+claude-sonnet-5             11,157    1,327,315,994   95.1%     $423.37     $2,654.63   $2,231.26   84.1%
 claude-haiku-4-5-20251001   1,573     57,312,161      93.9%     $9.76       $57.31      $47.56      83.0%
 claude-opus-4-7             64        11,045,966      96.6%     $9.04       $55.23      $46.19      83.6%
 claude-sonnet-4-5-20250929  2         42,410          0.0%      n/a         n/a         n/a         n/a
-(none)                      639       0               n/a       n/a         n/a         n/a         n/a
-TOTAL                       59,878    12,483,645,034  96.3%     $12,327.38  $76,611.99  $64,284.61  83.9%
+(none)                      654       0               n/a       n/a         n/a         n/a         n/a
+TOTAL                       60,476    12,605,207,659  96.3%     $12,447.41  $77,549.01  $65,101.60  83.9%
 ```
 
 A model with no entry in the list-price table is listed with its tokens and
@@ -136,12 +136,21 @@ expire nothing and read `no expiry`, which is not the `n/a` that means no list
 price.
 
 ```
-gap    count   share  rewrite >=  rewrite <=  ping cost  verdict
-<5m    58,050  97.2%  no expiry   no expiry   no expiry  no expiry
-5m-1h  1,231   2.1%   no expiry   no expiry   no expiry  no expiry
-1-4h   187     0.3%   $893.12     $897.10     $82.41     WORTH IT
->4h    242     0.4%   $1,031.27   $1,035.97   $1,951.20  NOT WORTH IT
+gap    count   share  model switch        rewrite >=  rewrite <=  ping cost  verdict
+<5m    58,619  97.2%  no expiry           no expiry   no expiry   no expiry  no expiry
+5m-1h  1,252   2.1%   no expiry           no expiry   no expiry   no expiry  no expiry
+1-4h   189     0.3%   1.8% (3/166 +23?)   $896.02     $900.03     $82.65     WORTH IT
+>4h    243     0.4%   7.1% (15/212 +31?)  $1,036.71   $1,041.43   $1,962.07  NOT WORTH IT
 ```
+
+`model switch` is measured, not assumed: the share of that bucket's expired
+gaps that came back on a **different** `model_id` than they left on, with the
+undecidable ones (a NULL `model_id` on either side) trailing after a `?` rather
+than folded into the rate. Caches are model-scoped, so a cross-model gap is one
+no keep-alive could have helped — and the rate climbs with idle time, 1.8% in
+`1-4h` against 7.1% in `>4h`. Section 3b deducts those savings; the rewrite
+columns here do not, because they measure what expiry cost rather than what
+pinging could recover.
 
 The bracket is two assumptions, not a measurement, and the report says so.
 The **upper** bound charges the whole `cache_creation` of every
@@ -151,7 +160,7 @@ first credits each of those messages with the median `cache_creation` of the
 same session's ordinary turns and charges only the remainder, floored at zero
 and priced at that message's own 5m/1h mix. `usage` supports neither split. On
 this corpus the two land 0.4% apart — but only because a post-gap write
-averages 350,257 tokens against a 1,542-token session baseline, so the narrow
+averages ~350,000 tokens against a ~1,500-token session baseline, so the narrow
 interval is a fact about this traffic and not evidence that either bound is
 tight.
 
@@ -165,20 +174,31 @@ until some threshold of idle, then give up, paying for the pings burned on
 gaps that outlive the cap and banking savings only on the ones it bridges.
 
 ```
-gaps bridged                                    429
-pings needed                                    6,856
-ping cost                                       $2,033.60
-rewrite cost avoided (upper bound)              $1,933.07
-rewrite cost avoided (lower bound)              $1,924.39
-verdict                                         NOT WORTH IT: pings $2,033.60 >= avoidable rewrites $1,933.07
+gaps bridged                                    432
+pings needed                                    6,884
+ping cost                                       $2,044.72
+rewrite cost avoided (upper bound)              $1,941.46
+rewrite cost avoided (lower bound)              $1,932.73
+verdict                                         NOT WORTH IT: pings $2,044.72 >= avoidable rewrites $1,941.46
+cross-model gaps (measured)                     18 switched / 360 same / 54 undecidable — 4.8% of decidable
 keep-alive cap                                  10h (solved)
-gaps bridged / abandoned (capped 10h)           306 / 123
-pings needed (capped 10h)                       2,191
-ping cost (capped 10h)                          $590.27
-rewrite cost avoided (capped 10h, upper bound)  $1,422.17
-rewrite cost avoided (capped 10h, lower bound)  $1,415.68
-verdict (capped 10h)                            WORTH IT: pings $590.27 < avoidable rewrites $1,415.68 (lower bound)
+gaps bridged / abandoned (capped 10h)           308 / 124
+pings needed (capped 10h)                       2,205
+ping cost (capped 10h)                          $595.04
+pings wasted on cross-model gaps (capped 10h)   143 / $56.44
+rewrite cost avoided (capped 10h, upper bound)  $1,406.34
+rewrite cost avoided (capped 10h, lower bound)  $1,399.90
+verdict (capped 10h)                            WORTH IT: pings $595.04 < avoidable rewrites $1,399.90 (lower bound)
 ```
+
+"Avoided" is net of cross-model gaps. That used to be an *assumption* in this
+section's footnotes — "caches are model-scoped, so a mid-session switch makes
+the preceding pings worthless" — and both `model_id`s were in the store the
+whole time, so it is now measured instead. The direction is what matters: a
+session is likelier to come back on a different model the longer it has been
+away, so a policy that pays to stay alive longer collects a larger share of
+exactly the gaps this removes. Leaving it out did not add noise to the cap, it
+pushed the cap systematically **long**.
 
 The unbounded policy still refuses, and that first `verdict` line is kept
 verbatim as the control. Everything here leans pro-ping by construction — ping
@@ -192,26 +212,42 @@ answer. Section 3b costs every cap from 1h to 12h in 15-minute steps, plus an
 uncapped policy competing on equal terms, and takes the argmax of net benefit:
 
 ```
-cap     bridged / abandoned  pings  ping cost  rewrite >=  rewrite <=  net >=    net <=    verdict
-1h      0 / 429              388    $105.60    $0.00       $0.00       -$105.60  -$105.60  NOT WORTH IT
-1h15m   46 / 383             388    $105.60    $205.19     $206.08     $99.59    $100.48   WORTH IT
+cap     bridged / abandoned  pings  ping cost  cross-model waste  rewrite >=  rewrite <=  net >=    net <=    verdict
+1h      0 / 432              391    $106.21    18 / $6.75         $0.00       $0.00       -$106.21  -$106.21  NOT WORTH IT
+1h15m   47 / 385             391    $106.21    18 / $6.75         $207.44     $208.34     $101.23   $102.13   WORTH IT
 ...
-4h      187 / 242            1,175  $321.03    $893.12     $897.10     $572.09   $576.07   WORTH IT
+4h      189 / 243            1,183  $323.09    63 / $24.82        $888.21     $892.19     $565.13   $569.10   WORTH IT
 ...
-10h     306 / 123            2,191  $590.27    $1,415.68   $1,422.17   $825.42   $831.90   WORTH IT
+10h     308 / 124            2,205  $595.04    143 / $56.44       $1,399.90   $1,406.34   $804.86   $811.30   WORTH IT
 ...
-12h     324 / 105            2,526  $683.16    $1,460.84   $1,467.59   $777.68   $784.43   WORTH IT
-no cap  429 / 0              6,856  $2,033.60  $1,924.39   $1,933.07   -$109.22  -$100.53  NOT WORTH IT
+12h     326 / 106            2,543  $689.29    182 / $72.23       $1,445.06   $1,451.76   $755.77   $762.47   WORTH IT
+no cap  432 / 0              6,884  $2,044.72  992 / $353.31      $1,847.96   $1,856.33   -$196.76  -$188.39  NOT WORTH IT
 ```
 
 An argmax on its own is a point estimate pretending to be a recommendation, so
-the sweep also reports the **plateau** — the contiguous run of caps over which
-the net stays positive. Here it is `1h15m..12h`, 10h45m wide, which says the
-exact cap barely matters; a plateau one grid step wide would have said the
-optimum was noise in the gap distribution, and the report says that in those
-words when it happens. This particular plateau is flagged as **censored** at
-the 12h ceiling: it ends where the sweep stops looking, not at a sign change,
-so its width is a floor rather than a measurement.
+the sweep reports **two** ranges around it, because they answer different
+questions and one footnote must not claim both:
+
+- **sign-stable range** — where the net stays positive. Here `1h15m..12h`,
+  10h45m wide, 44 grid points. This says *capping is the right shape of
+  policy* anywhere in there. It does **not** say the caps are
+  interchangeable: net inside it runs `$102.13..$811.30`, an 8x spread.
+- **argmax neighbourhood** — where the net stays within `k` of the maximum
+  (`k` defaults to 0.10, `--peak-band-tolerance`). Here `9h..12h`, 3h wide,
+  13 grid points. *This* is the range where picking a different cap costs you
+  almost nothing. One grid point wide would mean the optimum is a spike.
+
+Two more things the sweep says about its own answer. The argmax **sits on a
+ping-count step**: 10h is the last cap before `pings_to_bridge` increments, and
+stepping to 10h15m adds $33.49 of pings for $4.07 more avoided rewrite. So part
+of why 10h wins is a 55-minute cadence dividing into it, and the honest
+statement of the result is "cap 10h **at cadence 55m**" — this sweep holds the
+cadence fixed and does not search it. And the neighbourhood is flagged
+**censored** at the 12h ceiling, which here means the run reaches the edge of
+the grid, *not* that the right-hand side went unexamined: no cap above the
+argmax recovers to it, the cumulative drift out to 12h is -$48.83, and the one
+observation beyond the grid (`no cap`) is a further -$950.86. A peak past 12h
+is not excluded — it is unsupported.
 
 Fourth, direct API traffic — traces whose `output_parsed.source` is not
 `claude_code_session` (the SDK wrappers, harnesses). Calls, hit rate, average
@@ -224,7 +260,7 @@ hit rate is structural and no amount of `cache_control` will move it.
 The report closes with one copyable line:
 
 ```
-Claude Code caching already saves us 84% ($12,327.38 vs $76,611.99 list). Checked with: python -m traceguard.routing_audit.cache_audit
+Claude Code caching already saves us 84% ($12,447.41 vs $77,549.01 list). Checked with: python -m traceguard.routing_audit.cache_audit
 ```
 
 ## Contract

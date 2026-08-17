@@ -124,6 +124,12 @@ CAP_SWEEP_MIN = _ONE_HOUR
 CAP_SWEEP_MAX = timedelta(hours=12)
 CAP_SWEEP_STEP = timedelta(minutes=15)
 
+# How far below the peak a cap may sit and still count as "the same answer",
+# for the argmax neighbourhood in section 3b. This is the range that licenses
+# "pick any cap in here"; the positive-net plateau is a weaker claim and an
+# earlier revision wrongly used it for both.
+PEAK_BAND_TOLERANCE = 0.10
+
 # Two-sided 95% normal quantile, used only to say how much more data an
 # UNDECIDED verdict would need. Hardcoded because pulling in scipy to look up a
 # constant every stats table already prints would be a poor trade.
@@ -370,6 +376,17 @@ class BucketCosts:
     pings: int = 0
     ping_usd: Decimal = Decimal("0")
     ping_unpriced: int = 0
+    # Did the session come back on a different model? Measured per gap, not
+    # assumed. ``switch_undecidable`` is a NULL model_id on either side.
+    switched: int = 0
+    same_model: int = 0
+    switch_undecidable: int = 0
+
+    @property
+    def switch_rate(self) -> float | None:
+        """Share of DECIDABLE gaps that changed model. None when none are."""
+        decidable = self.switched + self.same_model
+        return self.switched / decidable if decidable else None
 
 
 @dataclass
@@ -401,10 +418,24 @@ class GapStats:
     capped_ping_usd: Decimal = Decimal("0")
     capped_rewrite_usd: Decimal = Decimal("0")
     capped_rewrite_usd_lower: Decimal = Decimal("0")
+    capped_gross_rewrite_usd: Decimal = Decimal("0")
     capped_bridged: int = 0
+    capped_bridged_switched: int = 0
+    capped_wasted_pings: int = 0
+    capped_wasted_usd: Decimal = Decimal("0")
     capped_abandoned: int = 0
     capped_margins: tuple[Decimal, ...] = ()
+    # Cross-model totals across every expired gap, cap-independent.
+    switched_gaps: int = 0
+    same_model_gaps: int = 0
+    switch_undecidable: int = 0
     sweep: CapSweep | None = None
+
+    @property
+    def switch_rate(self) -> float | None:
+        """Share of DECIDABLE expired gaps whose model changed across the gap."""
+        decidable = self.switched_gaps + self.same_model_gaps
+        return self.switched_gaps / decidable if decidable else None
 
     @property
     def ping_worth_it(self) -> bool:
@@ -567,6 +598,35 @@ class ExpiredGap:
     rewrite_lower: Decimal | None
     rewrite_tokens: int
     rewrite_tokens_lower: Decimal
+    # True when the model changed across the gap, False when it did not, None
+    # when at least one side has no model_id to compare. See _switched.
+    switched: bool | None = None
+
+    @property
+    def buys_nothing(self) -> bool:
+        """True when no ping on this gap could have avoided its rewrite.
+
+        Caches are model-scoped. If the session came back on a different model,
+        the prefix the pings kept warm was the wrong one — the pings were paid
+        and bought nothing, and the post-gap write was never an expiry cost in
+        the first place, because a first write on a cold model would have
+        happened at zero idle too.
+
+        ``None`` (undecidable) reads as False: not knowing is not evidence.
+        """
+        return self.switched is True
+
+
+def _switched(prev: Record, cur: Record) -> bool | None:
+    """Did the model change across this gap? ``None`` when it cannot be told.
+
+    A NULL ``model_id`` is an API-error record: real in the timeline, but with
+    nothing to compare. Those are counted and never guessed, the same rule the
+    money columns follow for an unpriced model.
+    """
+    if prev.model_id is None or cur.model_id is None:
+        return None
+    return prev.model_id != cur.model_id
 
 
 def _scan_sessions(records: Sequence[Record]) -> tuple[list[ExpiredGap], GapStats]:
@@ -619,6 +679,7 @@ def _scan_sessions(records: Sequence[Record]) -> tuple[list[ExpiredGap], GapStat
                     rewrite_lower=_rewrite_floor(cur, baseline),
                     rewrite_tokens=total,
                     rewrite_tokens_lower=max(Decimal("0"), Decimal(total) - baseline),
+                    switched=_switched(prev, cur),
                 )
             )
     stats.baseline_tokens = _median(baselines)
@@ -632,6 +693,13 @@ class CapPoint:
     ``cap=None`` is the uncapped policy: it bridges everything and pays for
     everything, and it sits in the sweep as a competitor rather than as a
     footnote.
+
+    ``saved_*`` is NET OF CROSS-MODEL GAPS — a gap the session came back from
+    on a different model banks nothing, because the cache the pings held open
+    was the wrong model's. ``gross_saved_*`` is the same figure before that
+    deduction, kept so the size of the correction stays visible instead of
+    being quietly absorbed. The ping bill is not deducted: those pings were
+    sent and paid for, which is exactly what makes them waste.
     """
 
     cap: timedelta | None
@@ -641,6 +709,11 @@ class CapPoint:
     ping_usd: Decimal
     saved_lower: Decimal
     saved_upper: Decimal
+    gross_saved_lower: Decimal = Decimal("0")
+    gross_saved_upper: Decimal = Decimal("0")
+    bridged_switched: int = 0
+    wasted_pings: int = 0
+    wasted_usd: Decimal = Decimal("0")
     margins: tuple[Decimal, ...] = ()
 
     @property
@@ -650,6 +723,11 @@ class CapPoint:
     @property
     def net_upper(self) -> Decimal:
         return self.saved_upper - self.ping_usd
+
+    @property
+    def gross_net_upper(self) -> Decimal:
+        """Net before the cross-model deduction — the number this used to print."""
+        return self.gross_saved_upper - self.ping_usd
 
     @property
     def verdict(self) -> str:
@@ -707,8 +785,9 @@ def cap_grid() -> tuple[timedelta, ...]:
 def cap_point(expired: Sequence[ExpiredGap], cap: timedelta | None) -> CapPoint:
     """Cost one give-up threshold against every expired gap in the corpus."""
     cap_pings = None if cap is None else pings_to_bridge(cap)
-    pings = bridged = abandoned = 0
+    pings = bridged = abandoned = bridged_switched = wasted_pings = 0
     ping_usd = saved_lower = saved_upper = Decimal("0")
+    gross_lower = gross_upper = wasted_usd = Decimal("0")
     margins: list[Decimal] = []
     for eg in expired:
         n = pings_to_bridge(eg.gap)
@@ -720,12 +799,20 @@ def cap_point(expired: Sequence[ExpiredGap], cap: timedelta | None) -> CapPoint:
             pings += n
             ping_usd += cost
             margin -= cost
+            if eg.buys_nothing:
+                wasted_pings += n
+                wasted_usd += cost
         if cap is None or eg.gap <= cap:
             bridged += 1
+            if eg.buys_nothing:
+                bridged_switched += 1
             if eg.rewrite_upper is not None and eg.rewrite_lower is not None:
-                saved_upper += eg.rewrite_upper
-                saved_lower += eg.rewrite_lower
-                margin += eg.rewrite_lower
+                gross_upper += eg.rewrite_upper
+                gross_lower += eg.rewrite_lower
+                if not eg.buys_nothing:
+                    saved_upper += eg.rewrite_upper
+                    saved_lower += eg.rewrite_lower
+                    margin += eg.rewrite_lower
         else:
             abandoned += 1
         margins.append(margin)
@@ -737,18 +824,34 @@ def cap_point(expired: Sequence[ExpiredGap], cap: timedelta | None) -> CapPoint:
         ping_usd=ping_usd,
         saved_lower=saved_lower,
         saved_upper=saved_upper,
+        gross_saved_lower=gross_lower,
+        gross_saved_upper=gross_upper,
+        bridged_switched=bridged_switched,
+        wasted_pings=wasted_pings,
+        wasted_usd=wasted_usd,
         margins=tuple(margins),
     )
 
 
 @dataclass
 class CapSweep:
-    """The whole net-benefit curve, plus what can honestly be read off it."""
+    """The whole net-benefit curve, plus what can honestly be read off it.
+
+    TWO RANGES, DELIBERATELY NOT ONE. ``plateau`` is where the net stays
+    POSITIVE; ``peak_band`` is where it stays within ``tolerance`` of the
+    maximum. They answer different questions and an earlier revision let one
+    footnote claim both: on this repo's own corpus the positive range spans an
+    8x spread in net benefit, so "capping is right anywhere in here" is true
+    and "which cap you pick does not matter" is false. Only the peak band
+    supports the second claim.
+    """
 
     points: list[CapPoint]
     best: CapPoint
     plateau: tuple[timedelta, timedelta] | None
     robust_plateau: tuple[timedelta, timedelta] | None
+    peak_band: tuple[timedelta, timedelta] | None = None
+    tolerance: float = 0.10
 
     @property
     def grid_points(self) -> list[CapPoint]:
@@ -770,8 +873,25 @@ class CapSweep:
     def robust_plateau_width(self) -> timedelta | None:
         return self._width(self.robust_plateau)
 
+    @property
+    def peak_band_width(self) -> timedelta | None:
+        return self._width(self.peak_band)
+
+    def band_points(self, span: tuple[timedelta, timedelta] | None) -> int:
+        """Grid points inside a span. One point is the degenerate answer."""
+        if span is None:
+            return 0
+        return sum(1 for p in self.grid_points if span[0] <= p.cap <= span[1])
+
+    def spread(self, span: tuple[timedelta, timedelta] | None) -> tuple[Decimal, Decimal] | None:
+        """(min, max) net inside a span — the number that kills "any cap will do"."""
+        if span is None:
+            return None
+        nets = [p.net_upper for p in self.grid_points if span[0] <= p.cap <= span[1]]
+        return (min(nets), max(nets)) if nets else None
+
     def plateau_censored(self, span: tuple[timedelta, timedelta] | None) -> bool:
-        """True when a plateau runs into a grid edge rather than a sign change.
+        """True when a span runs into a grid edge rather than a sign change.
 
         A censored edge is not a measured one: the run may continue past
         CAP_SWEEP_MAX, and the sweep cannot tell.
@@ -779,6 +899,93 @@ class CapSweep:
         if span is None:
             return False
         return span[0] <= CAP_SWEEP_MIN or span[1] >= CAP_SWEEP_MAX
+
+    # ── how much of the argmax is the 55-minute cadence, not the gaps? ──
+
+    @property
+    def argmax_on_ping_step(self) -> bool:
+        """True when the next cap up would buy one more ping per unbridged gap.
+
+        The give-up threshold only ever moves cost in PING_INTERVAL-sized
+        jumps, so the argmax lands on the last grid point before a jump far
+        more often than the gap distribution alone would explain. When this is
+        True the honest statement of the result names the cadence as part of
+        it: the answer is "cap=X at cadence=55m", not "cap=X".
+        """
+        cap = self.best.cap
+        if cap is None:
+            return False
+        return pings_to_bridge(cap + CAP_SWEEP_STEP) > pings_to_bridge(cap)
+
+    @property
+    def step_after_argmax(self) -> tuple[CapPoint, CapPoint] | None:
+        """The argmax and the grid point above it, for a marginal read-out."""
+        grid = self.grid_points
+        for i, p in enumerate(grid[:-1]):
+            if p.cap == self.best.cap:
+                return p, grid[i + 1]
+        return None
+
+    # ── is the right-hand censoring "not looked at" or "looked at, falling"? ──
+
+    @property
+    def marginals_after_argmax(self) -> list[Decimal]:
+        """Step-to-step change in net across every grid cap above the argmax."""
+        grid = self.grid_points
+        above = [p for p in grid if self.best.cap is not None and p.cap > self.best.cap]
+        if not above:
+            return []
+        anchor = next(p for p in grid if p.cap == self.best.cap)
+        chain = [anchor] + above
+        return [b.net_upper - a.net_upper for a, b in zip(chain, chain[1:])]
+
+    @property
+    def drift_to_ceiling(self) -> Decimal | None:
+        """Cumulative net change from the argmax out to CAP_SWEEP_MAX."""
+        marginals = self.marginals_after_argmax
+        return sum(marginals, Decimal("0")) if marginals else None
+
+    @property
+    def gross_best(self) -> CapPoint:
+        """The cap the sweep would have chosen without the cross-model deduction.
+
+        Kept so the correction can be reported as a movement rather than as a
+        rounding difference: when it moves the argmax, the deduction at the new
+        argmax is often zero, precisely because the new argmax is short enough
+        not to reach the cross-model gaps at all.
+        """
+        return max(self.points, key=lambda p: p.gross_net_upper)
+
+    @property
+    def has_cross_model(self) -> bool:
+        return any(p.wasted_pings for p in self.points)
+
+    @property
+    def best_above_argmax(self) -> CapPoint | None:
+        """Best grid cap strictly above the argmax, or None if it is the last.
+
+        The step-to-step marginal above a peak oscillates on real data — this
+        is the summary that does not depend on how many individual steps
+        happened to point up.
+        """
+        above = [
+            p
+            for p in self.grid_points
+            if self.best.cap is not None and p.cap > self.best.cap
+        ]
+        return max(above, key=lambda p: p.net_upper) if above else None
+
+    @property
+    def drift_off_grid(self) -> Decimal | None:
+        """Net change from the last grid cap to the uncapped policy.
+
+        The only observation that exists beyond the ceiling. It cannot rule out
+        a peak past 12h, but it is the opposite of not looking.
+        """
+        grid, unbounded = self.grid_points, self.unbounded
+        if not grid or unbounded is None:
+            return None
+        return unbounded.net_upper - grid[-1].net_upper
 
 
 def _plateau(
@@ -804,7 +1011,34 @@ def _plateau(
     return points[lo].cap, points[hi].cap  # type: ignore[return-value]
 
 
-def sweep_caps(expired: Sequence[ExpiredGap]) -> CapSweep:
+def _peak_band(
+    points: Sequence[CapPoint], tolerance: float
+) -> tuple[timedelta, timedelta] | None:
+    """Run of caps around the argmax whose net is within ``tolerance`` of the max.
+
+    THIS is the range that licenses "the exact cap does not matter"; the
+    positive-net plateau does not, because a net can be positive and still be a
+    fraction of the best available. Returns None when the maximum is not
+    positive — there is no neighbourhood of a peak that does not exist.
+    """
+    if not points:
+        return None
+    anchor = max(range(len(points)), key=lambda i: points[i].net_upper)
+    peak = points[anchor].net_upper
+    if peak <= 0:
+        return None
+    floor = peak * (Decimal(1) - Decimal(str(tolerance)))
+    lo = hi = anchor
+    while lo > 0 and points[lo - 1].net_upper >= floor:
+        lo -= 1
+    while hi < len(points) - 1 and points[hi + 1].net_upper >= floor:
+        hi += 1
+    return points[lo].cap, points[hi].cap  # type: ignore[return-value]
+
+
+def sweep_caps(
+    expired: Sequence[ExpiredGap], *, tolerance: float = PEAK_BAND_TOLERANCE
+) -> CapSweep:
     """Cost every cap on the grid, then the uncapped policy, then read the curve.
 
     The argmax is taken on net benefit against the UPPER rewrite bound — the
@@ -812,6 +1046,11 @@ def sweep_caps(expired: Sequence[ExpiredGap]) -> CapSweep:
     under the reading most favourable to pinging, and the lower-bound column
     beside it says whether that choice survives the pessimistic one. Ties go to
     the smaller cap: same net, cheaper policy to run.
+
+    That net is NET OF CROSS-MODEL GAPS. Pings spent holding a cache the
+    session never came back to are still paid for and buy nothing, so leaving
+    them in the savings would push the argmax long — the omission was not
+    neutral, it was directional.
     """
     grid = [cap_point(expired, cap) for cap in cap_grid()]
     points = grid + [cap_point(expired, None)]
@@ -821,25 +1060,41 @@ def sweep_caps(expired: Sequence[ExpiredGap]) -> CapSweep:
         best=best,
         plateau=_plateau(grid, lambda p: p.net_upper),
         robust_plateau=_plateau(grid, lambda p: p.net_lower),
+        peak_band=_peak_band(grid, tolerance),
+        tolerance=tolerance,
     )
 
 
 def session_gaps(
-    records: Sequence[Record], *, cap: timedelta | None | Any = _SOLVE
+    records: Sequence[Record],
+    *,
+    cap: timedelta | None | Any = _SOLVE,
+    tolerance: float = PEAK_BAND_TOLERANCE,
 ) -> GapStats:
     """Gap distribution plus the expiry-rewrite and keep-alive counterfactuals.
 
     ``cap`` defaults to the sentinel ``_SOLVE``, which runs the sweep and takes
     its argmax. Pass a ``timedelta`` to pin a policy, or ``None`` for the
-    uncapped one.
+    uncapped one. ``tolerance`` widens or narrows the argmax neighbourhood in
+    section 3b and changes nothing that is costed.
     """
     expired, stats = _scan_sessions(records)
-    stats.sweep = sweep_caps(expired)
+    stats.sweep = sweep_caps(expired, tolerance=tolerance)
     stats.cap_solved = cap is _SOLVE
     stats.cap = stats.sweep.best.cap if stats.cap_solved else cap
 
     for eg in expired:
         bucket_costs = stats.bucket_costs[eg.bucket]
+        if eg.switched is None:
+            stats.switch_undecidable += 1
+            bucket_costs.switch_undecidable += 1
+        elif eg.switched:
+            stats.switched_gaps += 1
+            bucket_costs.switched += 1
+        else:
+            stats.same_model_gaps += 1
+            bucket_costs.same_model += 1
+
         if eg.rewrite_upper is None or eg.rewrite_lower is None:
             stats.rewrite_unpriced += 1
             bucket_costs.rewrite_unpriced += 1
@@ -867,7 +1122,11 @@ def session_gaps(
     stats.capped_ping_usd = chosen.ping_usd
     stats.capped_rewrite_usd = chosen.saved_upper
     stats.capped_rewrite_usd_lower = chosen.saved_lower
+    stats.capped_gross_rewrite_usd = chosen.gross_saved_upper
     stats.capped_bridged = chosen.bridged
+    stats.capped_bridged_switched = chosen.bridged_switched
+    stats.capped_wasted_pings = chosen.wasted_pings
+    stats.capped_wasted_usd = chosen.wasted_usd
     stats.capped_abandoned = chosen.abandoned
     stats.capped_margins = chosen.margins
     return stats
@@ -1033,6 +1292,16 @@ def _cap_label(cap: timedelta | None) -> str:
     return f"{hours}h" if rem == 0 else f"{hours}h{rem:02d}m"
 
 
+def _switch_cell(bc: BucketCosts) -> str:
+    """``4.8% (3/166)`` or ``unknown`` — undecidable gaps never fake a rate."""
+    rate = bc.switch_rate
+    if rate is None:
+        return "unknown"
+    decidable = bc.switched + bc.same_model
+    tail = f" +{bc.switch_undecidable}?" if bc.switch_undecidable else ""
+    return f"{rate:.1%} ({bc.switched}/{decidable}{tail})"
+
+
 def _span_label(span: tuple[timedelta, timedelta] | None) -> str:
     if span is None:
         return "none"
@@ -1093,12 +1362,14 @@ def audit(
     since: datetime | None = None,
     until: datetime | None = None,
     cap: timedelta | None | Any = _SOLVE,
+    tolerance: float = PEAK_BAND_TOLERANCE,
 ) -> CacheAudit:
     """Run the whole audit against a store. Opens read-only; writes nothing.
 
     ``cap`` is the keep-alive give-up threshold. It defaults to being solved
     from the corpus (section 3b); pass a ``timedelta`` to pin one, or ``None``
-    to price the policy that never gives up.
+    to price the policy that never gives up. ``tolerance`` sets how far below
+    the peak a cap may sit and still count as the same answer.
     """
     records = load_records(db_url, since=since, until=until)
     cc = [
@@ -1114,7 +1385,7 @@ def audit(
         total_traces=len(records),
         cc_records=len(cc),
         models=per_model(cc),
-        gaps=session_gaps(cc, cap=cap),
+        gaps=session_gaps(cc, cap=cap, tolerance=tolerance),
         direct=direct_traffic(direct),
     )
 
@@ -1196,6 +1467,11 @@ def build_sections(a: CacheAudit) -> list[Section]:
                 name,
                 _tok(g.buckets[name]),
                 _pct(_ratio(g.buckets[name], g.gaps)),
+                (
+                    _switch_cell(bc)
+                    if expires and g.buckets[name]
+                    else _NO_EXPIRY
+                ),
                 _usd(bc.rewrite_usd_lower) if expires else _NO_EXPIRY,
                 _usd(bc.rewrite_usd) if expires else _NO_EXPIRY,
                 _usd(bc.ping_usd) if expires else _NO_EXPIRY,
@@ -1239,6 +1515,18 @@ def build_sections(a: CacheAudit) -> list[Section]:
         "narrow interval here is a fact about this traffic — post-gap writes dwarf "
         "ordinary ones — and not evidence that either bound is tight.",
     ]
+    gap_notes.append(
+        f"'model switch' is measured, not assumed: {g.switched_gaps:,} of the "
+        f"{g.switched_gaps + g.same_model_gaps:,} decidable expired gaps came back on "
+        f"a different model_id than they left on ({_pct(g.switch_rate)}), and "
+        f"{g.switch_undecidable:,} more had a NULL model_id on one side and are "
+        "counted here but never guessed at. A cross-model gap is a gap no keep-alive "
+        "could have helped — the cache is model-scoped, so the pings held the wrong "
+        "prefix warm, and the post-gap write was a first write on a cold model rather "
+        "than an expiry. Section 3b deducts those savings; the rewrite columns here "
+        "do not, because they measure what expiry cost rather than what pinging "
+        "could recover."
+    )
     if g.rewrite_unpriced:
         gap_notes.append(
             f"{g.rewrite_unpriced:,} post-gap messages had no list price and "
@@ -1252,6 +1540,7 @@ def build_sections(a: CacheAudit) -> list[Section]:
                 "gap",
                 "count",
                 "share",
+                "model switch",
                 "rewrite >=",
                 "rewrite <=",
                 "ping cost",
@@ -1286,6 +1575,16 @@ def build_sections(a: CacheAudit) -> list[Section]:
         ["rewrite cost avoided (lower bound)", _usd(g.rewrite_usd_lower)],
         ["verdict", verdict],
         [
+            "cross-model gaps (measured)",
+            f"{g.switched_gaps:,} switched / {g.same_model_gaps:,} same"
+            + (
+                f" / {g.switch_undecidable:,} undecidable"
+                if g.switch_undecidable
+                else ""
+            )
+            + f" — {_pct(g.switch_rate)} of decidable",
+        ],
+        [
             "keep-alive cap",
             f"{cap_name} ({'solved' if g.cap_solved else 'pinned'})",
         ],
@@ -1298,6 +1597,10 @@ def build_sections(a: CacheAudit) -> list[Section]:
         ],
         [f"pings needed (capped {cap_name})", _tok(g.capped_pings)],
         [f"ping cost (capped {cap_name})", _usd(g.capped_ping_usd)],
+        [
+            f"pings wasted on cross-model gaps (capped {cap_name})",
+            f"{g.capped_wasted_pings:,} / {_usd(g.capped_wasted_usd)}",
+        ],
         [
             f"rewrite cost avoided (capped {cap_name}, upper bound)",
             _usd(g.capped_rewrite_usd),
@@ -1312,9 +1615,27 @@ def build_sections(a: CacheAudit) -> list[Section]:
         f"Counterfactual: one keep-alive every {int(PING_INTERVAL.total_seconds() // 60)} "
         "minutes across every >1h gap, each billed as a 0.1x cache read of the whole "
         "prompt as it stood before the gap.",
-        "Two approximations, both stated rather than hidden: prompt volume is frozen "
-        "at the pre-gap message (a real session grows), and caches are model-scoped, "
-        "so a mid-session model switch makes the pings that preceded it worthless.",
+        "One approximation remains, stated rather than hidden: prompt volume is frozen "
+        "at the pre-gap message, and a real session grows.",
+        "The second one used to sit here — 'caches are model-scoped, so a mid-session "
+        "model switch makes the preceding pings worthless' — and it is now measured "
+        f"instead, because both model_ids were in the store the whole time. "
+        f"{g.switched_gaps:,} of {g.switched_gaps + g.same_model_gaps:,} decidable "
+        f"expired gaps changed model ({_pct(g.switch_rate)}). Their savings are "
+        f"deducted: at the {cap_name} cap that is {g.capped_wasted_pings:,} pings "
+        f"costing {_usd(g.capped_wasted_usd)} that bought nothing, and avoided "
+        f"rewrites fall from {_usd(g.capped_gross_rewrite_usd)} to "
+        f"{_usd(g.capped_rewrite_usd)}.",
+        "THE DIRECTION MATTERS MORE THAN THE SIZE. A session is likelier to come back "
+        "on a different model the longer it has been away, so a policy that pays to "
+        "stay alive longer collects a larger share of exactly the gaps this correction "
+        "removes. Leaving it out did not add noise to the cap — it pushed the cap "
+        "systematically long, and every earlier version of this section was answering "
+        "with that bias in it.",
+        f"{g.switch_undecidable:,} expired gaps have a NULL model_id on one side and "
+        "cannot be classified. They are counted and left in the savings rather than "
+        "assumed either way, which makes the deduction above a floor on the waste, "
+        "not an estimate of it — the same no-guessing rule the money columns follow.",
         "The 'verdict' row above is the unbounded policy against the UPPER bound "
         "alone, kept unchanged as the control: it is the two-state answer this "
         "section used to give everywhere, and it is still the right shape for a "
@@ -1416,6 +1737,7 @@ def _sweep_section(g: GapStats) -> Section:
             f"{p.bridged:,} / {p.abandoned:,}",
             _tok(p.pings),
             _usd(p.ping_usd),
+            f"{p.wasted_pings:,} / {_usd(p.wasted_usd)}",
             _usd(p.saved_lower),
             _usd(p.saved_upper),
             _signed_usd(p.net_lower),
@@ -1426,18 +1748,68 @@ def _sweep_section(g: GapStats) -> Section:
     ]
     best = sweep.best
     plateau, robust = sweep.plateau, sweep.robust_plateau
+    band = sweep.peak_band
     width, robust_width = sweep.plateau_width, sweep.robust_plateau_width
 
     notes = [
         f"Every cap from {_cap_label(CAP_SWEEP_MIN)} to {_cap_label(CAP_SWEEP_MAX)} in "
         f"{_cap_label(CAP_SWEEP_STEP)} steps, plus 'no cap', costed against the same "
         f"{g.expired_gaps:,} expired gaps. Net = avoided rewrites - ping bill; the "
-        "lower/upper pair is the same bracket section 2 builds.",
+        "lower/upper pair is the same bracket section 2 builds, minus the gaps that "
+        "changed model.",
+        "'cross-model waste' is pings that were paid for and bought nothing because "
+        "the session came back on a different model. Those gaps' savings are already "
+        "out of the rewrite and net columns; the ping bill still includes them, "
+        "because they were still sent.",
         f"argmax: {_cap_label(best.cap)}, net {_signed_usd(best.net_upper)} against "
         f"the upper bound ({_signed_usd(best.net_lower)} against the lower). Taken on "
         "the upper bound because that is the measure most favourable to pinging — if "
         "the cap cannot win there it cannot win anywhere. Ties go to the smaller cap.",
     ]
+    if sweep.has_cross_model:
+        gross_best = sweep.gross_best
+        if gross_best.cap != best.cap:
+            notes.append(
+                f"THE DEDUCTION MOVED THE ANSWER. Before it, the argmax was "
+                f"{_cap_label(gross_best.cap)} netting "
+                f"{_signed_usd(gross_best.gross_net_upper)}; measuring the switch "
+                f"instead of assuming it puts the argmax at {_cap_label(best.cap)} "
+                f"netting {_signed_usd(best.net_upper)}. The correction is not "
+                "symmetric across the grid — it falls hardest on the long caps, "
+                "because those are the ones that pay to reach the gaps most likely "
+                "to have changed model — which is why the argmax is taken after it "
+                "rather than before."
+            )
+        else:
+            notes.append(
+                f"Before the cross-model deduction {_cap_label(best.cap)} netted "
+                f"{_signed_usd(best.gross_net_upper)}; the correction is "
+                f"{_signed_usd(best.net_upper - best.gross_net_upper)} and does not "
+                "move the argmax here. It still falls hardest on the long caps, "
+                "which is why the argmax is taken after it rather than before."
+            )
+    if sweep.argmax_on_ping_step:
+        step = sweep.step_after_argmax
+        detail = ""
+        if step is not None:
+            here, nxt = step
+            detail = (
+                f" Stepping to {_cap_label(nxt.cap)} adds "
+                f"{_usd(nxt.ping_usd - here.ping_usd)} of pings "
+                f"({here.pings:,} → {nxt.pings:,}) for "
+                f"{_usd(nxt.saved_upper - here.saved_upper)} more avoided rewrite, a "
+                f"net {_signed_usd(nxt.net_upper - here.net_upper)}."
+            )
+        notes.append(
+            f"THE ARGMAX SITS ON A PING-COUNT STEP. {_cap_label(best.cap)} is the last "
+            f"cap before pings_to_bridge increments, so part of why it wins is the "
+            f"arithmetic of a {int(PING_INTERVAL.total_seconds() // 60)}-minute "
+            f"cadence dividing into it, not the gap distribution alone.{detail} State "
+            f"the result as 'cap {_cap_label(best.cap)} at cadence "
+            f"{int(PING_INTERVAL.total_seconds() // 60)}m' — a different cadence moves "
+            "the steps and can move the answer. This sweep holds the cadence fixed and "
+            "does not search it."
+        )
     if best.cap is None and plateau is not None:
         # The plateau is always read off the grid, so when the uncapped policy
         # wins outright it is not the run the headline sits in. Say that rather
@@ -1449,29 +1821,70 @@ def _sweep_section(g: GapStats) -> Section:
         )
     if plateau is None:
         notes.append(
-            "No cap on the grid reaches a positive net benefit, so there is no "
-            "plateau and the argmax above is only the least-bad option. Reporting it "
-            "as a recommendation would be a category error."
+            "SIGN-STABLE RANGE: none. No cap on the grid reaches a positive net "
+            "benefit, so there is no plateau and the argmax above is only the "
+            "least-bad option. Reporting it as a recommendation would be a category "
+            "error."
         )
     else:
+        spread = sweep.spread(plateau)
+        spread_txt = ""
+        if spread is not None:
+            lo_net, hi_net = spread
+            ratio = f" — {float(hi_net / lo_net):.0f}x" if lo_net > 0 else ""
+            spread_txt = (
+                f" Net inside it runs {_signed_usd(lo_net)}..{_signed_usd(hi_net)}"
+                f"{ratio}."
+            )
         notes.append(
-            f"Net stays positive across {_span_label(plateau)} — a plateau "
-            f"{_width_label(width)} wide. This is the number that says whether the "
-            "argmax means anything: a single optimum on a 15-minute spike is noise "
-            "in the gap distribution, while a shelf several hours wide means any cap "
-            "in that range buys roughly the same thing and the exact value does not "
-            "matter."
+            f"SIGN-STABLE RANGE: net stays positive across {_span_label(plateau)}, "
+            f"{_width_label(width)} wide, {sweep.band_points(plateau)} grid points."
+            f"{spread_txt} This says capping is the right shape of policy anywhere in "
+            "there. It does NOT say the caps in it are interchangeable — that is a "
+            "different claim, and the peak band below is the one that carries it."
         )
-        if sweep.plateau_censored(plateau):
+    if band is None:
+        notes.append(
+            "There is no peak to have a neighbourhood, so no band is reported."
+        )
+    else:
+        pts = sweep.band_points(band)
+        notes.append(
+            f"ARGMAX NEIGHBOURHOOD (k={sweep.tolerance:.0%}): net stays within "
+            f"{sweep.tolerance:.0%} of the maximum across {_span_label(band)}, "
+            f"{_width_label(sweep.peak_band_width)} wide, {pts} grid point"
+            f"{'' if pts == 1 else 's'}. THIS is the range where picking a different "
+            "cap costs you almost nothing. A band one grid point wide means the "
+            "optimum is a spike and the exact value does matter."
+        )
+        if sweep.plateau_censored(band):
             edges = []
-            if plateau[0] <= CAP_SWEEP_MIN:
+            if band[0] <= CAP_SWEEP_MIN:
                 edges.append(f"the {_cap_label(CAP_SWEEP_MIN)} floor")
-            if plateau[1] >= CAP_SWEEP_MAX:
+            if band[1] >= CAP_SWEEP_MAX:
                 edges.append(f"the {_cap_label(CAP_SWEEP_MAX)} ceiling")
+            drift = sweep.drift_to_ceiling
+            off = sweep.drift_off_grid
+            marg = sweep.marginals_after_argmax
+            up = sum(1 for m in marg if m > 0)
+            above = sweep.best_above_argmax
+            evidence = ""
+            if above is not None:
+                evidence = (
+                    f" No cap above the argmax recovers to it — the best of them is "
+                    f"{_cap_label(above.cap)} at {_signed_usd(above.net_upper)}, short "
+                    f"by {_usd(best.net_upper - above.net_upper)} — the cumulative "
+                    f"drift from the argmax out to {_cap_label(CAP_SWEEP_MAX)} is "
+                    f"{_signed_usd(drift)}, and the single observation beyond the grid "
+                    f"('no cap') is a further {_signed_usd(off)}."
+                )
             notes.append(
-                f"That plateau is censored at {' and '.join(edges)} — it ends where "
-                "the sweep stops looking, not at a sign change, so its width is a "
-                "floor rather than a measurement."
+                f"That band is censored at {' and '.join(edges)}. Censored here means "
+                "'the run reaches the edge of the grid', NOT 'the right-hand side was "
+                f"never looked at'.{evidence} The step-to-step marginal is not "
+                f"monotonic ({up} of {len(marg)} steps above the argmax point up), so "
+                "this is evidence of decline rather than proof of it: a peak past "
+                f"{_cap_label(CAP_SWEEP_MAX)} is not excluded, it is unsupported."
             )
     if robust is None:
         notes.append(
@@ -1505,6 +1918,7 @@ def _sweep_section(g: GapStats) -> Section:
             "bridged / abandoned",
             "pings",
             "ping cost",
+            "cross-model waste",
             "rewrite >=",
             "rewrite <=",
             "net >=",
@@ -1616,6 +2030,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--format", choices=tuple(RENDERERS), default="table")
     parser.add_argument("--since", default=None, help="ISO date/datetime (inclusive)")
     parser.add_argument("--until", default=None, help="ISO date/datetime (inclusive)")
+    parser.add_argument(
+        "--peak-band-tolerance",
+        type=float,
+        default=PEAK_BAND_TOLERANCE,
+        metavar="K",
+        help=(
+            "how far below the peak a cap may sit and still count as the same "
+            f"answer, 0<K<1 (default {PEAK_BAND_TOLERANCE}). Reporting only; "
+            "nothing costed changes."
+        ),
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -1625,7 +2050,17 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
-    result = audit(args.db, since=since, until=until)
+    if not 0 < args.peak_band_tolerance < 1:
+        print(
+            "--peak-band-tolerance must be strictly between 0 and 1, got "
+            f"{args.peak_band_tolerance}",
+            file=sys.stderr,
+        )
+        return 2
+
+    result = audit(
+        args.db, since=since, until=until, tolerance=args.peak_band_tolerance
+    )
     print(format_audit(result, args.format))
     return 0
 
