@@ -1991,6 +1991,21 @@ def test_main_rejects_a_tolerance_outside_the_open_unit_interval(db, capsys, bad
     assert "strictly between 0 and 1" in capsys.readouterr().err
 
 
+def test_help_names_an_ingest_command_that_actually_writes(db, capsys):
+    """The CLI's own help must not repeat the defect the README already fixed.
+
+    `ingest_claude_code` without `--write` is a dry run that stores nothing, so
+    a reader who follows the help text lands on an empty store and an audit
+    that dutifully reports zeros.
+    """
+    with pytest.raises(SystemExit) as exc:
+        cache_audit_main(["--help"])
+    assert exc.value.code == 0
+    out = capsys.readouterr().out
+    assert "routing_audit.ingest --write" in out
+    assert "routing_audit.ingest_claude_code`" not in out
+
+
 def test_main_rejects_a_bad_window(db, capsys):
     assert cache_audit_main(["--db", db.url, "--since", "yesterday"]) == 2
     assert "--since" in capsys.readouterr().err

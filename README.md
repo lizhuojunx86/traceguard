@@ -415,13 +415,13 @@ the 1.1.0 audit evidence layer (`traceguard.audit`), and the 1.2.0 read-only
 prompt-cache efficiency audit (`traceguard.routing_audit.cache_audit`). Full
 history: [CHANGELOG](packages/traceguard/CHANGELOG.md).
 
-The cache audit has since grown a keep-alive **cap sweep**, a bracket rather
-than a single bound on expiry cost, a measured mid-gap **model switch** rate,
-and a `--benchmark` reporting window. **None of that is released** — it is on
-`main` under `[Unreleased]`, and `pip install traceguard` will not give you
-those flags. See the
-[package README](packages/traceguard/README.md#cache-efficiency-audit) for what
-1.2.0 does and does not contain, and how to install from source.
+**1.3.0** rebuilt that cache audit's keep-alive answer after three separate
+recomputations overturned it: the give-up cap is now solved by a sweep instead
+of hand-picked, expiry cost is a bracket instead of one bound, mid-gap **model
+switches** are measured instead of assumed, and the reportable conclusion is a
+*band* (`RECOMMENDED CAP: 9h..12h`) rather than a single argmax. `--benchmark`
+pins the window every quoted number comes from. See the
+[package README](packages/traceguard/README.md#cache-efficiency-audit).
 
 ## License
 
