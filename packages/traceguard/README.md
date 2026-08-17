@@ -104,7 +104,20 @@ python -m traceguard.routing_audit.cache_audit --db sqlite:///traces_routing_aud
 
 Flags: `--format table|md|csv` (default `table`), `--since` / `--until`
 (inclusive ISO date or datetime; a bare date opens at 00:00 and closes at
-23:59).
+23:59), `--peak-band-tolerance K`, and `--benchmark`.
+
+**Every number below comes from `--benchmark`**, a frozen window
+(`2026-05-30 .. 2026-08-16`) over this repo's own store:
+
+```bash
+python -m traceguard.routing_audit.cache_audit --db sqlite:///traces_routing_audit.db --benchmark
+```
+
+The window exists because the store is appended to continuously and two runs
+minutes apart disagree — the expired-gap count moved 429 → 432 across one
+afternoon of editing. A closed window fixes that for every future run, which
+copying the DB aside does not; `--benchmark` refuses to combine with
+`--since` / `--until` so a "benchmark" run cannot quietly be a different one.
 
 Five sections. First, per-model: the token-weighted hit rate
 `cache_read / (input + cache_read + cache_write_5m + cache_write_1h)`, what the
@@ -136,17 +149,18 @@ expire nothing and read `no expiry`, which is not the `n/a` that means no list
 price.
 
 ```
-gap    count   share  model switch        rewrite >=  rewrite <=  ping cost  verdict
-<5m    58,619  97.2%  no expiry           no expiry   no expiry   no expiry  no expiry
-5m-1h  1,252   2.1%   no expiry           no expiry   no expiry   no expiry  no expiry
-1-4h   189     0.3%   1.8% (3/166 +23?)   $896.02     $900.03     $82.65     WORTH IT
->4h    243     0.4%   7.1% (15/212 +31?)  $1,036.71   $1,041.43   $1,962.07  NOT WORTH IT
+gap    count   share  model switch                  rewrite >=  rewrite <=  ping cost  verdict
+<5m    58,619  97.2%  no expiry                     no expiry   no expiry   no expiry  no expiry
+5m-1h  1,252   2.1%   no expiry                     no expiry   no expiry   no expiry  no expiry
+1-4h   189     0.3%   3 of 166 (1.8%), 23 unknown   $896.02     $900.03     $82.65     WORTH IT
+>4h    243     0.4%   15 of 212 (7.1%), 31 unknown  $1,036.71   $1,041.43   $1,962.07  NOT WORTH IT
 ```
 
 `model switch` is measured, not assumed: the share of that bucket's expired
-gaps that came back on a **different** `model_id` than they left on, with the
-undecidable ones (a NULL `model_id` on either side) trailing after a `?` rather
-than folded into the rate. Caches are model-scoped, so a cross-model gap is one
+gaps that came back on a **different** `model_id` than they left on. The
+`unknown` count (a NULL `model_id` on either side) is reported beside the rate
+and is deliberately **not** in its denominator. Caches are model-scoped, so a
+cross-model gap is one
 no keep-alive could have helped — and the rate climbs with idle time, 1.8% in
 `1-4h` against 7.1% in `>4h`. Section 3b deducts those savings; the rewrite
 columns here do not, because they measure what expiry cost rather than what
@@ -224,9 +238,22 @@ cap     bridged / abandoned  pings  ping cost  cross-model waste  rewrite >=  re
 no cap  432 / 0              6,884  $2,044.72  992 / $353.31      $1,847.96   $1,856.33   -$196.76  -$188.39  NOT WORTH IT
 ```
 
-An argmax on its own is a point estimate pretending to be a recommendation, so
-the sweep reports **two** ranges around it, because they answer different
-questions and one footnote must not claim both:
+The report's quotable conclusion is the **band**, not the argmax:
+
+```
+RECOMMENDED CAP: 9h..12h (cadence 55m). Within this band the choice costs under
+10% of the optimum, which is less than the size of corrections still outstanding.
+Quote this range; the argmax (10h) is in the table above for reference, not for
+citation.
+```
+
+That demotion is not modesty, it is arithmetic. 10h leads the runner-up (9h45m)
+by **$7.63**, while measuring the model switch — one correction, applied once —
+moved this same cap by **$18.76**. A correction larger than the gap between
+first and second place is enough to reorder them, and there are more still
+unquantified: the undecidable gaps below, the frozen prompt volume, the unswept
+cadence. So the sweep reports **two** ranges around the argmax, because they
+answer different questions and one footnote must not claim both:
 
 - **sign-stable range** — where the net stays positive. Here `1h15m..12h`,
   10h45m wide, 44 grid points. This says *capping is the right shape of
@@ -248,6 +275,19 @@ the grid, *not* that the right-hand side went unexamined: no cap above the
 argmax recovers to it, the cumulative drift out to 12h is -$48.83, and the one
 observation beyond the grid (`no cap`) is a further -$950.86. A peak past 12h
 is not excluded — it is unsupported.
+
+Finally, the cross-model deduction removes only the gaps **proven** to have
+switched, which makes it a floor and makes the headline the optimistic end of a
+range. The sweep therefore runs the other end too — every undecidable gap
+treated as cross-model — and prints both:
+
+```
+UNDECIDABLE GAPS, RUN BOTH WAYS. The deduction above only removes gaps PROVEN
+cross-model, so the 10h / $811.30 headline is the OPTIMISTIC end. Treating every
+undecidable gap as cross-model instead, the argmax stays at 10h and its net falls
+to $663.69. The truth is somewhere between the two runs and this report cannot
+say where — it is a range, not an answer with an error bar.
+```
 
 Fourth, direct API traffic — traces whose `output_parsed.source` is not
 `claude_code_session` (the SDK wrappers, harnesses). Calls, hit rate, average

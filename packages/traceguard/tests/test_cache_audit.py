@@ -20,6 +20,8 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from traceguard.routing_audit.cache_audit import (
+    BENCHMARK_SINCE,
+    BENCHMARK_UNTIL,
     CAP_SWEEP_MAX,
     CAP_SWEEP_MIN,
     CAP_SWEEP_STEP,
@@ -30,6 +32,7 @@ from traceguard.routing_audit.cache_audit import (
     _gaps_to_resolve,
     _median,
     _read_only_url,
+    _span_label,
     _tri_verdict,
     _verdict_sentence,
     _width_label,
@@ -1402,7 +1405,7 @@ def test_model_switch_reaches_every_part_of_the_report(db):
     result = db.run()
     rendered = format_audit(result)
 
-    assert _gap_row(result, "1-4h")[3].startswith("50.0% (1/2)")
+    assert _gap_row(result, "1-4h")[3] == "1 of 2 (50.0%)"
     assert "model switch' is measured, not assumed" in rendered
     assert "THE DIRECTION MATTERS MORE THAN THE SIZE" in rendered
     assert "pushed the cap systematically long" in rendered
@@ -1414,6 +1417,233 @@ def test_model_switch_reaches_every_part_of_the_report(db):
 
 def _ping_rows(result):
     return next(s for s in build_sections(result) if s.key == "ping").rows
+
+
+def test_switch_cell_needs_no_legend(db):
+    """The old '1.8% (3/166 +23?)' hid the one thing worth reading off it."""
+
+    def fill(sess):
+        # 1 switched, 1 same, 1 undecidable — all in the 1-4h bucket.
+        _add(sess, model=OPUS, usage=_write_1h(1000), session_id="sw", ts=T0)
+        _add(sess, model=SONNET, usage=_write_1h(9000), session_id="sw",
+             ts=T0 + timedelta(hours=2))
+        _add(sess, model=OPUS, usage=_write_1h(1000), session_id="same", ts=T0)
+        _add(sess, model=OPUS, usage=_write_1h(9000), session_id="same",
+             ts=T0 + timedelta(hours=2))
+        _add(sess, model=None, usage=_write_1h(1000), session_id="unk", ts=T0)
+        _add(sess, model=OPUS, usage=_write_1h(9000), session_id="unk",
+             ts=T0 + timedelta(hours=2))
+
+    db.fill(fill)
+    result = db.run()
+    cell = _gap_row(result, "1-4h")[3]
+    assert cell == "1 of 2 (50.0%), 1 unknown"
+    # The denominator is the decidable count, and the cell says so on its face.
+    assert "of 2" in cell and "1 unknown" in cell
+    assert "?" not in cell
+
+
+def test_switch_cell_when_nothing_is_comparable(db):
+    def fill(sess):
+        _add(sess, model=None, usage=_write_1h(1000), session_id="a", ts=T0)
+        _add(sess, model=None, usage=_write_1h(9000), session_id="a",
+             ts=T0 + timedelta(hours=2))
+
+    db.fill(fill)
+    result = db.run()
+    assert result.gaps.switch_rate is None
+    assert _gap_row(result, "1-4h")[3] == "unknown (1 gaps, none comparable)"
+
+
+# ── the undecidable gaps, run both ways ─────────────────────────────────────
+
+
+def test_pessimistic_run_is_reported_beside_the_measured_one(db):
+    """The measured deduction is a floor, so the other end must be printed too."""
+
+    def fill(sess):
+        # A near gap that is known-same-model, and a far one that is undecidable.
+        # The NULL model_id goes on the PRE-gap side: a NULL post-gap message
+        # would also be unpriced, and an unpriced rewrite never reaches the
+        # savings at all, so it could not demonstrate anything about them.
+        _add(sess, model=OPUS, usage=_write_1h(0, prompt_extra=1000),
+             session_id="near", ts=T0)
+        _add(sess, model=OPUS, usage=_write_1h(100_000), session_id="near",
+             ts=T0 + timedelta(hours=2))
+        _add(sess, model=None, usage=_write_1h(0, prompt_extra=1000),
+             session_id="far", ts=T0)
+        _add(sess, model=OPUS, usage=_write_1h(5_000_000), session_id="far",
+             ts=T0 + timedelta(hours=8))
+        # ...and something that makes a longer cap cost more.
+        _drag_session(sess, name="drag", prompt=10_000)
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    assert sweep.has_undecidable is True
+
+    # Optimistic: the undecidable gap keeps its savings, so the long cap wins.
+    assert sweep.best.cap >= timedelta(hours=8)
+    # Pessimistic: it banks nothing, so the cheap short cap wins instead.
+    assert sweep.pessimistic_best.cap <= timedelta(hours=4)
+    assert sweep.pessimistic_moves is True
+    assert sweep.pessimistic_best.net_upper_pessimistic > sweep.best.net_upper_pessimistic
+
+    note = _sweep_note(result, "UNDECIDABLE GAPS, RUN BOTH WAYS")
+    assert "OPTIMISTIC end" in note
+    assert f"the argmax moves to {_cap_label(sweep.pessimistic_best.cap)}" in note
+    assert f"{_cap_label(sweep.best.cap)} would net only" in note
+    assert "somewhere between the two runs" in note
+    assert "not an answer with an error bar" in note
+
+
+def test_pessimistic_run_can_leave_the_argmax_where_it_was(db):
+    """Both gaps sit at the same length, so removing one shifts every cap alike."""
+
+    def fill(sess):
+        _add(sess, model=OPUS, usage=_write_1h(0, prompt_extra=1000),
+             session_id="near", ts=T0)
+        _add(sess, model=OPUS, usage=_write_1h(5_000_000), session_id="near",
+             ts=T0 + timedelta(hours=2))
+        _add(sess, model=None, usage=_write_1h(0, prompt_extra=1000),
+             session_id="unk", ts=T0)
+        _add(sess, model=OPUS, usage=_write_1h(500_000), session_id="unk",
+             ts=T0 + timedelta(hours=2))
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    assert sweep.has_undecidable is True          # it IS bridged, just not pivotal
+    assert sweep.pessimistic_moves is False
+    assert sweep.pessimistic_best.cap == sweep.best.cap
+    # The note still prints — the range is reported whether or not it moves.
+    note = _sweep_note(result, "UNDECIDABLE GAPS, RUN BOTH WAYS")
+    assert f"the argmax stays at {_cap_label(sweep.best.cap)}" in note
+    assert "its net falls to" in note
+
+
+def test_pessimistic_savings_never_exceed_the_measured_ones(db):
+    """Ordering invariant: pessimistic <= measured <= gross, at every cap."""
+
+    def fill(sess):
+        _add(sess, model=OPUS, usage=_write_1h(1000), session_id="sw", ts=T0)
+        _add(sess, model=SONNET, usage=_write_1h(500_000), session_id="sw",
+             ts=T0 + timedelta(hours=2))
+        _add(sess, model=None, usage=_write_1h(1000), session_id="unk", ts=T0)
+        _add(sess, model=OPUS, usage=_write_1h(500_000), session_id="unk",
+             ts=T0 + timedelta(hours=3))
+        _gap_session(sess, [timedelta(hours=5)], name="same")
+
+    db.fill(fill)
+    sweep = db.run().gaps.sweep
+    for p in sweep.points:
+        assert p.saved_upper_pessimistic <= p.saved_upper <= p.gross_saved_upper
+        assert p.net_upper_pessimistic <= p.net_upper <= p.gross_net_upper
+
+
+def test_narrow_margin_against_the_last_correction_is_called_out(db):
+    """When first beats second by less than a correction already applied."""
+
+    def fill(sess):
+        # Same shape as the real corpus: many same-model gaps, a couple of
+        # switched ones, and some undecidable ones spread across the range.
+        for i in range(6):
+            _gap_session(sess, [timedelta(hours=2 + i)], name=f"same{i}",
+                         usage=_write_1h(400_000, prompt_extra=2000))
+        _add(sess, model=OPUS, usage=_write_1h(0, prompt_extra=2000),
+             session_id="sw", ts=T0)
+        _add(sess, model=SONNET, usage=_write_1h(400_000), session_id="sw",
+             ts=T0 + timedelta(hours=3))
+        _add(sess, model=None, usage=_write_1h(0, prompt_extra=2000),
+             session_id="unk", ts=T0)
+        _add(sess, model=OPUS, usage=_write_1h(400_000), session_id="unk",
+             ts=T0 + timedelta(hours=4))
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    assert sweep.runner_up is not None
+    assert sweep.margin_over_runner_up == (
+        sweep.best.net_upper - sweep.runner_up.net_upper
+    )
+    correction = abs(sweep.best.net_upper - sweep.best.gross_net_upper)
+    if correction >= sweep.margin_over_runner_up > 0:
+        note = _sweep_note(result, "NARROWER THAN THE LAST CORRECTION")
+        assert "enough to reorder them" in note
+        assert "Quote the band, not the argmax" in note
+
+
+# ── the quotable conclusion is the band, not the argmax ─────────────────────
+
+
+def test_recommendation_line_names_the_band(db):
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2), timedelta(hours=9)])
+
+    db.fill(fill)
+    result = db.run()
+    sweep = result.gaps.sweep
+    line = _sweep_note(result, "RECOMMENDED CAP")
+
+    assert line.startswith(f"RECOMMENDED CAP: {_span_label(sweep.peak_band)}")
+    assert "cadence 55m" in line
+    assert "under 10% of the optimum" in line
+    assert "less than the size of corrections still outstanding" in line
+    # The argmax survives in the table but is explicitly demoted.
+    assert "not for citation" in line
+    assert line == _sweep(result).notes[-1]      # ...and it closes the section
+
+
+def test_recommendation_refuses_when_nothing_is_worth_capping(db):
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=8)], usage=READ_ONLY_USAGE)
+
+    db.fill(fill)
+    result = db.run()
+    line = _sweep_note(result, "RECOMMENDED CAP")
+    assert line.startswith("RECOMMENDED CAP: none.")
+    assert "least-bad" in line
+
+
+def test_recommendation_follows_the_tolerance(db):
+    def fill(sess):
+        _gap_session(sess, [timedelta(hours=2), timedelta(hours=9)])
+
+    db.fill(fill)
+    line = _sweep_note(db.run(tolerance=0.25), "RECOMMENDED CAP")
+    assert "under 25% of the optimum" in line
+
+
+# ── the frozen reporting window ─────────────────────────────────────────────
+
+
+def test_benchmark_window_is_a_closed_window(db, capsys):
+    """A closed window is what makes a quoted number reproducible tomorrow."""
+    assert parse_bound(BENCHMARK_UNTIL, flag="--until", end_of_day=True) is not None
+    assert parse_bound(BENCHMARK_SINCE, flag="--since", end_of_day=False) < parse_bound(
+        BENCHMARK_UNTIL, flag="--until", end_of_day=True
+    )
+
+    def fill(sess):
+        # One row inside the window, one after it.
+        _add(sess, usage=FLAT_USAGE, session_id="in",
+             ts=datetime(2026, 7, 1, 12, 0, tzinfo=timezone.utc))
+        _add(sess, usage=FLAT_USAGE, session_id="out",
+             ts=datetime(2026, 12, 1, 12, 0, tzinfo=timezone.utc))
+
+    db.fill(fill)
+    assert db.run().cc_records == 2
+    assert cache_audit_main(["--db", db.url, "--benchmark"]) == 0
+    out = capsys.readouterr().out
+    assert f"{BENCHMARK_SINCE}T00:00:00+00:00 .. {BENCHMARK_UNTIL}T23:59" in out
+    assert "1 cached Claude Code messages" in out      # the later row is excluded
+
+
+def test_benchmark_refuses_to_be_silently_reshaped(db, capsys):
+    assert cache_audit_main(["--db", db.url, "--benchmark", "--since", "2026-01-01"]) == 2
+    assert "not both" in capsys.readouterr().err
+    assert cache_audit_main(["--db", db.url, "--benchmark", "--until", "2026-01-01"]) == 2
+    assert "not both" in capsys.readouterr().err
 
 
 # ── the three-state verdict ─────────────────────────────────────────────────

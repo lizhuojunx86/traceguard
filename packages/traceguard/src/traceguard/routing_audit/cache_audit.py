@@ -130,6 +130,17 @@ CAP_SWEEP_STEP = timedelta(minutes=15)
 # earlier revision wrongly used it for both.
 PEAK_BAND_TOLERANCE = 0.10
 
+# Frozen reporting window, exposed as ``--benchmark``. Every number quoted in
+# the README or in a write-up comes from this window and nothing else.
+#
+# WHY A WINDOW AND NOT A SNAPSHOT FILE. The store is appended to continuously,
+# so two runs minutes apart disagree — the expired-gap count moved 429 → 432
+# during one afternoon of editing, three times in three sessions. Copying the
+# DB aside fixes one comparison and not the next one; closing the window fixes
+# every future run, because a row ingested tomorrow falls outside it.
+BENCHMARK_SINCE = "2026-05-30"
+BENCHMARK_UNTIL = "2026-08-16"
+
 # Two-sided 95% normal quantile, used only to say how much more data an
 # UNDECIDED verdict would need. Hardcoded because pulling in scipy to look up a
 # constant every stats table already prints would be a poor trade.
@@ -711,7 +722,12 @@ class CapPoint:
     saved_upper: Decimal
     gross_saved_lower: Decimal = Decimal("0")
     gross_saved_upper: Decimal = Decimal("0")
+    # Same figure again with every UNDECIDABLE gap also treated as cross-model.
+    # ``saved_upper`` is the optimistic end of that assumption and this is the
+    # pessimistic one; nothing in usage picks between them.
+    saved_upper_pessimistic: Decimal = Decimal("0")
     bridged_switched: int = 0
+    bridged_undecidable: int = 0
     wasted_pings: int = 0
     wasted_usd: Decimal = Decimal("0")
     margins: tuple[Decimal, ...] = ()
@@ -728,6 +744,11 @@ class CapPoint:
     def gross_net_upper(self) -> Decimal:
         """Net before the cross-model deduction — the number this used to print."""
         return self.gross_saved_upper - self.ping_usd
+
+    @property
+    def net_upper_pessimistic(self) -> Decimal:
+        """Net if every undecidable gap turns out to have changed model."""
+        return self.saved_upper_pessimistic - self.ping_usd
 
     @property
     def verdict(self) -> str:
@@ -785,9 +806,10 @@ def cap_grid() -> tuple[timedelta, ...]:
 def cap_point(expired: Sequence[ExpiredGap], cap: timedelta | None) -> CapPoint:
     """Cost one give-up threshold against every expired gap in the corpus."""
     cap_pings = None if cap is None else pings_to_bridge(cap)
-    pings = bridged = abandoned = bridged_switched = wasted_pings = 0
+    pings = bridged = abandoned = bridged_switched = bridged_undecidable = 0
+    wasted_pings = 0
     ping_usd = saved_lower = saved_upper = Decimal("0")
-    gross_lower = gross_upper = wasted_usd = Decimal("0")
+    gross_lower = gross_upper = wasted_usd = saved_upper_pess = Decimal("0")
     margins: list[Decimal] = []
     for eg in expired:
         n = pings_to_bridge(eg.gap)
@@ -806,6 +828,8 @@ def cap_point(expired: Sequence[ExpiredGap], cap: timedelta | None) -> CapPoint:
             bridged += 1
             if eg.buys_nothing:
                 bridged_switched += 1
+            if eg.switched is None:
+                bridged_undecidable += 1
             if eg.rewrite_upper is not None and eg.rewrite_lower is not None:
                 gross_upper += eg.rewrite_upper
                 gross_lower += eg.rewrite_lower
@@ -813,6 +837,10 @@ def cap_point(expired: Sequence[ExpiredGap], cap: timedelta | None) -> CapPoint:
                     saved_upper += eg.rewrite_upper
                     saved_lower += eg.rewrite_lower
                     margin += eg.rewrite_lower
+                # Pessimistic run: only a gap KNOWN to have stayed on the same
+                # model banks anything.
+                if eg.switched is False:
+                    saved_upper_pess += eg.rewrite_upper
         else:
             abandoned += 1
         margins.append(margin)
@@ -826,7 +854,9 @@ def cap_point(expired: Sequence[ExpiredGap], cap: timedelta | None) -> CapPoint:
         saved_upper=saved_upper,
         gross_saved_lower=gross_lower,
         gross_saved_upper=gross_upper,
+        saved_upper_pessimistic=saved_upper_pess,
         bridged_switched=bridged_switched,
+        bridged_undecidable=bridged_undecidable,
         wasted_pings=wasted_pings,
         wasted_usd=wasted_usd,
         margins=tuple(margins),
@@ -959,6 +989,39 @@ class CapSweep:
     @property
     def has_cross_model(self) -> bool:
         return any(p.wasted_pings for p in self.points)
+
+    # ── the other end of the undecidable assumption ──
+
+    @property
+    def pessimistic_best(self) -> CapPoint:
+        """Argmax if every undecidable gap turns out to have changed model.
+
+        The measured deduction only removes gaps PROVEN cross-model, which
+        makes the headline argmax the optimistic end of a range rather than an
+        answer. This is the other end. Neither is the truth.
+        """
+        return max(self.points, key=lambda p: p.net_upper_pessimistic)
+
+    @property
+    def pessimistic_moves(self) -> bool:
+        return self.pessimistic_best.cap != self.best.cap
+
+    @property
+    def has_undecidable(self) -> bool:
+        return any(p.bridged_undecidable for p in self.points)
+
+    # ── how much daylight is there between first and second place? ──
+
+    @property
+    def runner_up(self) -> CapPoint | None:
+        """Best cap other than the argmax, wherever it sits on the curve."""
+        rest = [p for p in self.points if p.cap != self.best.cap]
+        return max(rest, key=lambda p: p.net_upper) if rest else None
+
+    @property
+    def margin_over_runner_up(self) -> Decimal | None:
+        second = self.runner_up
+        return None if second is None else self.best.net_upper - second.net_upper
 
     @property
     def best_above_argmax(self) -> CapPoint | None:
@@ -1293,13 +1356,17 @@ def _cap_label(cap: timedelta | None) -> str:
 
 
 def _switch_cell(bc: BucketCosts) -> str:
-    """``4.8% (3/166)`` or ``unknown`` — undecidable gaps never fake a rate."""
+    """``3 of 166 (1.8%), 23 unknown`` — legible without a legend.
+
+    The earlier ``1.8% (3/166 +23?)`` needed the note to decode it, and the
+    thing most worth reading off the cell — that the unknowns are NOT in the
+    denominator — was the part the shorthand hid.
+    """
     rate = bc.switch_rate
+    unknown = f", {bc.switch_undecidable} unknown" if bc.switch_undecidable else ""
     if rate is None:
-        return "unknown"
-    decidable = bc.switched + bc.same_model
-    tail = f" +{bc.switch_undecidable}?" if bc.switch_undecidable else ""
-    return f"{rate:.1%} ({bc.switched}/{decidable}{tail})"
+        return f"unknown ({bc.switch_undecidable} gaps, none comparable)"
+    return f"{bc.switched} of {bc.switched + bc.same_model} ({rate:.1%}){unknown}"
 
 
 def _span_label(span: tuple[timedelta, timedelta] | None) -> str:
@@ -1726,6 +1793,29 @@ def _ratio(num: int, den: int) -> float | None:
     return num / den if den else None
 
 
+def _recommendation(sweep: CapSweep) -> str:
+    """The one line meant to be quoted out of this section.
+
+    Its subject is the BAND, not the argmax. A single cap is a point estimate
+    whose lead over the runner-up is smaller than corrections this report has
+    already had to make once; a band is a claim that survives them.
+    """
+    band = sweep.peak_band
+    cadence = int(PING_INTERVAL.total_seconds() // 60)
+    if band is None:
+        return (
+            "RECOMMENDED CAP: none. No cap on this grid turns a profit, so there is "
+            "no band to recommend and the argmax is only the least-bad option."
+        )
+    return (
+        f"RECOMMENDED CAP: {_span_label(band)} (cadence {cadence}m). Within this band "
+        f"the choice costs under {sweep.tolerance:.0%} of the optimum, which is less "
+        "than the size of corrections still outstanding. Quote this range; the argmax "
+        f"({_cap_label(sweep.best.cap)}) is in the table above for reference, not for "
+        "citation."
+    )
+
+
 def _sweep_section(g: GapStats) -> Section:
     """Section 3b: net benefit against every cap on the grid, and what it means."""
     sweep = g.sweep
@@ -1787,6 +1877,42 @@ def _sweep_section(g: GapStats) -> Section:
                 f"{_signed_usd(best.net_upper - best.gross_net_upper)} and does not "
                 "move the argmax here. It still falls hardest on the long caps, "
                 "which is why the argmax is taken after it rather than before."
+            )
+    if sweep.has_undecidable:
+        pess = sweep.pessimistic_best
+        if sweep.pessimistic_moves:
+            moved = (
+                f"the argmax moves to {_cap_label(pess.cap)}, netting "
+                f"{_signed_usd(pess.net_upper_pessimistic)} — where "
+                f"{_cap_label(best.cap)} would net only "
+                f"{_signed_usd(best.net_upper_pessimistic)}"
+            )
+        else:
+            moved = (
+                f"the argmax stays at {_cap_label(best.cap)} and its net falls to "
+                f"{_signed_usd(best.net_upper_pessimistic)}"
+            )
+        notes.append(
+            f"UNDECIDABLE GAPS, RUN BOTH WAYS. The deduction above only removes gaps "
+            f"PROVEN cross-model, so the {_cap_label(best.cap)} / "
+            f"{_signed_usd(best.net_upper)} headline is the OPTIMISTIC end. Treating "
+            f"every undecidable gap as cross-model instead, {moved}. The truth is "
+            "somewhere between the two runs and this report cannot say where — it is "
+            "a range, not an answer with an error bar."
+        )
+        margin = sweep.margin_over_runner_up
+        second = sweep.runner_up
+        correction = abs(best.net_upper - best.gross_net_upper)
+        if margin is not None and second is not None and correction >= margin > 0:
+            notes.append(
+                f"AND THE MARGIN IS ALREADY NARROWER THAN THE LAST CORRECTION. "
+                f"{_cap_label(best.cap)} leads {_cap_label(second.cap)} by "
+                f"{_usd(margin)}, while measuring the model switch moved this same "
+                f"cap by {_usd(correction)}. A correction larger than the gap between "
+                "first and second place is enough to reorder them, so the remaining "
+                "unquantified ones — the undecidable gaps above, the frozen prompt "
+                "volume, the unswept cadence — can too. Quote the band, not the "
+                "argmax."
             )
     if sweep.argmax_on_ping_step:
         step = sweep.step_after_argmax
@@ -1910,6 +2036,7 @@ def _sweep_section(g: GapStats) -> Section:
             f"{_signed_usd(unbounded.net_upper)}. If never giving up were best, this "
             "sweep would have said so."
         )
+    notes.append(_recommendation(sweep))
     return Section(
         key="cap_sweep",
         title="3b. Keep-alive cap sweep",
@@ -2031,6 +2158,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--since", default=None, help="ISO date/datetime (inclusive)")
     parser.add_argument("--until", default=None, help="ISO date/datetime (inclusive)")
     parser.add_argument(
+        "--benchmark",
+        action="store_true",
+        help=(
+            f"use the frozen reporting window {BENCHMARK_SINCE}..{BENCHMARK_UNTIL}, "
+            "the one every quoted number comes from. Rejects --since/--until so a "
+            "'benchmark' run cannot silently be a different window."
+        ),
+    )
+    parser.add_argument(
         "--peak-band-tolerance",
         type=float,
         default=PEAK_BAND_TOLERANCE,
@@ -2043,9 +2179,19 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    if args.benchmark and (args.since or args.until):
+        print(
+            "--benchmark fixes the window; pass either --benchmark or "
+            "--since/--until, not both",
+            file=sys.stderr,
+        )
+        return 2
+
+    since_arg = BENCHMARK_SINCE if args.benchmark else args.since
+    until_arg = BENCHMARK_UNTIL if args.benchmark else args.until
     try:
-        since = parse_bound(args.since, flag="--since", end_of_day=False)
-        until = parse_bound(args.until, flag="--until", end_of_day=True)
+        since = parse_bound(since_arg, flag="--since", end_of_day=False)
+        until = parse_bound(until_arg, flag="--until", end_of_day=True)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2

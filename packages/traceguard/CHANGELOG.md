@@ -112,6 +112,41 @@ surface, the SPEC MUSTs and every existing signature are untouched.
   $830.05 to **$811.30**, and avoided rewrites at that cap from $1,425.09 to
   $1,406.34. Sections 1 and 4 remain byte-identical.
 
+- **The cap sweep now quotes a band, runs the undecidable gaps both ways, and
+  reports from a frozen window.** Merge-readiness pass on the three above.
+
+  *Both ends of the undecidable assumption.* The cross-model deduction removes
+  only gaps **proven** to have switched, so it is a floor and the headline was
+  the optimistic end of a range with no other end printed — inconsistent with
+  how this section already treats rewrite cost. A pessimistic run now treats
+  every undecidable gap as cross-model and prints its argmax and net beside the
+  measured one. On this corpus the argmax stays at 10h and its net falls from
+  $811.30 to **$663.69**; the truth is between the two runs and the report says
+  so rather than implying an error bar it does not have.
+
+  *And the reason that matters.* 10h leads the runner-up by **$7.63** while
+  measuring the model switch — one correction, applied once — moved this same
+  cap by **$18.76**. A correction larger than the gap between first and second
+  place is enough to reorder them, so the sweep now says that in the footnote
+  and demotes the argmax.
+
+  *The conclusion's subject is the band.* Section 3b closes with a single
+  quotable line whose subject is the argmax neighbourhood, not the argmax:
+  `RECOMMENDED CAP: 9h..12h (cadence 55m)`. The argmax stays in the table for
+  reference and is explicitly marked "not for citation".
+
+  *Frozen reporting window.* New `--benchmark` pins `2026-05-30..2026-08-16`,
+  the window every quoted number now comes from, and refuses to combine with
+  `--since`/`--until`. The store is appended to continuously and the
+  expired-gap count drifted 429 → 432 across one afternoon; copying the DB
+  aside fixes one comparison, a closed window fixes every future run.
+
+  *Legibility.* The per-bucket switch cell reads `3 of 166 (1.8%), 23 unknown`
+  instead of `1.8% (3/166 +23?)` — the fact most worth reading off it, that the
+  unknowns are not in the denominator, was what the shorthand hid.
+
+  Sections 1 and 4 remain byte-identical.
+
 ### Fixed
 
 - **`python -m traceguard.routing_audit.ingest_claude_code` silently did
