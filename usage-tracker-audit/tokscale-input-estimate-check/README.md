@@ -122,3 +122,37 @@ Measured on 1,513 real transcripts, v4.10.0 against v4.11.0:
 
 `output`, `cacheRead`, `cacheWrite` and `messageCount` are identical across
 every leg, so partial healing retires nothing.
+
+## Release gate (added 2026-08-17)
+
+`migration_gate.sh <pre-fix-bin> <fixed-bin> <corpus-dir>` is the pass/fail form
+of the same three legs. It was written for a targeted cache migration; the
+migration turned out not to be needed, because the retention-provenance rebuild
+added in [#1085](https://github.com/junhoyeo/tokscale/pull/1085) re-parses every
+markerless Claude entry, and every entry that can still hold a char estimate is
+markerless — #1037 merged four days before #1085, so no estimate-carrying entry
+was ever written by a build that knew about the marker. #1085 has not shipped:
+v4.13.0 was cut 2026-08-10, one day before it merged.
+
+So the gate now measures a release rather than a migration branch. Against
+`main` at `f169a1f0`, pre-fix binary `v4.10.0`, 1,166 transcripts:
+
+| leg | `input` | `output` | `cacheRead` | `cacheWrite` | `messageCount` |
+|---|---|---|---|---|---|
+| v4.10.0, cold | 18,989,450 | 31,849,533 | 6,724,587,039 | 212,463,901 | 29,590 |
+| `main`, inherited cache | 1,879,713 | 31,849,533 | 6,724,587,039 | 212,463,901 | 29,590 |
+| `main`, cold | 1,879,713 | 31,849,533 | 6,724,587,039 | 212,463,901 | 29,590 |
+
+PASS: 17,109,737 tokens cleared, 10.10x down to 1.00x, and only `input` moved.
+The rebuild is one-shot — 3.35s for the rebuild pass, 0.20s for every scan after
+it, so the marker write-back holds.
+
+**What the measurement does not cover.** A retained row is cloned out of the old
+entry (`crates/tokscale-core/src/lib.rs:960`), not re-derived, so an
+estimate-carrying row that could be retained would survive the rebuild. None can:
+tool-result usage keys embed the session id behind `:tool_result:`, which makes
+`dedup_key_is_globally_stable` false for all of them
+(`sessions/claudecode.rs:1001`), and the retain filter drops them. This corpus
+could not have tested it anyway — leg 1 and leg 3 have the same `messageCount`,
+so a cold parse recovered every cached row and the tree held no retained-only
+rows at all.
