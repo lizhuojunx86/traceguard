@@ -91,24 +91,13 @@ low" into a number you can act on. It is a **read-only report** — it opens the
 store with SQLite `mode=ro`, writes nothing, and emits only aggregates, token
 counts and money. No prompt or answer text ever leaves the DB.
 
-> ### ⚠️ Most of this section is NOT in any release
->
-> `pip install traceguard` gives you **1.2.0**, where this report has four
-> sections, `--db / --format / --since / --until`, and a section 2 that is a
-> bare histogram (`gap | count | share`) with no money in it.
->
-> **Everything below that involves** per-bucket cost, the rewrite bracket
-> (`rewrite >=` / `rewrite <=`), the three-state verdict, the measured model
-> switch, the solved keep-alive cap, section 3b's cap sweep, `--benchmark` or
-> `--peak-band-tolerance` **is on `main` and unreleased.** It is listed under
-> `[Unreleased]` in the [CHANGELOG](CHANGELOG.md). There is no release date;
-> do not expect these flags to exist in a version you installed from PyPI.
->
-> To use them today, install from source:
->
-> ```bash
-> pip install "traceguard @ git+https://github.com/lizhuojunx86/traceguard.git@main#subdirectory=packages/traceguard"
-> ```
+Everything described here ships in **1.3.0**. If you are on 1.2.0 the report is
+a shorter thing — four sections, `--db / --format / --since / --until`, and a
+section 2 that is a bare `gap | count | share` histogram with no money in it —
+so `pip install -U traceguard` before expecting per-bucket cost, the rewrite
+bracket, the three-state verdict, the measured model switch, section 3b's cap
+sweep, `--benchmark` or `--peak-band-tolerance`. What changed and why is in the
+[CHANGELOG](CHANGELOG.md).
 
 It does not ingest. Fill the store first, then audit it:
 
@@ -341,7 +330,7 @@ wrapper — see
 ```bash
 cd packages/traceguard
 uv sync
-uv run pytest        # 486 tests (3 skip without the contamination-hf extra)
+uv run pytest        # 562 tests (3 skip without the contamination-hf extra)
 ```
 
 ## License

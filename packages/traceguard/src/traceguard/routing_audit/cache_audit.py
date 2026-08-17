@@ -2149,8 +2149,10 @@ def main(argv: list[str] | None = None) -> int:
         prog="python -m traceguard.routing_audit.cache_audit",
         description=(
             "Read-only prompt-cache efficiency audit over an existing traces store. "
-            "Fill the store first with `python -m traceguard.routing_audit."
-            "ingest_claude_code`; this command never writes."
+            "Fill the store first with `python -m traceguard.routing_audit.ingest "
+            "--write` — WITHOUT --write that is a dry run that stores nothing, and "
+            "this audit would then report on an empty store. This command never "
+            "writes."
         ),
     )
     parser.add_argument("--db", default=DEFAULT_DB)

@@ -7,145 +7,105 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
-## [Unreleased]
+## [1.3.0] - 2026-08-17
 
 Contract-external, all inside `traceguard.routing_audit`. The frozen public
 surface, the SPEC MUSTs and every existing signature are untouched.
 
-### Added
+**Read this as one conclusion overturned three times, not as a feature list.**
+1.2.0 shipped a keep-alive counterfactual that answered "should you ping to
+hold the cache open?" with a single verdict over a single number. A reader
+recomputed it and the answer changed; recomputing it twice more changed it
+twice more. Each correction was larger than the thing it corrected, which is
+why the report no longer prints a single number at all.
 
-- **`cache_audit` section 2 now carries money per gap bucket**, and section 3
-  answers the keep-alive question a second time for a *capped* policy: ping
-  until 4h of idle, then give up. This came out of a reader's comment on the
-  1.2.0 write-up, and it overturned that article's own conclusion. On this
-  repo's corpus the aggregate refuses (pings $2,009.54 ≥ rewrites ≤$1,912.84)
-  while the split shows why: 1–4h gaps are a win ($81.12 of pings against
-  ≤$886.92 of rewrites) drowned by >4h gaps that lose ($1,928.42 against
-  ≤$1,025.91). The capped policy pays for the pings burned on the 239 gaps it
-  abandons and still comes out ahead ($316.48 against ≤$886.92), so it needs no
-  foreknowledge of how long a gap will run.
+**1 — The aggregate verdict was averaging two populations with opposite signs.**
+1.2.0 said NOT WORTH IT and stopped. Splitting the money by gap bucket shows
+that verdict is the sum of a win and a loss, not a finding: 1–4h gaps pay for
+themselves ($82.65 of pings against $896.02–$900.03 of avoidable rewrites)
+while >4h gaps drown them ($1,962.07 against $1,036.71–$1,041.43). A verdict
+averaged over buckets that behave differently is not a decision — which was the
+failure the 1.2.0 write-up was itself about, one level down. Section 3 now also
+prices a *capped* policy, one you could actually run: ping until some threshold
+of idle, then give up, paying for the pings burned on gaps that outlive the cap
+and banking only the ones it bridges.
 
-  A verdict averaged over buckets that behave differently is not a decision —
-  the same failure the article was about, one level down. Both verdicts still
-  lean pro-ping by construction (savings are an upper bound, pings are charged
-  as pure cache reads of a frozen prompt), which makes a refusal solid and an
-  endorsement only as wide as its margin. That caveat is printed with the
-  numbers.
+**2 — The cap that made the split look good was hand-picked.** That threshold
+was 4h because 4h is the `1-4h` / `>4h` bucket boundary; the code comment said
+so. New section 3b costs every cap from 1h to 12h in 15-minute steps, plus an
+uncapped policy competing on equal terms, and takes the argmax: **10h, not 4h**
+($811.30 net against $569.10 at 4h). In the same pass, `_rewrite_cost` — an
+upper bound with nothing underneath it — got a floor, so every verdict now
+compares against an interval instead of one side of one. Verdicts are
+three-state accordingly: below the floor WORTH IT, above the ceiling NOT WORTH
+IT, and **UNDECIDED** in between, a band the two-state version silently scored
+as a win. `session_gaps` and `audit` take a `cap` argument; the default solves
+it.
 
-- **The keep-alive cap is now solved instead of hardcoded, and the rewrite
-  bound has a floor.** Both of these were holes in the entry above, and closing
-  them moved the answer.
+That floor moves this corpus by only 0.4% ($1,941.46 → $1,932.73), and that is
+not reassurance: a post-gap write averages ~350,000 tokens against a ~1,500-
+token session baseline, so the interval is narrow because the two populations
+differ by two orders of magnitude, not because either bound is tight. The
+report says so where it prints the number.
 
-  The 4h cap was picked to line up with the `1-4h` / `>4h` bucket boundary —
-  the comment said as much. New section 3b sweeps every cap from 1h to 12h in
-  15-minute steps plus an uncapped policy, and takes the argmax of net benefit:
-  on this corpus that is **10h, not 4h** ($831.90 net against $576.07 at 4h,
-  bridging 306 of 429 gaps rather than 187). An argmax alone is a point
-  estimate pretending to be a recommendation, so the sweep also reports the
-  contiguous range over which the net stays positive — here `1h15m..12h`,
-  flagged as censored because it ends at the sweep's ceiling rather than at a
-  sign change. A plateau one grid step wide is reported as exactly that.
+**3 — The argmax that replaced 4h was a point estimate, and a single
+measurement moved it further than its own lead.** Section 3 had been listing
+"caches are model-scoped, so a mid-session model switch makes the preceding
+pings worthless" as a stated *approximation* — while both `model_id`s sat in
+the store the whole time. Measured: **18 of 378 decidable expired gaps (4.8%)
+came back on a different model**, and the rate climbs with idle time, 1.8% in
+`1-4h` against 7.1% in `>4h`. Those gaps bank nothing while still costing what
+they cost, so their savings are deducted before the argmax is taken. The
+direction is the whole point — a longer cap collects a larger share of exactly
+the gaps this removes, so omitting it had not added noise, it had pushed the
+cap systematically long.
 
-  `_rewrite_cost` was an upper bound with nothing under it, so every verdict
-  rested on one side of an interval. A lower bound now credits each post-gap
-  message with the median `cache_creation` of its own session's ordinary turns
-  and charges only the remainder, floored at zero. The verdict is
-  correspondingly three-state: ping cost below the floor is `WORTH IT`, above
-  the ceiling `NOT WORTH IT`, and in between `UNDECIDED` — a band a two-state
-  verdict silently scores as a win. The unbounded aggregate keeps its original
-  wording as a control.
+The deduction moved 10h by **$18.76**, while 10h leads the runner-up by
+**$7.63**. A correction bigger than the gap between first and second place is
+enough to reorder them, and more remain unquantified — the 54 gaps with a NULL
+`model_id`, the prompt volume frozen at the pre-gap message, the ping cadence
+held at 55m and never swept.
 
-  **The lower bound barely moved this corpus, and that is not good news.** It
-  narrows the total by 0.4% ($1,933.07 → $1,924.39), because a post-gap write
-  averages 350,257 tokens against a 1,542-token session baseline. The interval
-  is narrow because these two populations differ by two orders of magnitude,
-  not because either bound is tight; the report says so where the number is
-  printed. The capped verdict does clear the floor ($590.27 against $1,415.68),
-  so "capped pinging pays" survives the pessimistic reading here — but the
-  margin is now stated rather than assumed.
+**So the output is a band and an interval, not a number.** Section 3b closes
+with the one line meant to be quoted:
 
-  `session_gaps` and `audit` take a `cap` argument: a `timedelta` pins a
-  policy, `None` prices the one that never gives up, and the default solves it.
-  Sections 1 and 4 are byte-identical.
+```
+RECOMMENDED CAP: 9h..12h (cadence 55m). Within this band the choice costs under
+10% of the optimum, which is less than the size of corrections still outstanding.
+```
 
-- **Mid-gap model switches are measured instead of assumed, and the sweep stops
-  overclaiming its own plateau.** Four corrections to the entry above, found by
-  recomputing its sweep table by hand.
+The argmax stays in the table, marked "not for citation". Two ranges are
+reported because they answer different questions and one footnote had been
+claiming both: the **sign-stable range** (net > 0) is `1h15m..12h`, 44 grid
+points, and says only that capping is the right shape of policy — net inside it
+spans `$102.13..$811.30`, 8x, so it emphatically does not say the caps are
+interchangeable. The **argmax neighbourhood** (net within `k` of the maximum,
+`k` default 0.10, `--peak-band-tolerance`) is `9h..12h`, 13 points, and is the
+one that does. Where a range ends at a grid edge it is flagged censored, and
+the flag carries the marginal evidence rather than a shrug: nothing above the
+argmax recovers to it, drift out to 12h is -$48.83, and the single observation
+beyond the grid is a further -$950.86 — a peak past 12h is unsupported, not
+excluded.
 
-  *Model switch.* Section 3 used to list "caches are model-scoped, so a
-  mid-session switch makes the preceding pings worthless" as one of two stated
-  approximations — while both `model_id`s sat in the store the whole time. It
-  is now read off the data per gap: **18 of the 378 decidable expired gaps
-  (4.8%) came back on a different model**, and the rate climbs with idle time,
-  1.8% in `1-4h` against 7.1% in `>4h`. Those gaps bank nothing (the pings held
-  the wrong model's prefix warm) while still costing what they cost, so their
-  savings are deducted and the argmax is taken after the deduction. Section 2
-  prints the rate per bucket, 3b prints wasted pings and their cost per cap.
-  54 gaps have a NULL `model_id` on one side; they are counted, left in, and
-  never guessed at, which makes the deduction a floor on the waste.
+Because the cross-model deduction only removes gaps *proven* to have switched,
+the headline is the optimistic end of a range, so the sweep runs the other end
+too: treating every undecidable gap as cross-model, the argmax stays at 10h and
+its net falls to **$663.69**. The truth is between the two runs and the report
+declines to say where.
 
-  **The direction is the point.** A session is likelier to return on a
-  different model the longer it has been away, so a policy that pays to stay
-  alive longer collects a larger share of exactly the gaps this removes.
-  Omitting it did not add noise — it pushed the cap systematically long.
+### Also
 
-  *Two ranges, not one.* The plateau footnote claimed both "capping is right
-  here" and "which cap you pick does not matter" off a single number, and the
-  second claim was false: net across the positive range runs $102.13..$811.30,
-  an 8x spread. The sign-stable range keeps only the first claim; a new
-  **argmax neighbourhood** (net within `k` of the maximum, `k` default 0.10,
-  `--peak-band-tolerance`) carries the second. On this corpus that band is
-  `9h..12h`, 13 grid points, against a 44-point sign-stable range.
-
-  *Cadence disclosure.* The argmax sits on a ping-count step — 10h is the last
-  cap before `pings_to_bridge` increments, and 10h15m buys $4.07 of avoided
-  rewrite for $33.49 of pings. The sweep now flags that and states the result
-  as "cap 10h **at cadence 55m**". A `PING_INTERVAL` sweep is not done here.
-
-  *Censoring, downgraded.* The censored flag moved to the argmax neighbourhood
-  and now carries the marginal evidence: no cap above the argmax recovers to
-  it, cumulative drift out to 12h is -$48.83, and `no cap` is a further
-  -$950.86. "Censored" means the run reaches the grid edge, not that the right
-  side went unexamined — a peak past 12h is unsupported rather than excluded.
-
-  Net effect on this repo's corpus: the cap stays **10h**, net falls from
-  $830.05 to **$811.30**, and avoided rewrites at that cap from $1,425.09 to
-  $1,406.34. Sections 1 and 4 remain byte-identical.
-
-- **The cap sweep now quotes a band, runs the undecidable gaps both ways, and
-  reports from a frozen window.** Merge-readiness pass on the three above.
-
-  *Both ends of the undecidable assumption.* The cross-model deduction removes
-  only gaps **proven** to have switched, so it is a floor and the headline was
-  the optimistic end of a range with no other end printed — inconsistent with
-  how this section already treats rewrite cost. A pessimistic run now treats
-  every undecidable gap as cross-model and prints its argmax and net beside the
-  measured one. On this corpus the argmax stays at 10h and its net falls from
-  $811.30 to **$663.69**; the truth is between the two runs and the report says
-  so rather than implying an error bar it does not have.
-
-  *And the reason that matters.* 10h leads the runner-up by **$7.63** while
-  measuring the model switch — one correction, applied once — moved this same
-  cap by **$18.76**. A correction larger than the gap between first and second
-  place is enough to reorder them, so the sweep now says that in the footnote
-  and demotes the argmax.
-
-  *The conclusion's subject is the band.* Section 3b closes with a single
-  quotable line whose subject is the argmax neighbourhood, not the argmax:
-  `RECOMMENDED CAP: 9h..12h (cadence 55m)`. The argmax stays in the table for
-  reference and is explicitly marked "not for citation".
-
-  *Frozen reporting window.* New `--benchmark` pins `2026-05-30..2026-08-16`,
-  the window every quoted number now comes from, and refuses to combine with
-  `--since`/`--until`. The store is appended to continuously and the
-  expired-gap count drifted 429 → 432 across one afternoon; copying the DB
-  aside fixes one comparison, a closed window fixes every future run.
-
-  *Legibility.* The per-bucket switch cell reads `3 of 166 (1.8%), 23 unknown`
-  instead of `1.8% (3/166 +23?)` — the fact most worth reading off it, that the
-  unknowns are not in the denominator, was what the shorthand hid.
-
-  Sections 1 and 4 remain byte-identical.
+- **`--benchmark`** pins a frozen reporting window (`2026-05-30..2026-08-16`)
+  and refuses to combine with `--since`/`--until`. The store is appended to
+  continuously and the expired-gap count drifted 429 → 432 across one afternoon
+  of editing; copying the DB aside fixes one comparison, a closed window fixes
+  every future run. Every number quoted above and in the README comes from it.
+- Section 2 gained per-bucket money, the rewrite bracket and a measured model
+  switch column reading `3 of 166 (1.8%), 23 unknown` — the unknowns are
+  deliberately outside the denominator, which the earlier shorthand hid.
+- Sections 1 and 4 are byte-identical to 1.2.0 throughout all of the above.
+- Money is still never guessed: unpriced models, unpriced speed tiers and
+  gaps with no comparable `model_id` are counted and left out of the totals.
 
 ### Fixed
 
