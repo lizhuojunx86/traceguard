@@ -7,6 +7,56 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [Unreleased]
+
+Contract-external, all inside `traceguard.routing_audit`. Additive: sections
+1-4 and 3b of the cache audit render byte-for-byte as before, verified against
+`main` on the reference store for all three of `--format table|md|csv`.
+
+**`--emit-share` / `--show-share`: a cache-audit summary you can hand to
+someone else.** Comparing cache behaviour across organisations needs a corpus,
+and a corpus needs people willing to send a file. That is a trust problem
+rather than a serialisation one, so the export is shaped around the reader
+rather than the writer: `--show-share` prints the exact bytes `--emit-share`
+would write, in full, so there is nothing to find out afterwards. The tool
+makes no network calls and has no upload path.
+
+- **Aggregates only.** Per-model hit rates and token volumes, gap-bucket counts
+  and per-bucket cost, the cap band, both ends of the net-benefit range, the
+  cross-model switch rate, and the undecidable count. No prompt text, no
+  paths, no session ids, no per-trace timestamps, no free-form strings.
+- **The invariant, not a list of things remembered.** Every string in the
+  payload is a schema constant, a whitelisted model id, one of the two window
+  bounds, the installed version, or a decimal money literal. `model_id` is
+  whitelisted against the published price sheet rather than passed through,
+  because an arbitrary model id can name an internal gateway or an employer;
+  anything else folds into one `(unrecognized)` row that keeps the counts and
+  drops the name. A store poisoned with sentinel strings in prompts, paths,
+  session ids, model names and unplanned-for keys is asserted to leak none of
+  them, and two further tests exist only to prove that assertion can still fail.
+- **An open window is refused, not warned about.** Every rate and dollar figure
+  scales with how long you looked, so `--since`/`--until` (or `--benchmark`)
+  are mandatory for an export. A corpus whose members each measured "all time"
+  is not comparable with itself, and nothing downstream can repair that.
+- **The band is the citable field.** `recommended_cap_band` names the answer
+  and `argmax_reference_only` names the point estimate, so quoting the argmax
+  reads wrong at the call site. Net is emitted at both ends of the
+  undecidable-gap assumption (`measured` and `pessimistic`), never as one
+  number.
+- **`tool_version` is read from installed package metadata**, never from a
+  literal in this repo. A submission claiming a version it was not produced by
+  would corrupt the corpus in a way nobody could detect later, and this repo
+  has already had to fix one hand-copied number that went stale.
+- **New: cross-model switch rate by gap-length decile**, each group carrying
+  its own bounds in minutes. On the reference store the rate runs from 0% at
+  60-72 minutes of idle to 23.1% past 24 hours, which is the empirical reason
+  an optimal keep-alive cap is finite rather than infinite. A single overall
+  rate averages that away.
+
+**`benchmark/`** — schema specification, submission criteria, and the first
+entry. It holds one file and says plainly that under 20 submissions any
+cross-organisation number in it is an anecdote.
+
 ## [1.3.0] - 2026-08-17
 
 Contract-external, all inside `traceguard.routing_audit`. The frozen public

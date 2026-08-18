@@ -60,6 +60,7 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from decimal import ROUND_CEILING, Decimal
+from pathlib import Path
 from typing import Any, Iterable, Sequence
 from urllib.parse import quote
 
@@ -441,6 +442,12 @@ class GapStats:
     same_model_gaps: int = 0
     switch_undecidable: int = 0
     sweep: CapSweep | None = None
+    # Every expired gap, kept whole after costing. Nothing in sections 1-4 or
+    # 3b reads it; the share export (cache_share) needs the per-gap grain to
+    # cut the cross-model rate by gap-length decile, and re-deriving it from a
+    # second _scan_sessions pass would be a second source of truth for the same
+    # number. Default () so a hand-built GapStats stays valid.
+    expired_details: tuple[ExpiredGap, ...] = ()
 
     @property
     def switch_rate(self) -> float | None:
@@ -1142,6 +1149,7 @@ def session_gaps(
     section 3b and changes nothing that is costed.
     """
     expired, stats = _scan_sessions(records)
+    stats.expired_details = tuple(expired)
     stats.sweep = sweep_caps(expired, tolerance=tolerance)
     stats.cap_solved = cap is _SOLVE
     stats.cap = stats.sweep.best.cap if stats.cap_solved else cap
@@ -2179,6 +2187,26 @@ def main(argv: list[str] | None = None) -> int:
             "nothing costed changes."
         ),
     )
+    parser.add_argument(
+        "--emit-share",
+        default=None,
+        metavar="PATH",
+        help=(
+            "write a shareable JSON summary (schema v1) to PATH so this store can "
+            "be contributed to the cross-organisation benchmark. Aggregates only: "
+            "no prompt text, no paths, no session ids, no per-trace timestamps. "
+            "Requires a closed window (--benchmark, or both --since and --until). "
+            "The normal report still prints; nothing is uploaded, ever."
+        ),
+    )
+    parser.add_argument(
+        "--show-share",
+        action="store_true",
+        help=(
+            "print the exact bytes --emit-share would write, to stdout, and stop. "
+            "Read this before you send anything."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.benchmark and (args.since or args.until):
@@ -2209,6 +2237,37 @@ def main(argv: list[str] | None = None) -> int:
     result = audit(
         args.db, since=since, until=until, tolerance=args.peak_band_tolerance
     )
+
+    # Sections 1-4 and 3b are untouched by everything below: --show-share
+    # replaces the report with the share file's own bytes, and --emit-share
+    # leaves stdout exactly as it was and reports the write on stderr.
+    if args.emit_share or args.show_share:
+        # Imported here, not at module scope: cache_share reads this module.
+        from traceguard.routing_audit.cache_share import (
+            SCHEMA_VERSION,
+            ShareWindowError,
+            build_share,
+            render_share,
+        )
+
+        try:
+            payload = build_share(result)
+        except ShareWindowError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        blob = render_share(payload)
+        if args.emit_share:
+            Path(args.emit_share).write_text(blob + "\n", encoding="utf-8")
+            print(
+                f"wrote {args.emit_share} (share schema v{SCHEMA_VERSION}, "
+                f"traceguard {payload['tool_version']}). Read it before you send it: "
+                "--show-share prints the same bytes.",
+                file=sys.stderr,
+            )
+        if args.show_share:
+            print(blob)
+            return 0
+
     print(format_audit(result, args.format))
     return 0
 
