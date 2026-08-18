@@ -2268,8 +2268,9 @@ def main(argv: list[str] | None = None) -> int:
             "write a shareable JSON summary (schema v1) to PATH so this store can "
             "be contributed to the cross-organisation benchmark. Aggregates only: "
             "no prompt text, no paths, no session ids, no per-trace timestamps. "
-            "Requires a closed window (--benchmark, or both --since and --until). "
-            "The normal report still prints; nothing is uploaded, ever."
+            "Requires a closed window (--benchmark, or both --since and --until), "
+            "and REFUSES to overwrite an existing file. The normal report still "
+            "prints; nothing is uploaded, ever."
         ),
     )
     parser.add_argument(
@@ -2303,6 +2304,22 @@ def main(argv: list[str] | None = None) -> int:
         print(
             "--peak-band-tolerance must be strictly between 0 and 1, got "
             f"{args.peak_band_tolerance}",
+            file=sys.stderr,
+        )
+        return 2
+
+    # Checked before the audit runs, so a refusal costs nothing but a parse.
+    if args.emit_share and Path(args.emit_share).exists():
+        print(
+            f"refusing to overwrite {args.emit_share}: a share file is an "
+            "immutable record of one corpus, not a document that gets a new "
+            "version. Its numbers can already have been cited somewhere that "
+            "cannot be updated, and overwriting it would silently rewrite them "
+            "while the path kept pointing at the same thing. A re-run over "
+            "traffic that has grown is a NEW entry — the filename carries the "
+            "corpus fingerprint precisely so both can exist. Write to a new "
+            "path, or delete this one deliberately if you know it was never "
+            "published.",
             file=sys.stderr,
         )
         return 2

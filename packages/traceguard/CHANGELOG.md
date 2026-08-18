@@ -68,6 +68,14 @@ makes no network calls and has no upload path.
   pick a window and keep it, full stop; that advice was a necessary condition
   sold as a sufficient one and has been corrected in place.
 
+- **`--emit-share` refuses to overwrite an existing file** and exits 2. A corpus
+  entry is an immutable record of one corpus, not a document that gets a new
+  version: its numbers can already have been cited from a path that cannot be
+  updated, and overwriting would rewrite them while the path kept pointing at
+  what looks like the same thing. Entries are named
+  `NNN-<source>-<first 8 of corpus.fingerprint>.json`, so a re-run over grown
+  traffic is a new entry sitting beside the old one rather than replacing it.
+
 **`benchmark/`** — schema specification, submission criteria, and the first
 entry. It holds one file and says plainly that under 20 submissions any
 cross-organisation number in it is an anecdote.

@@ -36,7 +36,7 @@ python -m traceguard.routing_audit.cache_audit \
   --since 2026-05-01 --until 2026-07-31 \
   --show-share
 
-# 3. write it
+# 3. write it. --emit-share refuses to overwrite an existing file (see below)
 python -m traceguard.routing_audit.cache_audit \
   --db sqlite:///traces_routing_audit.db \
   --since 2026-05-01 --until 2026-07-31 \
@@ -130,6 +130,33 @@ so quoting both is double-counting.
 The honest version of the old advice: pick a window, state it, keep it, and
 publish the fingerprint so nobody has to take the first three on trust.
 
+## Entries are immutable
+
+`data/NNN-<source>-<first 8 of corpus.fingerprint>.json`, e.g.
+`001-traceguard-self-b07cc061.json`.
+
+The fingerprint is in the filename because **a re-run over traffic that has
+grown is a new entry, not a new version of an old one.** Same organisation,
+same window, more transcripts ingested since: different corpus, different
+digest, different file, both kept. Nothing in `data/` is ever edited in place
+and nothing is ever overwritten.
+
+`--emit-share` enforces the second half of that: pointed at a path that already
+exists, it refuses and exits 2 rather than writing. Delete the file yourself if
+you know it was never published; the tool will not make that call for you.
+
+The reason is not tidiness. These files get cited by path. This directory's
+first entry is about to be referenced from a public article, as the thing that
+replaces "just run it yourself and you will get the same numbers" — a claim
+this repo tested and disproved on its own store, which is what the fingerprint
+section above is about. A path whose contents can change underneath a citation
+cannot carry that job. If `001-traceguard-self-b07cc061.json` said $806.82 the
+day someone linked to it, it has to still say $806.82 the day someone follows
+the link, even after the corpus behind it has moved on twice.
+
+So: mutable artefacts are fine for dashboards and useless as evidence. If your
+numbers change, add a file. Do not fix an old one.
+
 ## Inclusion criteria
 
 A submission goes in `data/` if all of these hold:
@@ -155,8 +182,15 @@ losing money is more useful than another one agreeing with mine.
 ## How to submit
 
 Open a pull request adding your file to `data/`, named
-`NNN-<something-you-pick>.json`. Or send it to me and I will open the PR, in
-which case say whether you want the filename to identify you.
+`NNN-<something-you-pick>-<first 8 of corpus.fingerprint>.json`. The digest is
+in the file; copy the first 8 characters into the name. Or send it to me and I
+will open the PR, in which case say whether you want the middle part to
+identify you.
+
+If you later re-run over a grown corpus, that is a second entry with a second
+fingerprint, not a replacement for the first. Send both if the change is
+interesting; the pair is more informative than either alone, because it shows
+how much this measurement moves without anyone touching the window.
 
 Include one sentence about what generated the traffic — "solo dev, mostly
 refactoring", "12-person team, CI runs a nightly agent". That sentence is the
@@ -173,7 +207,9 @@ that is the most valuable submission of the lot. Send it.
 benchmark/
   README.md              you are here
   schema/share-v1.json   field-by-field specification of the export
-  data/                  one JSON file per submission
+  data/                  one JSON file per submission, named
+                         NNN-<source>-<first 8 of fingerprint>.json,
+                         never edited and never overwritten
 ```
 
 `schema/share-v1.json` is a specification document, not a runtime validator.

@@ -363,6 +363,12 @@ Compare it before comparing anything else.
 `tool_version` comes from installed package metadata, never a literal, so a
 submission cannot claim a version it was not produced by.
 
+`--emit-share` refuses to overwrite an existing file and exits 2. Corpus
+entries are named `NNN-<source>-<first 8 of corpus.fingerprint>.json` and are
+immutable: a re-run over traffic that has grown is a new entry beside the old
+one, because these files get cited by path and a path whose contents change
+underneath a citation is not evidence.
+
 Submission criteria and the corpus itself are in
 [`benchmark/`](benchmark/README.md), which currently holds one file and says so.
 

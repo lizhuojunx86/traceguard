@@ -659,6 +659,58 @@ def test_emit_share_writes_a_trailing_newline(poisoned, tmp_path):
     assert out_path.read_text(encoding="utf-8").endswith("}\n")
 
 
+def test_emit_share_refuses_to_overwrite_an_existing_entry(poisoned, tmp_path, capsys):
+    """A corpus entry is an immutable record, so the second write is refused.
+
+    These files get cited by path. Overwriting one silently rewrites numbers
+    somebody may already have linked to, while the path keeps pointing at what
+    looks like the same thing.
+    """
+    out_path = tmp_path / "001-someone-abcd1234.json"
+    argv = [
+        "--db", poisoned.url,
+        "--since", "2026-06-01",
+        "--until", "2026-08-01",
+        "--emit-share", str(out_path),
+    ]
+
+    assert cache_audit_main(argv) == 0
+    original = out_path.read_text(encoding="utf-8")
+    capsys.readouterr()
+
+    assert cache_audit_main(argv) == 2, "the second write was not refused"
+    err = capsys.readouterr().err
+    assert "refusing to overwrite" in err
+    assert "immutable" in err
+    assert out_path.read_text(encoding="utf-8") == original, "the file was touched"
+
+
+def test_emit_share_writes_when_the_path_is_free(poisoned, tmp_path):
+    """The refusal is about collisions only — a fresh path still writes."""
+    argv = [
+        "--db", poisoned.url,
+        "--since", "2026-06-01",
+        "--until", "2026-08-01",
+    ]
+    first, second = tmp_path / "a.json", tmp_path / "b.json"
+    assert cache_audit_main(argv + ["--emit-share", str(first)]) == 0
+    assert cache_audit_main(argv + ["--emit-share", str(second)]) == 0
+    assert first.read_text(encoding="utf-8") == second.read_text(encoding="utf-8")
+
+
+def test_show_share_is_unaffected_by_an_existing_file(poisoned, tmp_path, capsys):
+    """--show-share writes nothing, so it has nothing to collide with."""
+    out_path = tmp_path / "taken.json"
+    out_path.write_text("do not touch me", encoding="utf-8")
+
+    assert cache_audit_main(
+        ["--db", poisoned.url, "--since", "2026-06-01", "--until", "2026-08-01",
+         "--show-share"]
+    ) == 0
+    assert json.loads(capsys.readouterr().out)["schema_version"] == SCHEMA_VERSION
+    assert out_path.read_text(encoding="utf-8") == "do not touch me"
+
+
 def test_share_export_is_read_only(poisoned, tmp_path):
     """The audit opens mode=ro; exporting must not have changed that."""
     before = Path(poisoned.url.replace("sqlite:///", "")).stat().st_mtime_ns
