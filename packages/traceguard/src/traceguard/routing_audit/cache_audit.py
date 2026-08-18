@@ -54,12 +54,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import io
 import math
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, time, timedelta, timezone
 from decimal import ROUND_CEILING, Decimal
+from pathlib import Path
 from typing import Any, Iterable, Sequence
 from urllib.parse import quote
 
@@ -257,6 +259,72 @@ def load_records(
     return out
 
 
+# Fingerprint of the corpus an audit ran on. Bumping this changes every
+# fingerprint ever produced, so it moves only when the tuple below changes
+# shape — a fingerprint that silently means something new is worse than none.
+FINGERPRINT_VERSION = 1
+FINGERPRINT_ALGORITHM = f"sha256-v{FINGERPRINT_VERSION}"
+
+_FIELD_SEP = "\x1f"
+_RECORD_SEP = b"\x1e"
+
+
+def corpus_fingerprint(records: Iterable[Record]) -> str:
+    """Stable digest of WHICH traces were in the window, not just how many.
+
+    WHY THIS EXISTS. A closed reporting window is a necessary condition for two
+    runs to be comparable and NOT a sufficient one. The window closes over
+    timestamps; the store is what actually gets read, and it keeps growing
+    inside a window that never moves — ``ingest`` walks ``~/.claude/projects``,
+    and a transcript file that only appears later can carry messages whose
+    timestamps fall well inside an already-frozen window. This repo's own
+    reference window (2026-05-30..2026-08-16) went from 432 expired gaps over
+    168 sessions to 439 over 174 in under a day without the window changing by
+    a second, and the argmax net moved with it.
+
+    So the window is stated AND the corpus is identified. Two share files with
+    the same window and different fingerprints were computed over different
+    traffic, and no amount of care about the window would have told you.
+
+    WHAT GOES IN. One tuple per trace loaded in the window — session, timestamp,
+    model, prompt volume, output volume, source — sorted so the digest does not
+    depend on row order, and length-delimited so no two different corpora can
+    serialise to the same bytes. The population is every record the window
+    loaded rather than only the analysed subset, because ``traces_in_window``
+    is itself reported and a row this audit scores nothing on still moves it.
+
+    WHAT COMES OUT. One digest over the whole set. Session ids go INTO it and
+    no session id comes out: a single sha256 over the concatenation of tens of
+    thousands of records is not a session identifier, and there is no per-record
+    digest anywhere in the output to line up against.
+    """
+    rows = sorted(
+        _FIELD_SEP.join(
+            (
+                rec.session_id or "",
+                rec.invoked_at.astimezone(timezone.utc).isoformat(),
+                rec.model_id or "",
+                str(rec.prompt_tokens),
+                str(int((rec.usage or {}).get("output_tokens") or 0)),
+                rec.source or "",
+            )
+        )
+        for rec in records
+    )
+    digest = hashlib.sha256()
+    digest.update(f"traceguard/cache-share/fingerprint/v{FINGERPRINT_VERSION}".encode())
+    digest.update(_RECORD_SEP)
+    for row in rows:
+        encoded = row.encode("utf-8")
+        # Length-prefixed: without it, moving a separator between two adjacent
+        # fields would produce identical bytes from different corpora.
+        digest.update(str(len(encoded)).encode("ascii"))
+        digest.update(_RECORD_SEP)
+        digest.update(encoded)
+        digest.update(_RECORD_SEP)
+    return digest.hexdigest()
+
+
 def _tier_multiplier(price: ModelPrice, usage: dict[str, Any] | None) -> Decimal | None:
     """Speed-tier multiplier, or None when the tier has no published price.
 
@@ -441,6 +509,12 @@ class GapStats:
     same_model_gaps: int = 0
     switch_undecidable: int = 0
     sweep: CapSweep | None = None
+    # Every expired gap, kept whole after costing. Nothing in sections 1-4 or
+    # 3b reads it; the share export (cache_share) needs the per-gap grain to
+    # cut the cross-model rate by gap-length decile, and re-deriving it from a
+    # second _scan_sessions pass would be a second source of truth for the same
+    # number. Default () so a hand-built GapStats stays valid.
+    expired_details: tuple[ExpiredGap, ...] = ()
 
     @property
     def switch_rate(self) -> float | None:
@@ -1142,6 +1216,7 @@ def session_gaps(
     section 3b and changes nothing that is costed.
     """
     expired, stats = _scan_sessions(records)
+    stats.expired_details = tuple(expired)
     stats.sweep = sweep_caps(expired, tolerance=tolerance)
     stats.cap_solved = cap is _SOLVE
     stats.cap = stats.sweep.best.cap if stats.cap_solved else cap
@@ -1293,6 +1368,11 @@ class CacheAudit:
     models: list[ModelRow]
     gaps: GapStats
     direct: list[DirectRow]
+    # Identity of the corpus these figures came off. Nothing in sections 1-4 or
+    # 3b renders it; the share export reports it so two files with the same
+    # window can still be told apart. Defaulted so a hand-built CacheAudit
+    # stays valid.
+    fingerprint: str = ""
 
     @property
     def actual_usd(self) -> Decimal:
@@ -1446,6 +1526,7 @@ def audit(
     ]
     direct = [r for r in records if r.source != CC_SOURCE]
     return CacheAudit(
+        fingerprint=corpus_fingerprint(records),
         db_url=db_url or DEFAULT_DB,
         since=since,
         until=until,
@@ -2179,6 +2260,27 @@ def main(argv: list[str] | None = None) -> int:
             "nothing costed changes."
         ),
     )
+    parser.add_argument(
+        "--emit-share",
+        default=None,
+        metavar="PATH",
+        help=(
+            "write a shareable JSON summary (schema v1) to PATH so this store can "
+            "be contributed to the cross-organisation benchmark. Aggregates only: "
+            "no prompt text, no paths, no session ids, no per-trace timestamps. "
+            "Requires a closed window (--benchmark, or both --since and --until), "
+            "and REFUSES to overwrite an existing file. The normal report still "
+            "prints; nothing is uploaded, ever."
+        ),
+    )
+    parser.add_argument(
+        "--show-share",
+        action="store_true",
+        help=(
+            "print the exact bytes --emit-share would write, to stdout, and stop. "
+            "Read this before you send anything."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.benchmark and (args.since or args.until):
@@ -2206,9 +2308,56 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
+    # Checked before the audit runs, so a refusal costs nothing but a parse.
+    if args.emit_share and Path(args.emit_share).exists():
+        print(
+            f"refusing to overwrite {args.emit_share}: a share file is an "
+            "immutable record of one corpus, not a document that gets a new "
+            "version. Its numbers can already have been cited somewhere that "
+            "cannot be updated, and overwriting it would silently rewrite them "
+            "while the path kept pointing at the same thing. A re-run over "
+            "traffic that has grown is a NEW entry — the filename carries the "
+            "corpus fingerprint precisely so both can exist. Write to a new "
+            "path, or delete this one deliberately if you know it was never "
+            "published.",
+            file=sys.stderr,
+        )
+        return 2
+
     result = audit(
         args.db, since=since, until=until, tolerance=args.peak_band_tolerance
     )
+
+    # Sections 1-4 and 3b are untouched by everything below: --show-share
+    # replaces the report with the share file's own bytes, and --emit-share
+    # leaves stdout exactly as it was and reports the write on stderr.
+    if args.emit_share or args.show_share:
+        # Imported here, not at module scope: cache_share reads this module.
+        from traceguard.routing_audit.cache_share import (
+            SCHEMA_VERSION,
+            ShareWindowError,
+            build_share,
+            render_share,
+        )
+
+        try:
+            payload = build_share(result)
+        except ShareWindowError as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        blob = render_share(payload)
+        if args.emit_share:
+            Path(args.emit_share).write_text(blob + "\n", encoding="utf-8")
+            print(
+                f"wrote {args.emit_share} (share schema v{SCHEMA_VERSION}, "
+                f"traceguard {payload['tool_version']}). Read it before you send it: "
+                "--show-share prints the same bytes.",
+                file=sys.stderr,
+            )
+        if args.show_share:
+            print(blob)
+            return 0
+
     print(format_audit(result, args.format))
     return 0
 

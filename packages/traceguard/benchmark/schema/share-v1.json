@@ -1,0 +1,248 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/lizhuojunx86/traceguard/blob/main/packages/traceguard/benchmark/schema/share-v1.json",
+  "title": "traceguard cache-audit share file, schema v1",
+  "description": "Aggregate summary of one organisation's prompt-cache behaviour, produced by `python -m traceguard.routing_audit.cache_audit --emit-share`. Contains no prompt text, no answer text, no file paths, no session ids, no per-trace timestamps and no free-form strings of any kind. Every string in a conforming document is a constant named by this schema, a model id on the tool's published-price whitelist, an ISO-8601 form of one of the two declared window bounds, the installed traceguard version, a decimal money literal, or the corpus fingerprint. This file is a SPECIFICATION, not a runtime validator — traceguard adds no jsonschema dependency to check it.\n\nSTABILITY: fields may be ADDED to v1; an existing field never changes its name, type or meaning, because a row written today must still parse in a year. A reader that meets an unknown field ignores it. A breaking change gets schema_version 2 and a new file beside this one.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "tool_version",
+    "window",
+    "corpus",
+    "data_quality",
+    "models",
+    "gap_buckets",
+    "cross_model",
+    "keep_alive"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": 1,
+      "description": "Version of this schema. Bumped only for a breaking change."
+    },
+    "tool_version": {
+      "type": "string",
+      "description": "Version of the INSTALLED traceguard distribution, read from package metadata via importlib.metadata at export time. Never a literal copied from source. A submission labelled with a version it was not produced by cannot be detected after the fact and would corrupt the corpus silently, so the export refuses to take this number from anywhere a human could edit it."
+    },
+    "window": {
+      "type": "object",
+      "description": "The closed reporting window. Both bounds are inclusive and BOTH ARE MANDATORY: the export refuses an open window outright. Every rate and every dollar figure below scales with how long you looked, so submissions measured over different windows cannot be put in the same table. These two bounds are the only time values in the file; no per-trace timestamp is ever emitted.",
+      "required": ["since", "until", "days"],
+      "additionalProperties": false,
+      "properties": {
+        "since": { "type": "string", "format": "date-time", "description": "Inclusive lower bound, ISO-8601 UTC." },
+        "until": { "type": "string", "format": "date-time", "description": "Inclusive upper bound, ISO-8601 UTC. A bare --until date closes at 23:59:59.999999." },
+        "days": { "type": "number", "description": "Window width in days, to 2dp. Convenience only; derivable from the bounds." }
+      }
+    },
+    "corpus": {
+      "type": "object",
+      "description": "How much traffic the figures rest on. Read this before any dollar amount: a conclusion from 3 expired gaps is not a conclusion.",
+      "required": ["traces_in_window", "analyzed_messages", "sessions", "gaps", "expired_gaps", "fingerprint", "fingerprint_algorithm"],
+      "additionalProperties": false,
+      "properties": {
+        "traces_in_window": { "type": "integer", "description": "Every trace in the window, including ones no section scores." },
+        "analyzed_messages": { "type": "integer", "description": "Messages carrying both a usage block and a session id — the population sections 1-3 of the report read." },
+        "sessions": { "type": "integer" },
+        "gaps": { "type": "integer", "description": "Intervals between consecutive requests inside a session." },
+        "expired_gaps": { "type": "integer", "description": "Gaps longer than the 1h TTL, i.e. the ones where a cache actually expired." },
+        "fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Identifies WHICH traces the window loaded, not just how many. A closed window is a necessary condition for two runs to be comparable and NOT a sufficient one: the window closes over timestamps, while the store keeps growing inside it, because ingest walks the transcript directory and a file that only appears later carries messages timestamped weeks ago. The reference window went from 432 expired gaps over 168 sessions to 439 over 174 in under a day without moving by a second. Two files agreeing on the window and disagreeing on this were computed over different traffic. Same traffic gives the same digest on any machine. Session ids are hashed INTO it and none comes back out: one digest covers the whole record set and no per-record digest appears anywhere in the file." },
+        "fingerprint_algorithm": { "type": "string", "description": "How `fingerprint` was computed, e.g. `sha256-v1`: sha256 over one field-separated tuple per trace loaded in the window (session id, ISO-8601 UTC timestamp, model id, prompt tokens, output tokens, source), sorted so row order does not matter and length-delimited so two different corpora cannot serialise to the same bytes. The version suffix moves only when the tuple changes shape, because a fingerprint that silently means something new is worse than no fingerprint." }
+      }
+    },
+    "data_quality": {
+      "type": "object",
+      "description": "Placed high in the document on purpose. A submission where most gaps cannot be classified is a weak submission, and that must be visible before anyone reads a dollar figure out of it. `undecidable_share` is the number to look at first.",
+      "required": [
+        "undecidable_gaps",
+        "undecidable_share",
+        "unpriced_post_gap_messages",
+        "unpriced_pre_gap_messages",
+        "unpriced_messages"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "undecidable_gaps": { "type": "integer", "description": "Expired gaps with a NULL model_id on at least one side, so whether the model changed cannot be told. Counted, never guessed." },
+        "undecidable_share": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "undecidable_gaps / expired_gaps. A submission at 0.9 here can say almost nothing about cross-model behaviour and should not be quoted as if it could." },
+        "unpriced_post_gap_messages": { "type": "integer", "description": "Post-gap messages with no list price; they contribute to neither rewrite bound." },
+        "unpriced_pre_gap_messages": { "type": "integer", "description": "Pre-gap messages with no list price; their gaps are excluded from the ping total." },
+        "unpriced_messages": { "type": "integer", "description": "Messages in section 1 with no list price. Tokens are still counted; money is never guessed." }
+      }
+    },
+    "models": {
+      "type": "array",
+      "description": "Per-model aggregates, biggest prompt volume first. MODEL IDS ARE WHITELISTED, NOT PASSED THROUGH: an arbitrary model_id is a free-form string that can name an internal gateway, a fine-tune deployment or an employer. Ids the tool publishes a price or a minimum-cacheable-prefix for go out under their own name; every other non-null id is folded into a single `(unrecognized)` row that keeps the counts and drops the name. This means a public model the tool does not yet price also lands in `(unrecognized)` — a reader cannot tell those apart, which is the intended cost of the rule.",
+      "items": {
+        "type": "object",
+        "required": [
+          "model_id", "messages", "prompt_tokens", "input_tokens", "cache_read_tokens",
+          "cache_write_5m_tokens", "cache_write_1h_tokens", "hit_rate",
+          "priced_messages", "unpriced_messages", "input_usd", "no_cache_usd"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "model_id": { "type": "string", "description": "A whitelisted public model id, `(none)` for a NULL model_id (API-error records), or `(unrecognized)` for the fold-in row." },
+          "messages": { "type": "integer" },
+          "prompt_tokens": { "type": "integer", "description": "input + cache_read + cache_write_5m + cache_write_1h. The three Messages-API input counts are mutually exclusive, so this is the real prompt size." },
+          "input_tokens": { "type": "integer", "description": "Uncached input tokens." },
+          "cache_read_tokens": { "type": "integer" },
+          "cache_write_5m_tokens": { "type": "integer" },
+          "cache_write_1h_tokens": { "type": "integer" },
+          "hit_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "Token-weighted: cache_read_tokens / prompt_tokens. Null when there are no prompt tokens — unknown, not zero." },
+          "priced_messages": { "type": "integer" },
+          "unpriced_messages": { "type": "integer" },
+          "input_usd": { "type": ["string", "null"], "description": "INPUT-side list-price cost (reads 0.1x, 5m writes 1.25x, 1h writes 2x). Output tokens are excluded because caching cannot affect them. Null when no message was priceable — money is never guessed. Adds no information beyond the token counts above, being a deterministic function of them and a public price sheet." },
+          "no_cache_usd": { "type": ["string", "null"], "description": "What the same prompts would have cost with caching off entirely: the whole prompt at 1x." },
+          "distinct_model_ids": { "type": "integer", "description": "Present only on the `(unrecognized)` row: how many distinct ids were folded into it, so a reader can tell one unrecognised model from twelve without learning which." }
+        }
+      }
+    },
+    "gap_buckets": {
+      "type": "array",
+      "description": "Idle-time distribution and the money each bucket carries. Buckets are fixed at `<5m`, `5m-1h`, `1-4h`, `>4h` with half-open upward boundaries, so every gap lands in exactly one. The two buckets inside the 1h TTL expire nothing: their money and switch fields are null, which means 'the question does not apply' and is distinct from a figure missing for want of a price.",
+      "items": {
+        "type": "object",
+        "required": ["bucket", "count", "share", "expires"],
+        "additionalProperties": false,
+        "properties": {
+          "bucket": { "enum": ["<5m", "5m-1h", "1-4h", ">4h"] },
+          "count": { "type": "integer" },
+          "share": { "type": ["number", "null"], "description": "count / total gaps." },
+          "expires": { "type": "boolean", "description": "False inside the 1h TTL. When false every field below is null." },
+          "rewrite_usd_lower": { "type": ["string", "null"], "description": "Lower bound on what this bucket's cache expiries cost in re-writes. Built by crediting each post-gap message with the median cache_creation of the same session's ordinary turns and charging only the remainder, floored at zero. A MODELLING CHOICE, not a measurement — usage does not separate the prefix a message had to re-establish from the content it was going to write anyway." },
+          "rewrite_usd_upper": { "type": ["string", "null"], "description": "Upper bound: the whole cache_creation of every post-gap message charged to the expiry. True cost is at or below this, never above." },
+          "ping_usd": { "type": ["string", "null"], "description": "What bridging only this bucket's gaps would have cost in keep-alive pings." },
+          "rewrite_unpriced_messages": { "type": ["integer", "null"] },
+          "verdict": { "enum": ["WORTH IT", "NOT WORTH IT", "UNDECIDED", null], "description": "Three-state. UNDECIDED means the ping bill landed BETWEEN the two rewrite bounds, where the sign of the answer comes from the modelling choice rather than from anything measured. A two-state verdict reports that middle region as a win." },
+          "switched": { "type": ["integer", "null"], "description": "Expired gaps in this bucket that came back on a different model_id." },
+          "same_model": { "type": ["integer", "null"] },
+          "undecidable": { "type": ["integer", "null"], "description": "Deliberately NOT in the switch_rate denominator." },
+          "switch_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "switched / (switched + same_model). Null when no gap in the bucket is decidable." }
+        }
+      }
+    },
+    "cross_model": {
+      "type": "object",
+      "description": "Whether a session came back on a different model than it left on. Caches are model-scoped, so a cross-model gap is one no keep-alive could have helped: the pings held the wrong prefix warm, and the post-gap write was a first write on a cold model rather than an expiry. Measured per gap, never assumed. This is the most distinctive axis in the corpus and the reason an optimal keep-alive cap is finite rather than infinite.",
+      "required": ["switched_gaps", "same_model_gaps", "undecidable_gaps", "switch_rate_of_decidable", "by_gap_length_decile"],
+      "additionalProperties": false,
+      "properties": {
+        "switched_gaps": { "type": "integer" },
+        "same_model_gaps": { "type": "integer" },
+        "undecidable_gaps": { "type": "integer" },
+        "switch_rate_of_decidable": { "type": ["number", "null"], "minimum": 0, "maximum": 1, "description": "Over decidable gaps only. An overall rate averaged across gap lengths hides the effect that matters — see the decile cut." },
+        "by_gap_length_decile": {
+          "type": "array",
+          "description": "The same rate cut by gap-length quantile, sorted short to long. Ten groups when there are at least ten expired gaps, fewer groups otherwise (never empty ones). Each group carries its own length bounds because a decile index is uninterpretable across organisations without them — 'the 3rd decile' is 90 minutes for one submitter and 9 hours for another.",
+          "items": {
+            "type": "object",
+            "required": ["decile", "gaps", "gap_minutes_min", "gap_minutes_max", "switched", "same_model", "undecidable", "switch_rate"],
+            "additionalProperties": false,
+            "properties": {
+              "decile": { "type": "integer", "minimum": 1, "maximum": 10 },
+              "gaps": { "type": "integer" },
+              "gap_minutes_min": { "type": "integer", "description": "Shortest gap in this group, in whole minutes." },
+              "gap_minutes_max": { "type": "integer", "description": "Longest gap in this group, in whole minutes." },
+              "switched": { "type": "integer" },
+              "same_model": { "type": "integer" },
+              "undecidable": { "type": "integer" },
+              "switch_rate": { "type": ["number", "null"], "minimum": 0, "maximum": 1 }
+            }
+          }
+        }
+      }
+    },
+    "keep_alive": {
+      "type": "object",
+      "description": "The keep-alive counterfactual: hold a cache open with a periodic no-op read, give up after some threshold of idle, and see whether the pings cost less than the re-writes they avoid. THE BAND IS THE ANSWER AND THE ARGMAX IS A FOOTNOTE — on the reference corpus the best cap leads its runner-up by less than the size of a correction the report has already had to make once, so a point estimate is not a recommendation. The field names carry that judgement: cite `recommended_cap_band`.",
+      "required": ["cadence_minutes", "grid", "recommended_cap_band", "sign_stable_band", "argmax_reference_only"],
+      "additionalProperties": false,
+      "properties": {
+        "cadence_minutes": { "type": "integer", "description": "Ping interval, currently fixed at 55 — one ping just inside the 1h TTL. The sweep holds this FIXED and does not search it, so a result is 'cap X at cadence 55m', not 'cap X'. A different cadence moves the ping-count steps and can move the answer." },
+        "grid": {
+          "type": "object",
+          "description": "The cap grid that was swept. Needed to read `censored_*` below.",
+          "required": ["min_minutes", "max_minutes", "step_minutes", "tolerance"],
+          "additionalProperties": false,
+          "properties": {
+            "min_minutes": { "type": "integer" },
+            "max_minutes": { "type": "integer" },
+            "step_minutes": { "type": "integer" },
+            "tolerance": { "type": "number", "description": "How far below the peak a cap may sit and still count as the same answer, for `recommended_cap_band`. Default 0.10." }
+          }
+        },
+        "recommended_cap_band": {
+          "$ref": "#/$defs/band",
+          "description": "THE CITABLE FIELD. The run of caps around the argmax whose net stays within `grid.tolerance` of the maximum — the range where picking a different cap costs almost nothing. Null when no cap on the grid turns a profit, in which case there is no recommendation to make and the argmax is only the least-bad option."
+        },
+        "sign_stable_band": {
+          "$ref": "#/$defs/band",
+          "description": "A weaker and wider claim: where the net merely stays POSITIVE. This says capping is the right shape of policy anywhere in the range. It does NOT say the caps in it are interchangeable — on the reference corpus the net inside it spans 8x. Do not use this band to argue a cap does not matter."
+        },
+        "sign_stable_band_lower_bound": {
+          "$ref": "#/$defs/band",
+          "description": "The same positive range computed against the pessimistic rewrite bound: the part of the curve that survives the less favourable reading. Null when no cap profits under that bound, which means every positive net above depends on the upper bound's benefit of the doubt."
+        },
+        "argmax_reference_only": {
+          "$ref": "#/$defs/cap_point",
+          "description": "The single best cap. Named to discourage quoting: reference, not citation. Present so the band can be checked, not so it can be reported."
+        },
+        "argmax_sits_on_ping_step": {
+          "type": "boolean",
+          "description": "True when the argmax is the last cap before the required ping count increments — i.e. part of why it wins is the arithmetic of the cadence dividing into it, not the gap distribution alone."
+        },
+        "uncapped_policy": {
+          "$ref": "#/$defs/cap_point",
+          "description": "The policy that never gives up, costed on equal terms. It competes in the argmax rather than sitting in a footnote; if never giving up were best, the sweep would say so."
+        }
+      }
+    }
+  },
+  "$defs": {
+    "band": {
+      "type": ["object", "null"],
+      "required": ["low_minutes", "high_minutes", "width_minutes", "grid_points", "net_usd_min", "net_usd_max", "censored_low", "censored_high"],
+      "additionalProperties": false,
+      "properties": {
+        "low_minutes": { "type": "integer" },
+        "high_minutes": { "type": "integer" },
+        "width_minutes": { "type": "integer", "description": "0 means the band is a single grid point — the optimum is a spike and the exact cap does matter." },
+        "grid_points": { "type": "integer" },
+        "net_usd_min": { "type": ["string", "null"], "description": "Worst net inside the band. The spread between this and net_usd_max is what kills 'any cap in here will do'." },
+        "net_usd_max": { "type": ["string", "null"] },
+        "censored_low": { "type": "boolean", "description": "The band reaches the bottom edge of the swept grid, so its true extent may continue below." },
+        "censored_high": { "type": "boolean", "description": "The band reaches the top edge of the grid. Censored means 'the run reaches the edge of what was swept', NOT 'nobody looked' — a peak beyond the grid is unsupported rather than excluded." }
+      }
+    },
+    "cap_point": {
+      "type": ["object", "null"],
+      "required": ["cap_minutes", "uncapped", "bridged", "abandoned", "pings", "ping_usd", "wasted_pings", "wasted_usd", "rewrite_avoided_usd_lower", "rewrite_avoided_usd_upper", "net_usd", "verdict"],
+      "additionalProperties": false,
+      "properties": {
+        "cap_minutes": { "type": ["integer", "null"], "description": "Give-up threshold in minutes; null for the uncapped policy." },
+        "uncapped": { "type": "boolean" },
+        "bridged": { "type": "integer", "description": "Expired gaps this policy holds the cache across." },
+        "abandoned": { "type": "integer", "description": "Gaps that outlive the cap. The policy still pays for the pings it burned on them before giving up, which is what makes it runnable without foreknowledge of how long a gap will be." },
+        "pings": { "type": "integer" },
+        "ping_usd": { "type": ["string", "null"], "description": "Billed as a 0.1x cache read of the whole prompt as it stood BEFORE the gap. This freezes prompt volume, and a real session's prompt grows — an approximation that tilts every figure here pro-ping, which makes a refusal solid and an endorsement only as wide as its margin." },
+        "wasted_pings": { "type": "integer", "description": "Pings paid for on gaps the session came back from on a different model. They bought nothing; they are still charged." },
+        "wasted_usd": { "type": ["string", "null"] },
+        "rewrite_avoided_usd_lower": { "type": ["string", "null"], "description": "Net of cross-model gaps: a gap that changed model banks nothing." },
+        "rewrite_avoided_usd_upper": { "type": ["string", "null"] },
+        "net_usd": {
+          "type": "object",
+          "description": "Net benefit at BOTH ENDS of the undecidable-gap assumption, never as one number. Neither end is the truth; the truth is somewhere between two runs and this file cannot say where. It is a range, not an answer with an error bar.",
+          "required": ["measured", "pessimistic", "rewrite_lower_bound"],
+          "additionalProperties": false,
+          "properties": {
+            "measured": { "type": ["string", "null"], "description": "OPTIMISTIC end: only gaps PROVEN cross-model are deducted, so undecidable gaps are left in the savings." },
+            "pessimistic": { "type": ["string", "null"], "description": "Every undecidable gap treated as cross-model too. Always at or below `measured`." },
+            "rewrite_lower_bound": { "type": ["string", "null"], "description": "The measured run costed against the pessimistic end of the rewrite bracket." }
+          }
+        },
+        "verdict": { "enum": ["WORTH IT", "NOT WORTH IT", "UNDECIDED", null] }
+      }
+    }
+  }
+}

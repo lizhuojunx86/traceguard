@@ -311,6 +311,67 @@ The report closes with one copyable line:
 Claude Code caching already saves us 84% ($12,447.41 vs $77,549.01 list). Checked with: python -m traceguard.routing_audit.cache_audit
 ```
 
+### Sharing a result
+
+`--emit-share PATH` writes an aggregate JSON summary (schema v1) so one store
+can be compared against another; `--show-share` prints the exact bytes that
+file would contain and stops, so you can read all of it before deciding to send
+anything. The tool makes no network calls and has no upload path.
+
+```bash
+python -m traceguard.routing_audit.cache_audit \
+  --db sqlite:///traces_routing_audit.db --benchmark --show-share
+```
+
+The file carries per-model hit rates and token volumes, gap-bucket counts and
+per-bucket cost, the cross-model switch rate (overall, per bucket, and by
+gap-length decile), the recommended cap band, both ends of the net-benefit
+range, and the undecidable-gap count. It carries no prompt text, no paths, no
+session ids, no per-trace timestamps and no free-form strings. The rule is
+stated as an invariant rather than a list: every string in the payload is a
+schema constant, a model id on the published-price whitelist, one of the two
+window bounds, the installed version, a decimal money literal, or the corpus
+fingerprint. `model_id` is
+whitelisted rather than passed through, since an arbitrary one can name an
+internal gateway or an employer; the rest folds into a single `(unrecognized)`
+row that keeps the counts and drops the name.
+
+That invariant is tested by poisoning a store with sentinel strings in prompts,
+file paths, session ids, model names and keys nobody planned for, then
+asserting none survive the export —
+`test_emit_share_leaks_no_sentinel_from_prompts_paths_sessions_or_model_names`
+in [`tests/test_cache_share.py`](tests/test_cache_share.py). Two further tests
+exist only to prove that one can still fail: one drops the model whitelist and
+requires the leak to reappear, one adds an unfiltered field and requires the
+scan to catch it.
+
+An export needs a **closed window** and refuses without one. Every rate and
+dollar figure scales with how long you looked, so a corpus whose members each
+measured "all time" is not comparable with itself.
+
+A closed window is necessary and not sufficient, which is why the file also
+carries `corpus.fingerprint`. The window closes over timestamps; the store
+keeps growing inside it, because `ingest` walks `~/.claude/projects` and a
+transcript that only turns up later carries messages timestamped weeks ago.
+This repo's own `--benchmark` window went from 432 expired gaps over 168
+sessions to 439 over 174 in under a day without moving by a second, and the
+argmax net went with it. The fingerprint is a sha256 over one tuple per trace
+the window loaded, sorted and length-delimited, so two files agreeing on the
+window and disagreeing on the digest were computed over different traffic.
+Compare it before comparing anything else.
+
+`tool_version` comes from installed package metadata, never a literal, so a
+submission cannot claim a version it was not produced by.
+
+`--emit-share` refuses to overwrite an existing file and exits 2. Corpus
+entries are named `NNN-<source>-<first 8 of corpus.fingerprint>.json` and are
+immutable: a re-run over traffic that has grown is a new entry beside the old
+one, because these files get cited by path and a path whose contents change
+underneath a citation is not evidence.
+
+Submission criteria and the corpus itself are in
+[`benchmark/`](benchmark/README.md), which currently holds one file and says so.
+
 ## Contract
 
 The binding interface contract — table schemas, SDK signatures, the four

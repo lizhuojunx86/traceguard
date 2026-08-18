@@ -1,0 +1,386 @@
+{
+  "schema_version": 1,
+  "tool_version": "1.3.0",
+  "window": {
+    "since": "2026-05-30T00:00:00+00:00",
+    "until": "2026-08-16T23:59:59.999999+00:00",
+    "days": 79.0
+  },
+  "corpus": {
+    "traces_in_window": 60677,
+    "analyzed_messages": 60661,
+    "sessions": 174,
+    "gaps": 60487,
+    "expired_gaps": 439,
+    "fingerprint": "b07cc061b6a98a9206032b9b7cc63e2999118655d58a22669b14201c957f99ea",
+    "fingerprint_algorithm": "sha256-v1"
+  },
+  "data_quality": {
+    "undecidable_gaps": 56,
+    "undecidable_share": 0.127563,
+    "unpriced_post_gap_messages": 14,
+    "unpriced_pre_gap_messages": 43,
+    "unpriced_messages": 661
+  },
+  "models": [
+    {
+      "model_id": "claude-opus-4-8",
+      "messages": 23782,
+      "prompt_tokens": 5537748445,
+      "input_tokens": 5112549,
+      "cache_read_tokens": 5320048032,
+      "cache_write_5m_tokens": 56584644,
+      "cache_write_1h_tokens": 156003220,
+      "hit_rate": 0.960688,
+      "priced_messages": 23782,
+      "unpriced_messages": 0,
+      "input_usd": "4618.47",
+      "no_cache_usd": "27701.15"
+    },
+    {
+      "model_id": "claude-fable-5",
+      "messages": 15958,
+      "prompt_tokens": 3744394764,
+      "input_tokens": 2542906,
+      "cache_read_tokens": 3606117884,
+      "cache_write_5m_tokens": 38509783,
+      "cache_write_1h_tokens": 97224191,
+      "hit_rate": 0.963071,
+      "priced_messages": 15958,
+      "unpriced_messages": 0,
+      "input_usd": "6057.40",
+      "no_cache_usd": "37443.95"
+    },
+    {
+      "model_id": "claude-opus-5",
+      "messages": 7466,
+      "prompt_tokens": 2016973834,
+      "input_tokens": 54547,
+      "cache_read_tokens": 1970466563,
+      "cache_write_5m_tokens": 12348625,
+      "cache_write_1h_tokens": 34104099,
+      "hit_rate": 0.976942,
+      "priced_messages": 7466,
+      "unpriced_messages": 0,
+      "input_usd": "1403.73",
+      "no_cache_usd": "10084.87"
+    },
+    {
+      "model_id": "claude-sonnet-5",
+      "messages": 11157,
+      "prompt_tokens": 1327315994,
+      "input_tokens": 808272,
+      "cache_read_tokens": 1262458018,
+      "cache_write_5m_tokens": 57958474,
+      "cache_write_1h_tokens": 6091230,
+      "hit_rate": 0.951136,
+      "priced_messages": 11157,
+      "unpriced_messages": 0,
+      "input_usd": "423.37",
+      "no_cache_usd": "2654.63"
+    },
+    {
+      "model_id": "claude-haiku-4-5-20251001",
+      "messages": 1573,
+      "prompt_tokens": 57312161,
+      "input_tokens": 92185,
+      "cache_read_tokens": 53792597,
+      "cache_write_5m_tokens": 3427379,
+      "cache_write_1h_tokens": 0,
+      "hit_rate": 0.93859,
+      "priced_messages": 1573,
+      "unpriced_messages": 0,
+      "input_usd": "9.76",
+      "no_cache_usd": "57.31"
+    },
+    {
+      "model_id": "claude-opus-4-7",
+      "messages": 64,
+      "prompt_tokens": 11045966,
+      "input_tokens": 84,
+      "cache_read_tokens": 10675229,
+      "cache_write_5m_tokens": 0,
+      "cache_write_1h_tokens": 370653,
+      "hit_rate": 0.966437,
+      "priced_messages": 64,
+      "unpriced_messages": 0,
+      "input_usd": "9.04",
+      "no_cache_usd": "55.23"
+    },
+    {
+      "model_id": "(unrecognized)",
+      "messages": 2,
+      "prompt_tokens": 42410,
+      "input_tokens": 20,
+      "cache_read_tokens": 0,
+      "cache_write_5m_tokens": 42390,
+      "cache_write_1h_tokens": 0,
+      "hit_rate": 0.0,
+      "priced_messages": 0,
+      "unpriced_messages": 2,
+      "input_usd": null,
+      "no_cache_usd": null,
+      "distinct_model_ids": 1
+    },
+    {
+      "model_id": "(none)",
+      "messages": 659,
+      "prompt_tokens": 0,
+      "input_tokens": 0,
+      "cache_read_tokens": 0,
+      "cache_write_5m_tokens": 0,
+      "cache_write_1h_tokens": 0,
+      "hit_rate": null,
+      "priced_messages": 0,
+      "unpriced_messages": 659,
+      "input_usd": null,
+      "no_cache_usd": null
+    }
+  ],
+  "gap_buckets": [
+    {
+      "bucket": "<5m",
+      "count": 58789,
+      "share": 0.971928,
+      "expires": false,
+      "rewrite_usd_lower": null,
+      "rewrite_usd_upper": null,
+      "ping_usd": null,
+      "rewrite_unpriced_messages": null,
+      "verdict": null,
+      "switched": null,
+      "same_model": null,
+      "undecidable": null,
+      "switch_rate": null
+    },
+    {
+      "bucket": "5m-1h",
+      "count": 1259,
+      "share": 0.020814,
+      "expires": false,
+      "rewrite_usd_lower": null,
+      "rewrite_usd_upper": null,
+      "ping_usd": null,
+      "rewrite_unpriced_messages": null,
+      "verdict": null,
+      "switched": null,
+      "same_model": null,
+      "undecidable": null,
+      "switch_rate": null
+    },
+    {
+      "bucket": "1-4h",
+      "count": 190,
+      "share": 0.003141,
+      "expires": true,
+      "rewrite_usd_lower": "896.02",
+      "rewrite_usd_upper": "900.03",
+      "ping_usd": "82.75",
+      "rewrite_unpriced_messages": 1,
+      "verdict": "WORTH IT",
+      "switched": 3,
+      "same_model": 164,
+      "undecidable": 23,
+      "switch_rate": 0.017964
+    },
+    {
+      "bucket": ">4h",
+      "count": 249,
+      "share": 0.004117,
+      "expires": true,
+      "rewrite_usd_lower": "1064.73",
+      "rewrite_usd_upper": "1069.50",
+      "ping_usd": "1991.86",
+      "rewrite_unpriced_messages": 13,
+      "verdict": "NOT WORTH IT",
+      "switched": 15,
+      "same_model": 201,
+      "undecidable": 33,
+      "switch_rate": 0.069444
+    }
+  ],
+  "cross_model": {
+    "switched_gaps": 18,
+    "same_model_gaps": 365,
+    "undecidable_gaps": 56,
+    "switch_rate_of_decidable": 0.046997,
+    "by_gap_length_decile": [
+      {
+        "decile": 1,
+        "gaps": 43,
+        "gap_minutes_min": 60,
+        "gap_minutes_max": 72,
+        "switched": 0,
+        "same_model": 42,
+        "undecidable": 1,
+        "switch_rate": 0.0
+      },
+      {
+        "decile": 2,
+        "gaps": 44,
+        "gap_minutes_min": 72,
+        "gap_minutes_max": 95,
+        "switched": 2,
+        "same_model": 31,
+        "undecidable": 11,
+        "switch_rate": 0.060606
+      },
+      {
+        "decile": 3,
+        "gaps": 44,
+        "gap_minutes_min": 95,
+        "gap_minutes_max": 134,
+        "switched": 1,
+        "same_model": 40,
+        "undecidable": 3,
+        "switch_rate": 0.02439
+      },
+      {
+        "decile": 4,
+        "gaps": 44,
+        "gap_minutes_min": 134,
+        "gap_minutes_max": 217,
+        "switched": 0,
+        "same_model": 40,
+        "undecidable": 4,
+        "switch_rate": 0.0
+      },
+      {
+        "decile": 5,
+        "gaps": 44,
+        "gap_minutes_min": 217,
+        "gap_minutes_max": 278,
+        "switched": 1,
+        "same_model": 33,
+        "undecidable": 10,
+        "switch_rate": 0.029412
+      },
+      {
+        "decile": 6,
+        "gaps": 44,
+        "gap_minutes_min": 278,
+        "gap_minutes_max": 462,
+        "switched": 1,
+        "same_model": 35,
+        "undecidable": 8,
+        "switch_rate": 0.027778
+      },
+      {
+        "decile": 7,
+        "gaps": 44,
+        "gap_minutes_min": 462,
+        "gap_minutes_max": 580,
+        "switched": 0,
+        "same_model": 38,
+        "undecidable": 6,
+        "switch_rate": 0.0
+      },
+      {
+        "decile": 8,
+        "gaps": 44,
+        "gap_minutes_min": 587,
+        "gap_minutes_max": 884,
+        "switched": 2,
+        "same_model": 35,
+        "undecidable": 7,
+        "switch_rate": 0.054054
+      },
+      {
+        "decile": 9,
+        "gaps": 44,
+        "gap_minutes_min": 892,
+        "gap_minutes_max": 1437,
+        "switched": 2,
+        "same_model": 41,
+        "undecidable": 1,
+        "switch_rate": 0.046512
+      },
+      {
+        "decile": 10,
+        "gaps": 44,
+        "gap_minutes_min": 1438,
+        "gap_minutes_max": 33310,
+        "switched": 9,
+        "same_model": 30,
+        "undecidable": 5,
+        "switch_rate": 0.230769
+      }
+    ]
+  },
+  "keep_alive": {
+    "cadence_minutes": 55,
+    "grid": {
+      "min_minutes": 60,
+      "max_minutes": 720,
+      "step_minutes": 15,
+      "tolerance": 0.1
+    },
+    "recommended_cap_band": {
+      "low_minutes": 540,
+      "high_minutes": 720,
+      "width_minutes": 180,
+      "grid_points": 13,
+      "net_usd_min": "740.66",
+      "net_usd_max": "806.82",
+      "censored_low": false,
+      "censored_high": true
+    },
+    "sign_stable_band": {
+      "low_minutes": 75,
+      "high_minutes": 720,
+      "width_minutes": 645,
+      "grid_points": 44,
+      "net_usd_min": "100.72",
+      "net_usd_max": "806.82",
+      "censored_low": false,
+      "censored_high": true
+    },
+    "sign_stable_band_lower_bound": {
+      "low_minutes": 75,
+      "high_minutes": 720,
+      "width_minutes": 645,
+      "grid_points": 44,
+      "net_usd_min": "100.72",
+      "net_usd_max": "806.82",
+      "censored_low": false,
+      "censored_high": true
+    },
+    "argmax_reference_only": {
+      "cap_minutes": 600,
+      "uncapped": false,
+      "bridged": 311,
+      "abandoned": 128,
+      "pings": 2246,
+      "ping_usd": "608.20",
+      "wasted_pings": 143,
+      "wasted_usd": "56.44",
+      "rewrite_avoided_usd_lower": "1408.57",
+      "rewrite_avoided_usd_upper": "1415.02",
+      "net_usd": {
+        "measured": "806.82",
+        "pessimistic": "650.53",
+        "rewrite_lower_bound": "800.36"
+      },
+      "verdict": "WORTH IT"
+    },
+    "argmax_sits_on_ping_step": true,
+    "uncapped_policy": {
+      "cap_minutes": null,
+      "uncapped": true,
+      "bridged": 439,
+      "abandoned": 0,
+      "pings": 6976,
+      "ping_usd": "2074.61",
+      "wasted_pings": 992,
+      "wasted_usd": "353.31",
+      "rewrite_avoided_usd_lower": "1875.98",
+      "rewrite_avoided_usd_upper": "1884.39",
+      "net_usd": {
+        "measured": "-190.22",
+        "pessimistic": "-362.22",
+        "rewrite_lower_bound": "-198.63"
+      },
+      "verdict": "NOT WORTH IT"
+    }
+  }
+}
