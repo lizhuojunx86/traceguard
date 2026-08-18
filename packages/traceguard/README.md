@@ -330,7 +330,8 @@ range, and the undecidable-gap count. It carries no prompt text, no paths, no
 session ids, no per-trace timestamps and no free-form strings. The rule is
 stated as an invariant rather than a list: every string in the payload is a
 schema constant, a model id on the published-price whitelist, one of the two
-window bounds, the installed version, or a decimal money literal. `model_id` is
+window bounds, the installed version, a decimal money literal, or the corpus
+fingerprint. `model_id` is
 whitelisted rather than passed through, since an arbitrary one can name an
 internal gateway or an employer; the rest folds into a single `(unrecognized)`
 row that keeps the counts and drops the name.
@@ -346,9 +347,21 @@ scan to catch it.
 
 An export needs a **closed window** and refuses without one. Every rate and
 dollar figure scales with how long you looked, so a corpus whose members each
-measured "all time" is not comparable with itself. `tool_version` comes from
-installed package metadata, never a literal, so a submission cannot claim a
-version it was not produced by.
+measured "all time" is not comparable with itself.
+
+A closed window is necessary and not sufficient, which is why the file also
+carries `corpus.fingerprint`. The window closes over timestamps; the store
+keeps growing inside it, because `ingest` walks `~/.claude/projects` and a
+transcript that only turns up later carries messages timestamped weeks ago.
+This repo's own `--benchmark` window went from 432 expired gaps over 168
+sessions to 439 over 174 in under a day without moving by a second, and the
+argmax net went with it. The fingerprint is a sha256 over one tuple per trace
+the window loaded, sorted and length-delimited, so two files agreeing on the
+window and disagreeing on the digest were computed over different traffic.
+Compare it before comparing anything else.
+
+`tool_version` comes from installed package metadata, never a literal, so a
+submission cannot claim a version it was not produced by.
 
 Submission criteria and the corpus itself are in
 [`benchmark/`](benchmark/README.md), which currently holds one file and says so.

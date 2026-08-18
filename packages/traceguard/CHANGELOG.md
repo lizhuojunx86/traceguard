@@ -53,6 +53,21 @@ makes no network calls and has no upload path.
   an optimal keep-alive cap is finite rather than infinite. A single overall
   rate averages that away.
 
+- **`corpus.fingerprint`, because a closed window is necessary and not
+  sufficient.** The window closes over timestamps; the store keeps growing
+  inside it, since `ingest` walks `~/.claude/projects` and a transcript that
+  only appears later carries messages timestamped weeks ago. The reference
+  `--benchmark` window went from 432 expired gaps over 168 sessions to 439 over
+  174 in under a day without moving by a second, and the argmax net moved from
+  $811.30 to $806.82 with it. The fingerprint is a sha256 over one tuple per
+  trace the window loaded (session, timestamp, model, prompt and output volume,
+  source), sorted so row order does not matter and length-delimited so two
+  corpora cannot serialise to the same bytes. Session ids are hashed into it and
+  none comes back out: one digest covers the whole set and no per-record digest
+  is emitted anywhere. The first version of `benchmark/README.md` told people to
+  pick a window and keep it, full stop; that advice was a necessary condition
+  sold as a sufficient one and has been corrected in place.
+
 **`benchmark/`** — schema specification, submission criteria, and the first
 entry. It holds one file and says plainly that under 20 submissions any
 cross-organisation number in it is an anecdote.

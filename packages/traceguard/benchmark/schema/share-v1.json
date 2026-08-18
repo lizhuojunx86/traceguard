@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/lizhuojunx86/traceguard/blob/main/packages/traceguard/benchmark/schema/share-v1.json",
   "title": "traceguard cache-audit share file, schema v1",
-  "description": "Aggregate summary of one organisation's prompt-cache behaviour, produced by `python -m traceguard.routing_audit.cache_audit --emit-share`. Contains no prompt text, no answer text, no file paths, no session ids, no per-trace timestamps and no free-form strings of any kind. Every string in a conforming document is a constant named by this schema, a model id on the tool's published-price whitelist, an ISO-8601 form of one of the two declared window bounds, the installed traceguard version, or a decimal money literal. This file is a SPECIFICATION, not a runtime validator — traceguard adds no jsonschema dependency to check it.\n\nSTABILITY: fields may be ADDED to v1; an existing field never changes its name, type or meaning, because a row written today must still parse in a year. A reader that meets an unknown field ignores it. A breaking change gets schema_version 2 and a new file beside this one.",
+  "description": "Aggregate summary of one organisation's prompt-cache behaviour, produced by `python -m traceguard.routing_audit.cache_audit --emit-share`. Contains no prompt text, no answer text, no file paths, no session ids, no per-trace timestamps and no free-form strings of any kind. Every string in a conforming document is a constant named by this schema, a model id on the tool's published-price whitelist, an ISO-8601 form of one of the two declared window bounds, the installed traceguard version, a decimal money literal, or the corpus fingerprint. This file is a SPECIFICATION, not a runtime validator — traceguard adds no jsonschema dependency to check it.\n\nSTABILITY: fields may be ADDED to v1; an existing field never changes its name, type or meaning, because a row written today must still parse in a year. A reader that meets an unknown field ignores it. A breaking change gets schema_version 2 and a new file beside this one.",
   "type": "object",
   "required": [
     "schema_version",
@@ -39,14 +39,16 @@
     "corpus": {
       "type": "object",
       "description": "How much traffic the figures rest on. Read this before any dollar amount: a conclusion from 3 expired gaps is not a conclusion.",
-      "required": ["traces_in_window", "analyzed_messages", "sessions", "gaps", "expired_gaps"],
+      "required": ["traces_in_window", "analyzed_messages", "sessions", "gaps", "expired_gaps", "fingerprint", "fingerprint_algorithm"],
       "additionalProperties": false,
       "properties": {
         "traces_in_window": { "type": "integer", "description": "Every trace in the window, including ones no section scores." },
         "analyzed_messages": { "type": "integer", "description": "Messages carrying both a usage block and a session id — the population sections 1-3 of the report read." },
         "sessions": { "type": "integer" },
         "gaps": { "type": "integer", "description": "Intervals between consecutive requests inside a session." },
-        "expired_gaps": { "type": "integer", "description": "Gaps longer than the 1h TTL, i.e. the ones where a cache actually expired." }
+        "expired_gaps": { "type": "integer", "description": "Gaps longer than the 1h TTL, i.e. the ones where a cache actually expired." },
+        "fingerprint": { "type": "string", "pattern": "^[0-9a-f]{64}$", "description": "Identifies WHICH traces the window loaded, not just how many. A closed window is a necessary condition for two runs to be comparable and NOT a sufficient one: the window closes over timestamps, while the store keeps growing inside it, because ingest walks the transcript directory and a file that only appears later carries messages timestamped weeks ago. The reference window went from 432 expired gaps over 168 sessions to 439 over 174 in under a day without moving by a second. Two files agreeing on the window and disagreeing on this were computed over different traffic. Same traffic gives the same digest on any machine. Session ids are hashed INTO it and none comes back out: one digest covers the whole record set and no per-record digest appears anywhere in the file." },
+        "fingerprint_algorithm": { "type": "string", "description": "How `fingerprint` was computed, e.g. `sha256-v1`: sha256 over one field-separated tuple per trace loaded in the window (session id, ISO-8601 UTC timestamp, model id, prompt tokens, output tokens, source), sorted so row order does not matter and length-delimited so two different corpora cannot serialise to the same bytes. The version suffix moves only when the tuple changes shape, because a fingerprint that silently means something new is worse than no fingerprint." }
       }
     },
     "data_quality": {

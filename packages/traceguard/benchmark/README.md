@@ -54,14 +54,15 @@ yourself, to whoever you decide, or not at all.
 
 Aggregates only: per-model token counts and hit rates, gap-bucket counts and
 costs, the cross-model switch rate cut by gap length, the keep-alive cap band,
-and both ends of the net-benefit range.
+both ends of the net-benefit range, and a fingerprint identifying which traces
+the window loaded.
 
 Never: prompt text, answer text, file paths, session ids, per-trace timestamps,
 project or component names, error messages, or free-form strings of any kind.
-The export is built so that every string in it is one of five things — a
-constant from the schema, a model id on the published-price whitelist, one of
-the two window bounds, the installed traceguard version, or a decimal money
-literal. There is a test that fills a store with sentinel strings in every one
+The export is built so that every string in it is one of six things: a constant
+from the schema, a model id on the published-price whitelist, one of the two
+window bounds, the installed traceguard version, a decimal money literal, or
+the corpus fingerprint. There is a test that fills a store with sentinel strings in every one
 of those places and asserts none of them survive:
 `test_emit_share_leaks_no_sentinel_from_prompts_paths_sessions_or_model_names`
 in `tests/test_cache_share.py`. Two more tests exist only to prove that one can
@@ -77,22 +78,57 @@ going to make it smarter.
 Dollar figures are list price computed from the token counts in the same file.
 They tell a reader nothing the token counts did not already tell them.
 
-## The window must be closed
+## The window must be closed, and that is not enough
 
-This is the one hard requirement, and the export refuses rather than warns.
-
-Both `--since` and `--until`, or `--benchmark` for the frozen window. An
-open-ended window is rejected with an error.
+Closing the window is the one hard requirement and the export refuses rather
+than warns. Both `--since` and `--until`, or `--benchmark` for the frozen
+window. An open-ended window is rejected with an error.
 
 The reason is that every rate and every dollar amount in the file scales with
 how long you looked. Expired gaps per session, switch rate, ping cost, net
-benefit — all of them. A directory where each submission measured "all time"
-over its own history is not comparable with itself, and no amount of
-normalisation afterwards fixes it, because "all time" does not record how long
-that was. Two runs of my own store minutes apart already disagreed: the
-expired-gap count moved 429 → 432 during one afternoon of editing.
+benefit, all of them. A directory where each submission measured "all time" is
+not comparable with itself, and no normalisation afterwards fixes it, because
+"all time" does not record how long that was.
 
-Pick a window, state it, keep it.
+**An earlier version of this file stopped there and told you to pick a window,
+state it, and keep it. That was a necessary condition sold as a sufficient
+one, and it is wrong.** The window closes over timestamps. What actually gets
+read is the store, and the store keeps growing inside a window that never
+moves. `ingest` walks `~/.claude/projects`; a transcript file that only appears
+later, or a session that gets resumed and rewritten, or a machine whose
+transcripts you sync in next month, all carry messages timestamped well inside
+a window you froze weeks ago. Re-running `--benchmark` then produces different
+numbers off an identical command line.
+
+That is not hypothetical and it is not small. On this repo's own reference
+window, `2026-05-30 .. 2026-08-16`, unchanged to the second:
+
+| | 02eeaa3, 2026-08-17 | 2026-08-18, under 24h later |
+|---|---|---|
+| sessions | 168 | 174 |
+| expired gaps | 432 | 439 |
+| argmax net (measured) | $811.30 | $806.82 |
+
+Nothing about the window changed. The corpus did. Every number downstream of
+the gap count moved with it, including the one the report puts in a box and
+calls a recommendation.
+
+So the window is stated **and** the corpus is identified. `corpus.fingerprint`
+is a sha256 over one tuple per trace loaded in the window — session, timestamp,
+model, prompt volume, output volume, source — sorted and length-delimited. Same
+traffic gives the same digest on any machine; one more trace inside the window
+gives a different one. Session ids go into the digest and none comes back out:
+it is a single hash over the whole set, and there is no per-record digest
+anywhere in the file to line one up against.
+
+**Before you compare two submissions, compare `corpus.fingerprint` and the
+`corpus.*` counts.** Two files with the same window and different fingerprints
+were computed over different traffic and are not two measurements of one thing.
+Two files from the same submitter with the same fingerprint are the same run,
+so quoting both is double-counting.
+
+The honest version of the old advice: pick a window, state it, keep it, and
+publish the fingerprint so nobody has to take the first three on trust.
 
 ## Inclusion criteria
 

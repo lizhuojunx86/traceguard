@@ -29,6 +29,7 @@ from traceguard.routing_audit.cache_audit import (
     BENCHMARK_SINCE,
     BENCHMARK_UNTIL,
     CC_SOURCE,
+    FINGERPRINT_ALGORITHM,
     audit,
     main as cache_audit_main,
     parse_bound,
@@ -249,6 +250,7 @@ def test_share_contains_only_constant_public_or_window_strings(poisoned):
         | {payload["window"]["since"], payload["window"]["until"]}
         | {"WORTH IT", "NOT WORTH IT", "UNDECIDED"}
         | set(_BUCKET_NAMES)
+        | {payload["corpus"]["fingerprint"], FINGERPRINT_ALGORITHM}
     )
     strays = [
         s
@@ -499,6 +501,97 @@ def test_share_never_carries_the_db_url_or_any_path(poisoned):
     assert poisoned.url not in blob
     assert ".db" not in blob
     assert "sqlite" not in blob
+
+
+# ── 5b. the corpus fingerprint ──────────────────────────────────────────────
+#
+# A closed window is necessary and not sufficient: the store grows inside a
+# window that never moves, because ingest keeps finding transcript files whose
+# messages are timestamped inside it. These pin the property that lets two
+# submissions be told apart anyway.
+
+
+def _fingerprint(store, **kwargs) -> str:
+    return build_share(store.audit(**kwargs))["corpus"]["fingerprint"]
+
+
+def test_fingerprint_is_stable_across_two_runs_of_the_same_corpus(poisoned):
+    """Same store, same window, twice — byte-identical digest or it is useless."""
+    assert _fingerprint(poisoned) == _fingerprint(poisoned)
+
+
+def test_fingerprint_is_a_sha256_hex_digest(poisoned):
+    payload = build_share(poisoned.audit())
+    digest = payload["corpus"]["fingerprint"]
+    assert len(digest) == 64
+    assert set(digest) <= set("0123456789abcdef")
+    assert payload["corpus"]["fingerprint_algorithm"] == FINGERPRINT_ALGORITHM
+
+
+def test_fingerprint_changes_when_a_trace_lands_inside_the_window(poisoned):
+    """The whole point: a window that did not move cannot vouch for the corpus.
+
+    This is the case that produced the flaw — 432 expired gaps over 168
+    sessions became 439 over 174 in under a day on an unchanged --benchmark
+    window, because ingest found transcripts it had not seen before.
+    """
+    before = _fingerprint(poisoned)
+    poisoned.add(
+        model=OPUS,
+        ts=T0 + timedelta(days=3, hours=7),  # comfortably inside the window
+        session_id=f"{SENTINEL}_late_arrival",
+        usage=_poisoned_usage(),
+    )
+    after = _fingerprint(poisoned)
+
+    assert after != before, (
+        "a trace appeared inside the frozen window and the fingerprint did not "
+        "move — it cannot distinguish two corpora, which is its only job"
+    )
+
+
+def test_fingerprint_ignores_a_trace_outside_the_window(poisoned):
+    """It identifies what the window loaded, not what the store happens to hold."""
+    before = _fingerprint(poisoned)
+    poisoned.add(
+        model=OPUS,
+        ts=WINDOW_UNTIL + timedelta(days=9),
+        session_id=f"{SENTINEL}_out_of_window",
+        usage=_poisoned_usage(),
+    )
+    assert _fingerprint(poisoned) == before
+
+
+def test_fingerprint_covers_traffic_no_section_scores(poisoned):
+    """traces_in_window counts direct rows, so the fingerprint must see them too.
+
+    A digest over only the analysed subset would call two corpora identical
+    while a field in the same file disagreed.
+    """
+    before = _fingerprint(poisoned)
+    poisoned.add(
+        model=OPUS,
+        ts=T0 + timedelta(days=4, hours=5),
+        session_id=f"{SENTINEL}_direct_extra",
+        usage=_poisoned_usage(),
+        source=f"{SENTINEL}_some_other_harness",
+    )
+    assert _fingerprint(poisoned) != before
+
+
+def test_fingerprint_leaks_no_session_id(poisoned):
+    """Session ids go in; nothing recoverable comes out."""
+    payload = build_share(poisoned.audit())
+    assert find_sentinels(payload) == []
+    assert SENTINEL not in payload["corpus"]["fingerprint"]
+
+
+def test_fingerprint_does_not_depend_on_row_order(poisoned):
+    """Sorted before hashing, so a different scan order is not a different corpus."""
+    from traceguard.routing_audit.cache_audit import corpus_fingerprint, load_records
+
+    records = load_records(poisoned.url, since=WINDOW_SINCE, until=WINDOW_UNTIL)
+    assert corpus_fingerprint(records) == corpus_fingerprint(list(reversed(records)))
 
 
 def test_schema_version_is_pinned(poisoned):

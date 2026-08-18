@@ -18,7 +18,10 @@ invariant rather than as a list of things that were remembered:
       (c) an ISO-8601 form of one of the two declared window bounds,
       (d) the installed distribution version,
       (e) a decimal money literal (see below), which is a number wearing a
-          string's clothes rather than text.
+          string's clothes rather than text,
+      (f) the corpus fingerprint, a sha256 hex digest over the whole record set
+          (see :func:`cache_audit.corpus_fingerprint` for why no session id
+          comes back out of it).
 
 Nothing else is a string. Everything else is a number, a bool, or null. A new
 field that carries anything from the DB therefore breaks the invariant rather
@@ -34,13 +37,20 @@ themselves; every other non-null id is folded into a single
 :data:`UNRECOGNIZED` row that keeps the counts and drops the name. NULL stays
 :data:`NO_MODEL`, the same label section 1 uses.
 
-THE WINDOW MUST BE CLOSED. An export with an open bound is refused, and that is
-the one hard error in this module. A corpus whose members each measured "all
-time" over their own history is not a corpus — the expired-gap rate, the
-switch rate and every dollar figure scale with how long you looked, so rows from
-different windows cannot be put in the same table at all. Refusing at export is
-the only place that costs nobody anything; refusing at collection time means a
-person already spent the effort.
+THE WINDOW MUST BE CLOSED, AND THAT IS NOT ENOUGH. An export with an open bound
+is refused, and that is the one hard error in this module. A corpus whose
+members each measured "all time" over their own history is not a corpus — the
+expired-gap rate, the switch rate and every dollar figure scale with how long
+you looked. Refusing at export is the only place that costs nobody anything.
+
+But a closed window is a NECESSARY condition and not a sufficient one, and an
+earlier version of this module's own documentation quietly treated it as both.
+The window closes over timestamps. The store is what gets read, and it grows
+inside a window that never moves: ``ingest`` walks ``~/.claude/projects``, and a
+transcript file that only shows up later carries messages whose timestamps sit
+well inside a window frozen weeks ago. So ``corpus.fingerprint`` identifies the
+record set as well, and two files agreeing on the window while disagreeing on
+the fingerprint were computed over different traffic.
 
 MONEY IS A STRING WITH TWO DECIMALS. These files are meant to be diffed and
 re-read for a long time; a JSON float would put ``2044.7199999999998`` in one of
@@ -69,6 +79,7 @@ from traceguard.routing_audit.cache_audit import (
     CAP_SWEEP_MAX,
     CAP_SWEEP_MIN,
     CAP_SWEEP_STEP,
+    FINGERPRINT_ALGORITHM,
     GAP_BUCKETS,
     MIN_CACHEABLE_TOKENS,
     PING_INTERVAL,
@@ -413,6 +424,11 @@ def build_share(audit_result: CacheAudit) -> dict[str, Any]:
             "sessions": gaps.sessions,
             "gaps": gaps.gaps,
             "expired_gaps": gaps.expired_gaps,
+            # Same window + different fingerprint = different traffic. The
+            # counts above move when the corpus grows; this says so even when
+            # they happen not to.
+            "fingerprint": audit_result.fingerprint,
+            "fingerprint_algorithm": FINGERPRINT_ALGORITHM,
         },
         # Deliberately high in the file. A submission where most gaps cannot be
         # classified is a weak submission, and it should be obvious before

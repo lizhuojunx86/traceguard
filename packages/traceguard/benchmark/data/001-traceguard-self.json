@@ -11,7 +11,9 @@
     "analyzed_messages": 60661,
     "sessions": 174,
     "gaps": 60487,
-    "expired_gaps": 439
+    "expired_gaps": 439,
+    "fingerprint": "b07cc061b6a98a9206032b9b7cc63e2999118655d58a22669b14201c957f99ea",
+    "fingerprint_algorithm": "sha256-v1"
   },
   "data_quality": {
     "undecidable_gaps": 56,
