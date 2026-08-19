@@ -96,3 +96,9 @@ uv run python scripts/seed_demo_data.py
 ## MCP Server
 
 Optional dependency (`uv sync --extra mcp`). Entry points: `guardian mcp` CLI command or `guardian-mcp` script. Exposes guardian tools via stdio transport for Claude Desktop/Cursor/VS Code.
+
+## Publishing
+
+对外发布的文本（dev.to 文章与评论、Reddit、邮件）在发布前必须先过
+`/verify-claims`。理由见 2026-08-19 的三条公开更正：其中一条源于一个
+可以被一条命令证伪、但只是推断出来的断言。
