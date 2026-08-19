@@ -1,7 +1,8 @@
 # DeepSeek Harness session accounting — conformance invariants
 
 v0.2 · 2026-08-15 · companion to [`CONFORMANCE.md`](CONFORMANCE.md) (Claude Code) ·
-harness in [`usage-tracker-audit/dsh-probe/`](usage-tracker-audit/dsh-probe/)
+harness in [`usage-tracker-audit/dsh-probe/`](usage-tracker-audit/dsh-probe/) ·
+D-3 and D-4 filed upstream as [deepseek-harness#1886](https://github.com/deepseek-ai/deepseek-harness/discussions/1886)
 
 If your plugin reads a DeepSeek Harness session log and reports tokens, cost,
 or usage totals, these are the invariants it has to hold.
@@ -159,6 +160,8 @@ containing at least one `compaction/summary`. `command/done.sourceEventSeq`
 names the summary event of a `/compact` transaction, so the check does not
 have to guess from adjacency.
 
+**Reported upstream:** [deepseek-harness#1886](https://github.com/deepseek-ai/deepseek-harness/discussions/1886).
+
 ## D-4 · A retried step carries more than two samples — never keep-first
 
 A step is not one request. When a stream dies, the harness retries under the
@@ -200,6 +203,9 @@ attempts.
 **Check:** group usage samples by `(turn, step)` and print the size
 distribution. Any group above 2 is a retried step. Assert that your fold
 reports that step's real cost and not zero.
+
+**Reported upstream:** [deepseek-harness#1886](https://github.com/deepseek-ai/deepseek-harness/discussions/1886) — the replace-not-add half.
+The keep-first half is a consumer-side rule and stays here.
 
 ---
 
