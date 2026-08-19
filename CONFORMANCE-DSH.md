@@ -1,6 +1,6 @@
 # DeepSeek Harness session accounting — conformance invariants
 
-v0.2 · 2026-08-15 · companion to [`CONFORMANCE.md`](CONFORMANCE.md) (Claude Code) ·
+v0.2.1 · 2026-08-19 · companion to [`CONFORMANCE.md`](CONFORMANCE.md) (Claude Code) ·
 harness in [`usage-tracker-audit/dsh-probe/`](usage-tracker-audit/dsh-probe/) ·
 D-3 and D-4 filed upstream as [deepseek-harness#1886](https://github.com/deepseek-ai/deepseek-harness/discussions/1886)
 
