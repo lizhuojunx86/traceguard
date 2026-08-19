@@ -258,6 +258,25 @@ apply here exactly as written, with one addition: two plugins pricing the
 same model differently is not a bug in either, and a cross-plugin comparison
 that assumes one price is measuring nothing.
 
+**Price consequence, added 2026-08-19. Not a corpus measurement.** DeepSeek's
+own list moved on 2026-08-17, and the move is what turns a bucket error from
+untidy into expensive. Off-peak `deepseek-v4-pro` input is $0.022/M on a cache
+hit against $0.66/M on a miss; `deepseek-v4-flash` is $0.007 against $0.22.
+That is 30× and 31×, and the ratio survives peak rates on both models. The RMB
+figures circulating in `deepseek-ai/deepseek-harness#2554` (¥0.15/M hit,
+¥4.5/M miss) are the same 30× on the v4-pro line.
+
+Two entries inherit this. D-1 doubles every bucket including cache-read, and
+cache-read is the largest bucket on the MiniMax route here (249,728 tokens,
+81% of its corrected total); doubling the cheap bucket and doubling the dear
+one stop being the same error once the two differ by 30×. Separately, a token
+moved across the hit/miss line by a mapping bug is wrong by 30×, not by the
+few percent its share of the count suggests — #2554 reports roughly 638k
+tokens sitting on the wrong side of that line against DeepSeek's own console.
+
+Prices are dated facts, not invariants. This paragraph is here to size D-1's
+consequence, and it needs re-reading against the vendor's page before anyone
+quotes it.
 ---
 
 ## Running the check
@@ -296,6 +315,10 @@ Read these before quoting anything above.
 - **D-4's second consequence has no number.** The undercount mechanism for
   retried steps is read from source; every failed attempt observed here
   reported zeros.
+- **The price figures under S-4 are dated, not measured.** Read from the
+  vendor's page on 2026-08-19; everything else here was folded from the corpus.
+  Neither route in the corpus is a DeepSeek route, so the 30× gap sizes the
+  consequence of D-1 and of mis-bucketing, it does not measure either.
 - **Two providers, both `openai-completions`-family routes.** Whether an
   Anthropic-protocol or Responses-protocol route behaves the same is not
   established.
