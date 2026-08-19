@@ -231,7 +231,26 @@ margin, which is now printed rather than implied.
 That 10h is **solved, not chosen**. An earlier version hardcoded 4h to line up
 with the `1-4h` / `>4h` bucket boundary, which is a tidy number rather than an
 answer. Section 3b costs every cap from 1h to 12h in 15-minute steps, plus an
-uncapped policy competing on equal terms, and takes the argmax of net benefit:
+uncapped policy competing on equal terms, and takes the argmax of net benefit.
+
+The table below, and the recommendation after it, are a **fixed historical
+excerpt**. Taken 2026-08-17 at `02eeaa3`, over the `--benchmark` window
+`2026-05-30 .. 2026-08-16`, off a corpus of 432 expired gaps across 168
+sessions. It carries no `corpus.fingerprint`, because that field did not exist
+yet when it was taken — and the field exists now because re-running the
+identical command a day later returned 439 gaps across 174 sessions and moved
+the argmax net from $811.30 to $806.82, without the window shifting by a
+second. The earlier samples in this section come from the same run and carry
+the same caveat.
+
+These numbers are not being refreshed, and that is a decision rather than
+neglect. Recalculating them to "current" would promise that a hand-maintained
+README tracks a corpus that grows every day, and the section above is this
+repo demonstrating that a frozen window does not manage that much. An old
+number with its provenance attached is correct permanently; a number claiming
+to be current is false by next week. To cite a figure, take it from an entry in
+[`benchmark/data/`](benchmark/README.md), where the filename carries the
+fingerprint of the corpus it came off and the file is never rewritten.
 
 ```
 cap     bridged / abandoned  pings  ping cost  cross-model waste  rewrite >=  rewrite <=  net >=    net <=    verdict
