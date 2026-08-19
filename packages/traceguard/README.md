@@ -91,13 +91,15 @@ low" into a number you can act on. It is a **read-only report** — it opens the
 store with SQLite `mode=ro`, writes nothing, and emits only aggregates, token
 counts and money. No prompt or answer text ever leaves the DB.
 
-Everything described here ships in **1.3.0**. If you are on 1.2.0 the report is
-a shorter thing — four sections, `--db / --format / --since / --until`, and a
-section 2 that is a bare `gap | count | share` histogram with no money in it —
-so `pip install -U traceguard` before expecting per-bucket cost, the rewrite
-bracket, the three-state verdict, the measured model switch, section 3b's cap
-sweep, `--benchmark` or `--peak-band-tolerance`. What changed and why is in the
-[CHANGELOG](CHANGELOG.md).
+Everything described here ships in **1.4.0**. On 1.3.0 the report itself is the
+same, but it cannot leave the machine: no `--emit-share` / `--show-share`, no
+corpus fingerprint, no `benchmark/`. On 1.2.0 it is a shorter thing altogether —
+four sections, `--db / --format / --since / --until`, and a section 2 that is a
+bare `gap | count | share` histogram with no money in it. So
+`pip install -U traceguard` before expecting the share export, per-bucket cost,
+the rewrite bracket, the three-state verdict, the measured model switch, section
+3b's cap sweep, `--benchmark` or `--peak-band-tolerance`. What changed and why
+is in the [CHANGELOG](CHANGELOG.md).
 
 It does not ingest. Fill the store first, then audit it:
 

@@ -345,7 +345,10 @@ def test_share_tool_version_follows_package_metadata_not_a_hardcoded_string(
 
     payload = build_share(poisoned.audit())
     assert payload["tool_version"] == "9.9.9-fromsomewhereelse"
-    assert payload["tool_version"] != "1.3.0"
+    # Recomputed, not a frozen literal: this line used to read "1.3.0" and would
+    # have gone stale at the next release while still passing, which is the
+    # same class of defect the field itself exists to prevent.
+    assert payload["tool_version"] != installed_version("traceguard")
 
 
 def test_share_tool_version_never_reads_the_hand_written_module_constant():

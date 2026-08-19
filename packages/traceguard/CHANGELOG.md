@@ -7,11 +7,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
-## [Unreleased]
+## [1.4.0] - 2026-08-19
 
 Contract-external, all inside `traceguard.routing_audit`. Additive: sections
 1-4 and 3b of the cache audit render byte-for-byte as before, verified against
 `main` on the reference store for all three of `--format table|md|csv`.
+
+**One release, one problem: making a cache audit leave the laptop.** 1.3.0
+finished the report and left it stranded — the numbers were only ever true of
+one machine, and nothing in the output let a second person check whether their
+numbers and yours described the same thing. Every item below exists so that two
+sets of figures can be put beside each other and the comparison mean something.
+They are listed in the order that question gets answered: get the numbers out,
+say which traffic they came from, stop them changing afterwards, say when they
+were taken, and give them somewhere to go.
 
 **`--emit-share` / `--show-share`: a cache-audit summary you can hand to
 someone else.** Comparing cache behaviour across organisations needs a corpus,
