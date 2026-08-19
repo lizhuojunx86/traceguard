@@ -15,7 +15,8 @@ invariant rather than as a list of things that were remembered:
     every string in the payload is one of
       (a) a constant defined in this module or in ``cache_audit``,
       (b) a model id on the published-price whitelist,
-      (c) an ISO-8601 form of one of the two declared window bounds,
+      (c) an ISO-8601 timestamp this tool itself produced — one of the two
+          declared window bounds, or ``generated_at``; never a per-trace one,
       (d) the installed distribution version,
       (e) a decimal money literal (see below), which is a number wearing a
           string's clothes rather than text,
@@ -52,6 +53,36 @@ well inside a window frozen weeks ago. So ``corpus.fingerprint`` identifies the
 record set as well, and two files agreeing on the window while disagreeing on
 the fingerprint were computed over different traffic.
 
+WHEN YOU PULLED IT, NOT JUST WHAT YOU PULLED. ``corpus.fingerprint`` can show
+that two submissions are different corpora; it cannot show WHY. ``generated_at``
+and ``settling_days`` can. A window closes and the traffic inside it keeps
+arriving for a while afterwards, so a file exported the day the window shut is
+reporting a tail that is still filling in, and one exported a month later is
+probably reporting a tail that has stopped moving. Same window, different
+fingerprints, and ``settling_days`` is the number that explains the gap instead
+of merely establishing it.
+
+The field exists because Boris Dzhingarov pointed out that we record what was
+pulled and not when, from the Search Console version of this bug: the last few
+days of any date range there are provisional and quietly revise themselves after
+export, so a weekly report never reconciles with the one sent the week before.
+Late-arriving Claude Code transcripts are the same disease with a different
+vector.
+
+``settling_days`` CAN BE NEGATIVE, and is not validated away. ``--until today``
+resolves to today at 23:59:59.999999, so an export run at 09:00 legitimately has
+a window bound ten hours in its own future. Refusing that would break an
+ordinary invocation, and — worse — the refusal would depend on the wall clock,
+so the same command would pass at 23:59 and fail at 09:00. A tool whose
+accept/reject behaviour is not reproducible is the opposite of what this schema
+is for. So a negative value is emitted and means exactly what it says: the file
+was exported before its own window closed, and the tail is not merely
+provisional, it is unwritten. That is the most informative reading available,
+and clamping or rejecting it would destroy the information. Whether such a
+submission belongs in a corpus is a collection-policy question, answered in
+``benchmark/README.md`` the same way thin and undecidable-heavy submissions are:
+labelled, not refused.
+
 MONEY IS A STRING WITH TWO DECIMALS. These files are meant to be diffed and
 re-read for a long time; a JSON float would put ``2044.7199999999998`` in one of
 them eventually. Token counts are integers and rates are floats rounded to six
@@ -70,7 +101,7 @@ anything, and nothing here should ever learn how to.
 from __future__ import annotations
 
 import json
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from importlib.metadata import PackageNotFoundError, version as _dist_version
 from typing import Any, Sequence
@@ -391,8 +422,14 @@ def tool_version() -> str:
         return "unknown"
 
 
-def build_share(audit_result: CacheAudit) -> dict[str, Any]:
+def build_share(
+    audit_result: CacheAudit, *, generated_at: datetime | None = None
+) -> dict[str, Any]:
     """Build the shareable payload, or refuse if the window is not closed.
+
+    ``generated_at`` defaults to now. It is injectable so a test can pin it;
+    it is NOT defaulted to a constant, because a frozen export timestamp is
+    exactly the lie this field exists to prevent.
 
     :raises ShareWindowError: when either bound is missing.
     """
@@ -408,11 +445,22 @@ def build_share(audit_result: CacheAudit) -> dict[str, Any]:
             "--benchmark for the frozen window, or give both --since and --until."
         )
 
+    stamp = (generated_at or datetime.now(timezone.utc)).astimezone(timezone.utc)
     gaps = audit_result.gaps
     expired = gaps.expired_details
     return {
         "schema_version": SCHEMA_VERSION,
         "tool_version": tool_version(),
+        # WHEN the pull happened, not only what it pulled. Deliberately NOT part
+        # of corpus.fingerprint: the fingerprint answers "is this the same
+        # traffic", and mixing a clock into it would make every re-run of an
+        # unchanged corpus look like a different one.
+        "generated_at": _iso(stamp.replace(microsecond=0)),
+        # How long the window had been shut when this was exported. The number
+        # that turns "these two submissions disagree" into "and here is why".
+        # Negative means the export ran before its own window closed; see the
+        # module docstring for why that is emitted rather than refused.
+        "settling_days": round((stamp - until).total_seconds() / 86400, 2),
         "window": {
             "since": _iso(since),
             "until": _iso(until),

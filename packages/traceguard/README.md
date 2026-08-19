@@ -363,6 +363,13 @@ Compare it before comparing anything else.
 `tool_version` comes from installed package metadata, never a literal, so a
 submission cannot claim a version it was not produced by.
 
+The file also records `generated_at` and `settling_days` (export time minus
+`window.until`). The fingerprint shows that two submissions are different
+corpora; `settling_days` shows why, because a window closes and its traffic
+keeps arriving afterwards. Suggested by Boris Dzhingarov, from the Search
+Console habit of revising the last few days of a range after export. Neither
+field feeds the fingerprint.
+
 `--emit-share` refuses to overwrite an existing file and exits 2. Corpus
 entries are named `NNN-<source>-<first 8 of corpus.fingerprint>.json` and are
 immutable: a re-run over traffic that has grown is a new entry beside the old

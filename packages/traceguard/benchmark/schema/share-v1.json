@@ -2,11 +2,13 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/lizhuojunx86/traceguard/blob/main/packages/traceguard/benchmark/schema/share-v1.json",
   "title": "traceguard cache-audit share file, schema v1",
-  "description": "Aggregate summary of one organisation's prompt-cache behaviour, produced by `python -m traceguard.routing_audit.cache_audit --emit-share`. Contains no prompt text, no answer text, no file paths, no session ids, no per-trace timestamps and no free-form strings of any kind. Every string in a conforming document is a constant named by this schema, a model id on the tool's published-price whitelist, an ISO-8601 form of one of the two declared window bounds, the installed traceguard version, a decimal money literal, or the corpus fingerprint. This file is a SPECIFICATION, not a runtime validator — traceguard adds no jsonschema dependency to check it.\n\nSTABILITY: fields may be ADDED to v1; an existing field never changes its name, type or meaning, because a row written today must still parse in a year. A reader that meets an unknown field ignores it. A breaking change gets schema_version 2 and a new file beside this one.",
+  "description": "Aggregate summary of one organisation's prompt-cache behaviour, produced by `python -m traceguard.routing_audit.cache_audit --emit-share`. Contains no prompt text, no answer text, no file paths, no session ids, no per-trace timestamps and no free-form strings of any kind. Every string in a conforming document is a constant named by this schema, a model id on the tool's published-price whitelist, an ISO-8601 timestamp the tool itself produced (a window bound or generated_at, never a per-trace one), the installed traceguard version, a decimal money literal, or the corpus fingerprint. This file is a SPECIFICATION, not a runtime validator — traceguard adds no jsonschema dependency to check it.\n\nSTABILITY: fields may be ADDED to v1; an existing field never changes its name, type or meaning, because a row written today must still parse in a year. A reader that meets an unknown field ignores it. A breaking change gets schema_version 2 and a new file beside this one.",
   "type": "object",
   "required": [
     "schema_version",
     "tool_version",
+    "generated_at",
+    "settling_days",
     "window",
     "corpus",
     "data_quality",
@@ -24,6 +26,15 @@
     "tool_version": {
       "type": "string",
       "description": "Version of the INSTALLED traceguard distribution, read from package metadata via importlib.metadata at export time. Never a literal copied from source. A submission labelled with a version it was not produced by cannot be detected after the fact and would corrupt the corpus silently, so the export refuses to take this number from anywhere a human could edit it."
+    },
+    "generated_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "When this file was exported, ISO-8601 UTC at second resolution. Records WHEN you pulled, not only what you pulled. Deliberately NOT an input to corpus.fingerprint: the fingerprint answers 'is this the same traffic', and mixing a clock into it would make every re-run of an unchanged corpus look like a different one. This is an export timestamp, not a per-trace one; no trace's own time ever appears in this file."
+    },
+    "settling_days": {
+      "type": "number",
+      "description": "generated_at minus window.until, in days to 2dp. The field that turns 'these two submissions disagree' into 'and here is why'. A window closes and its traffic keeps arriving afterwards, so a file exported the day the window shut reports a tail that is still filling in, while one exported a month later probably reports a tail that has stopped moving. Two submissions with the same window and different fingerprints are explained by this number rather than merely detected by the fingerprint.\n\nMAY BE NEGATIVE, and is not validated away. A bare `--until <date>` closes at 23:59:59.999999, so an export run at 09:00 legitimately carries a window bound ten hours in its own future. Refusing that would break an ordinary invocation, and the refusal would depend on the wall clock — the same command passing at 23:59 and failing at 09:00 is the opposite of the reproducibility this schema exists for. A negative value means the file was exported before its own window closed: the tail is not merely provisional, it is unwritten. Whether such a submission belongs in a corpus is a collection-policy question, not a serialisation one.\n\nOrigin: proposed by Boris Dzhingarov, from the Google Search Console version of this bug, where the last few days of any date range are provisional and quietly revise themselves after export, so a weekly report never reconciles with the one sent the week before."
     },
     "window": {
       "type": "object",

@@ -248,6 +248,7 @@ def test_share_contains_only_constant_public_or_window_strings(poisoned):
         {NO_MODEL, UNRECOGNIZED, cache_share.tool_version()}
         | set(cache_share.PUBLIC_MODEL_IDS)
         | {payload["window"]["since"], payload["window"]["until"]}
+        | {payload["generated_at"]}
         | {"WORTH IT", "NOT WORTH IT", "UNDECIDED"}
         | set(_BUCKET_NAMES)
         | {payload["corpus"]["fingerprint"], FINGERPRINT_ALGORITHM}
@@ -594,11 +595,114 @@ def test_fingerprint_does_not_depend_on_row_order(poisoned):
     assert corpus_fingerprint(records) == corpus_fingerprint(list(reversed(records)))
 
 
+# ── 5c. generated_at / settling_days ────────────────────────────────────────
+#
+# corpus.fingerprint shows two submissions are different corpora; these show
+# why. A window shuts and its traffic keeps arriving afterwards, so how long
+# the window had been closed at export time is the difference between finding
+# a discrepancy and explaining it.
+
+
+def test_generated_at_does_not_leak_into_the_fingerprint(poisoned):
+    """Same corpus, two export times, one fingerprint.
+
+    Mixing a clock into the digest would make every re-run of unchanged traffic
+    look like fresh traffic, which is the failure the fingerprint exists to
+    rule out.
+    """
+    early = build_share(
+        poisoned.audit(), generated_at=datetime(2026, 8, 2, tzinfo=timezone.utc)
+    )
+    late = build_share(
+        poisoned.audit(), generated_at=datetime(2026, 11, 30, tzinfo=timezone.utc)
+    )
+
+    assert early["generated_at"] != late["generated_at"]
+    assert early["settling_days"] != late["settling_days"]
+    assert early["corpus"]["fingerprint"] == late["corpus"]["fingerprint"]
+
+
+def test_settling_days_is_generated_at_minus_window_until(poisoned):
+    """The arithmetic, pinned. WINDOW_UNTIL is 2026-08-01T00:00Z."""
+    payload = build_share(
+        poisoned.audit(),
+        generated_at=datetime(2026, 8, 11, 12, 0, tzinfo=timezone.utc),
+    )
+    assert payload["settling_days"] == pytest.approx(10.5)
+    assert payload["generated_at"] == "2026-08-11T12:00:00+00:00"
+
+
+def test_settling_days_is_zero_when_exported_exactly_at_the_bound(poisoned):
+    payload = build_share(poisoned.audit(), generated_at=WINDOW_UNTIL)
+    assert payload["settling_days"] == 0.0
+
+
+def test_settling_days_goes_negative_rather_than_refusing(poisoned):
+    """`--until today` is an ordinary invocation with a bound in the future.
+
+    A bare --until date closes at 23:59:59.999999, so an export at 09:00 has a
+    window bound ten hours ahead of itself. Refusing would break that, and the
+    refusal would depend on the wall clock — the same command passing at 23:59
+    and failing at 09:00 is the opposite of reproducible. So it is emitted, and
+    a negative value says the file was exported before its own window closed.
+    """
+    payload = build_share(
+        poisoned.audit(),
+        generated_at=WINDOW_UNTIL - timedelta(days=3, hours=12),
+    )
+    assert payload["settling_days"] == pytest.approx(-3.5)
+    assert payload["corpus"]["fingerprint"]  # still a perfectly valid export
+
+
+def test_generated_at_is_utc_and_second_resolution(poisoned):
+    """Microseconds are noise in a file people diff by eye."""
+    payload = build_share(
+        poisoned.audit(),
+        generated_at=datetime(2026, 9, 4, 6, 7, 8, 123456, tzinfo=timezone.utc),
+    )
+    assert payload["generated_at"] == "2026-09-04T06:07:08+00:00"
+
+
+def test_generated_at_defaults_to_now(poisoned):
+    """Not defaulted to a constant: a frozen stamp is the lie this field prevents."""
+    before = datetime.now(timezone.utc) - timedelta(seconds=2)
+    payload = build_share(poisoned.audit())
+    after = datetime.now(timezone.utc) + timedelta(seconds=2)
+
+    stamp = datetime.fromisoformat(payload["generated_at"])
+    assert before <= stamp <= after
+
+
+def test_settling_days_survives_a_naive_or_offset_generated_at(poisoned):
+    """A non-UTC stamp is converted, not mis-subtracted."""
+    payload = build_share(
+        poisoned.audit(),
+        generated_at=datetime(
+            2026, 8, 11, 20, 0, tzinfo=timezone(timedelta(hours=8))
+        ),  # == 2026-08-11T12:00Z
+    )
+    assert payload["generated_at"] == "2026-08-11T12:00:00+00:00"
+    assert payload["settling_days"] == pytest.approx(10.5)
+
+
 def test_schema_version_is_pinned(poisoned):
     assert build_share(poisoned.audit())["schema_version"] == SCHEMA_VERSION == 1
 
 
 # ── 6. the CLI ──────────────────────────────────────────────────────────────
+
+
+# generated_at moves between two separate CLI invocations by design, so payload
+# comparisons drop it rather than freeze it — a pinned export timestamp is the
+# exact lie the field exists to prevent.
+_STAMPED = ("generated_at", "settling_days")
+
+
+def _without_stamp(blob: str) -> dict:
+    payload = json.loads(blob)
+    for key in _STAMPED:
+        payload.pop(key, None)
+    return payload
 
 
 def test_show_share_prints_exactly_what_emit_share_would_write(poisoned, tmp_path, capsys):
@@ -615,8 +719,12 @@ def test_show_share_prints_exactly_what_emit_share_would_write(poisoned, tmp_pat
     assert cache_audit_main(argv + ["--show-share"]) == 0
     shown = capsys.readouterr().out
 
-    assert shown == out_path.read_text(encoding="utf-8")
+    assert _without_stamp(shown) == _without_stamp(out_path.read_text(encoding="utf-8"))
     assert json.loads(shown)["schema_version"] == SCHEMA_VERSION
+    # and the dropped fields are genuinely present in both
+    for key in _STAMPED:
+        assert key in json.loads(shown)
+        assert key in json.loads(out_path.read_text(encoding="utf-8"))
 
 
 def test_show_share_replaces_the_report_and_emit_share_leaves_it_alone(
@@ -695,7 +803,9 @@ def test_emit_share_writes_when_the_path_is_free(poisoned, tmp_path):
     first, second = tmp_path / "a.json", tmp_path / "b.json"
     assert cache_audit_main(argv + ["--emit-share", str(first)]) == 0
     assert cache_audit_main(argv + ["--emit-share", str(second)]) == 0
-    assert first.read_text(encoding="utf-8") == second.read_text(encoding="utf-8")
+    assert _without_stamp(first.read_text(encoding="utf-8")) == _without_stamp(
+        second.read_text(encoding="utf-8")
+    )
 
 
 def test_show_share_is_unaffected_by_an_existing_file(poisoned, tmp_path, capsys):
