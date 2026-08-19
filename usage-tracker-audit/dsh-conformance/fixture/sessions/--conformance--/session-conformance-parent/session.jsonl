@@ -1,0 +1,15 @@
+{"createdAt": 1770000000000, "cwd": "/conformance", "delegationDepth": 0, "id": "conformance-parent", "type": "session", "version": 0}
+{"data": {"turn": 0}, "seq": 0, "time": 1770000000000, "type": "user/message"}
+{"data": {"chunk": {"type": "usage", "usage": {"cacheReadTokens": 1000, "cacheWriteTokens": 5, "inputTokens": 100, "outputTokens": 10}}, "step": 0, "turn": 0}, "seq": 1, "time": 1770000000001, "type": "assistant/chunk"}
+{"data": {"message": {}, "step": 0, "turn": 0, "usage": {"cacheReadTokens": 1000, "cacheWriteTokens": 5, "inputTokens": 100, "outputTokens": 10}}, "seq": 2, "time": 1770000000002, "type": "assistant/message"}
+{"data": {"chunk": {"type": "usage", "usage": {"cacheReadTokens": 2000, "cacheWriteTokens": 0, "inputTokens": 200, "outputTokens": 20}}, "step": 1, "turn": 0}, "seq": 3, "time": 1770000000003, "type": "assistant/chunk"}
+{"data": {"chunk": {"reason": {"failure": {"code": "TRANSPORT"}, "kind": "error"}, "type": "finish"}, "step": 1, "turn": 0}, "seq": 4, "time": 1770000000004, "type": "assistant/chunk"}
+{"data": {"provider": "conformance", "retryId": "r-conformance-1"}, "seq": 5, "time": 1770000000005, "type": "llm/retry"}
+{"data": {"retry": 1, "retryId": "r-conformance-1"}, "seq": 6, "time": 1770000000006, "type": "llm/retry-started"}
+{"data": {"chunk": {"type": "usage", "usage": {"cacheReadTokens": 3000, "cacheWriteTokens": 7, "inputTokens": 300, "outputTokens": 30}}, "step": 1, "turn": 0}, "seq": 7, "time": 1770000000007, "type": "assistant/chunk"}
+{"data": {"message": {}, "step": 1, "turn": 0, "usage": {"cacheReadTokens": 3000, "cacheWriteTokens": 7, "inputTokens": 300, "outputTokens": 30}}, "seq": 8, "time": 1770000000008, "type": "assistant/message"}
+{"data": {"turn": 0}, "seq": 9, "time": 1770000000009, "type": "turn/end"}
+{"data": {"compactionId": "c1", "turn": null}, "seq": 10, "time": 1770000000010, "type": "compaction/start"}
+{"data": {"compactionId": "c1", "model": "conformance-model", "provider": "conformance", "shadowedRange": {"end": 9, "start": 0}, "shadowedSeqs": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9], "shadowedTokenCount": 6672, "summary": [], "usage": {"cacheReadTokens": 4000, "cacheWriteTokens": 0, "inputTokens": 400, "outputTokens": 40}}, "seq": 11, "time": 1770000000011, "type": "compaction/summary"}
+{"data": {"surfaceOp": {"end": 9, "op": "replace", "start": 0}, "turn": 0}, "seq": 12, "time": 1770000000012, "type": "user/message"}
+{"data": {"compactionId": "c1", "turn": null}, "seq": 13, "time": 1770000000013, "type": "compaction/end"}

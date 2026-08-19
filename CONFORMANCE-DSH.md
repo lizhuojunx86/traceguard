@@ -222,24 +222,38 @@ compaction or no compaction. The left side has to be a corrected fold: collapse
 per `(turn, step)`, treat a failed terminal chunk as an attempt boundary, skip
 the inherited prefix on `seedLength`.
 
-Then the assertion has content:
+The residual between that fold and the official projection is then not zero,
+and it is not one number either. Three things separate them, each computable
+from the log on its own:
 
-> On a session carrying at least one `compaction/summary` with `usage`, the
-> corrected fold minus the official projection equals the sum of
-> `compaction/summary.usage`, bucket for bucket. Any other residual is a
-> different bug.
+> ```
+> corrected − official  ==  Σ compaction/summary.usage        (D-3)
+>                        +  Σ usage of superseded attempts    (D-4)
+>                        −  Σ official fold over the inherited seed   (D-2)
+> ```
+> Bucket for bucket, with nothing left over.
 
-Two sides computed from the same file, no ground truth in between. A residual
-of zero says your consumer inherited D-3. A residual that is neither zero nor
-the compaction total says something else is wrong and the compaction gap is
-not it, which is worth more than a red test that only says "high".
+Two sides off the same file, no ground truth in between. The decomposition is
+the part worth having: a total that is merely wrong tells you to go looking,
+while a residual that lands exactly on one term tells you which invariant you
+missed, and a residual matching none of them says the catalog is incomplete.
 
-**Check.** `dsh_usage_probe.py` already prints both sides; the residual is the
-`C - S` line. `--self-test` exercises it on a constructed session that
-compacts once: corrected 4,710 against seed-aware 4,260, residual 450, which
-is the fixture summary's 300 input plus 150 output and nothing else. That runs
-in under a second on stdlib alone, so it belongs in CI on day one rather than
-behind a corpus you have to collect first.
+**An earlier version of this entry stated the narrow form** — residual equals
+the compaction term alone. That holds only on a log with no forks and no
+token-bearing failed attempt, and it is not true of the corpus this catalog
+was measured on: the inherited-seed term there is 261,562 tokens, so the narrow
+identity misses by more than it captures. Recorded rather than quietly edited,
+because the narrow form was published before it was checked.
+
+**Check.** `usage-tracker-audit/dsh-conformance/` runs it against a committed
+synthetic fixture. `check.py --self-test` asserts every fold and the identity
+above in under a second, stdlib only, no corpus and no vendor account.
+`check.py --cmd "<your fold>"` runs the same assertion against an
+implementation and names the invariant behind a mismatch.
+
+Verified both ways: on the fixture the identity closes at +2,208 against
++2,208, and on the measured corpus at −212,667 against −212,667, where the
+superseded term is 0 because both failed attempts there reported zeros.
 
 **Direction, stated plainly.** Against the official projection today this
 assertion fails by construction, because failing is what D-3 *is*. Its use is
@@ -362,10 +376,15 @@ Read these before quoting anything above.
 - **D-4's second consequence has no number.** The undercount mechanism for
   retried steps is read from source; every failed attempt observed here
   reported zeros.
-- **D-5 is a predicate, not a measurement.** It has been exercised on the
-  self-test fixture and on this corpus, both with the residual landing exactly
-  on the compaction total. It has not been run against a third party's
-  implementation, so how often it catches something other than D-3 is unknown.
+- **D-5 is a predicate, not a measurement.** The identity closes on the
+  conformance fixture and on this corpus. It has not been run against a third
+  party's implementation, so how often it catches something the three named
+  terms do not cover is unknown.
+- **D-4's magnitude is fixture-only.** The superseded-attempt term is 2,220 on
+  the synthetic fixture and 0 on every real session measured here, because the
+  corpus contains exactly two failed attempts, both reporting zeros, and no
+  `aborted` finish at all. The mechanism is read from source; the number is
+  constructed.
 - **The price figures under S-4 are dated, not measured.** Read from the
   vendor's page on 2026-08-19; everything else here was folded from the corpus.
   Neither route in the corpus is a DeepSeek route, so the 30× gap sizes the

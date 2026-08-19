@@ -17,6 +17,14 @@ a counted total stops matching the manifest.
 | `cct.yml` | davila7/claude-code-templates | `cct-dedup-check/run_check.sh --commit $GITHUB_SHA` | ~2 min |
 | `tokscale.yml` | junhoyeo/tokscale | `tokscale-drift-check/run_check.sh --bin <built binary>` | build + ~1 min |
 
+One of these is not like the others: DeepSeek Harness has no dominant
+consumer to write a per-repo harness for, so
+[`../dsh-conformance/`](../dsh-conformance/) is vendor-neutral instead. It
+ships a committed synthetic fixture and a checker you point at *any* fold
+with one flag, and it names the invariant behind a mismatch rather than only
+reporting one. Its workflow is `dsh-conformance/workflow.yml`, and it needs no
+corpus, no account and no build unless yours does.
+
 Notes.
 
 The harness clones the tracker at `$GITHUB_SHA`, so the check covers pushes

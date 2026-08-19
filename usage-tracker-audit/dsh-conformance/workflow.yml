@@ -1,0 +1,49 @@
+# DSH token-accounting conformance.
+# Copy to .github/workflows/dsh-conformance.yml in your repo and edit one line.
+#
+# Checks that whatever your project uses to total tokens from a DeepSeek
+# Harness session log holds the invariants in CONFORMANCE-DSH.md. Runs against
+# a committed synthetic fixture, so it needs no corpus, no DeepSeek account and
+# no secrets, and it finishes in seconds.
+#
+# Invariants: https://github.com/lizhuojunx86/traceguard/blob/main/CONFORMANCE-DSH.md
+
+name: dsh-conformance
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Build whatever your fold command needs. Delete this if it needs nothing.
+      # - run: npm ci && npm run build
+      # - run: cargo build --release
+
+      - name: Fetch the conformance suite
+        uses: actions/checkout@v4
+        with:
+          repository: lizhuojunx86/traceguard
+          path: .dsh-conformance
+
+      - name: Check the suite against itself first
+        run: python3 .dsh-conformance/usage-tracker-audit/dsh-conformance/check.py --self-test
+
+      # THE ONE LINE TO EDIT.
+      #
+      # Your command is given the fixture's sessions root as its last argument,
+      # and the same path in $DSH_CONFORMANCE_ROOT. It must print one JSON
+      # object to stdout with any of: uncachedInputTokens, outputTokens,
+      # cacheReadTokens, cacheWriteTokens. Absent keys read as zero, and the
+      # last JSON object printed wins, so logging before the result is fine.
+      #
+      # Track only some buckets? Add --buckets uncachedInputTokens,outputTokens
+      - name: Check this project's fold
+        run: |
+          python3 .dsh-conformance/usage-tracker-audit/dsh-conformance/check.py \
+            --cmd "node dist/dsh-total.js"
