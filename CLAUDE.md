@@ -102,3 +102,15 @@ Optional dependency (`uv sync --extra mcp`). Entry points: `guardian mcp` CLI co
 对外发布的文本（dev.to 文章与评论、Reddit、邮件）在发布前必须先过
 `/verify-claims`。理由见 2026-08-19 的三条公开更正：其中一条源于一个
 可以被一条命令证伪、但只是推断出来的断言。
+
+## Concurrent sessions
+
+同一个工作区在同一时间只允许一个 session 做 git 操作（switch / checkout /
+rebase / commit）。开工前先确认没有别的 session 正在这个目录里干活；要并行
+就用 `git worktree` 各开各的目录，不要共用这一个 `.git`。
+
+由来：2026-08-19，两个 session 同时在这个工作区里。其中一个 `git switch` 到
+一个建在旧 commit 上的分支，把另一个刚 push 的 `862d58b` 的文件从工作区回退
+掉了——commit 没丢，但工作区静默变旧，是碰巧 `git status` 看出来、靠
+`git checkout --` 还原的。同一天 `.git/` 里还留下一个 `HEAD.lock`，挡住了之
+后所有 git 操作。两件事都是并发写同一个 `.git` 的结果，且都不报错。
