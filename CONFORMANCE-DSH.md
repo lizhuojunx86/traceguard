@@ -1,6 +1,6 @@
 # DeepSeek Harness session accounting — conformance invariants
 
-v0.2.1 · 2026-08-19 · companion to [`CONFORMANCE.md`](CONFORMANCE.md) (Claude Code) ·
+v0.3.0 · 2026-08-19 · companion to [`CONFORMANCE.md`](CONFORMANCE.md) (Claude Code) ·
 harness in [`usage-tracker-audit/dsh-probe/`](usage-tracker-audit/dsh-probe/) ·
 D-3 and D-4 filed upstream as [deepseek-harness#1886](https://github.com/deepseek-ai/deepseek-harness/discussions/1886)
 
@@ -11,9 +11,10 @@ The Claude Code catalog exists because shipped trackers violated its entries.
 This one starts earlier: DSH is nine days old at v0.1.0-rc.6, and the
 ecosystem around it is two days old. So the entries below are split by how
 they were established. Four were measured on a real corpus, two of those are
-gaps in the official projection itself, and four Claude Code invariants are
-recorded here as **structurally satisfied**, because a catalog that only ever
-adds rules is not a catalog, it is a list of fears.
+gaps in the official projection itself, a fifth needs no corpus at all and is
+a reconciliation you run against your own output, and four Claude Code
+invariants are recorded here as **structurally satisfied**, because a catalog
+that only ever adds rules is not a catalog, it is a list of fears.
 
 Corpus figures are measured, not estimated. Source citations are file and
 line in `deepseek-ai/deepseek-harness` at `47f9438` (v0.1.0-rc.6). What the
@@ -39,6 +40,7 @@ as together; where a figure differs between them, both are given.
 | I-7 · sources rewrite themselves | **structurally satisfied** (S-2) |
 | I-11 · an unpriced model is an error | **applies unchanged** (S-4), and DSH ships no pricing layer at all |
 | — | **D-3** is new: a metering event the official projection does not fold |
+| — | **D-5** is new: a residual you can check against your own output, no corpus |
 
 ---
 
@@ -207,6 +209,51 @@ reports that step's real cost and not zero.
 **Reported upstream:** [deepseek-harness#1886](https://github.com/deepseek-ai/deepseek-harness/discussions/1886) — the replace-not-add half.
 The keep-first half is a consumer-side rule and stays here.
 
+## D-5 · Reconcile your fold against the official projection, and the residual must be exactly the compaction usage
+
+D-1 through D-4 are claims about the log. This one is a claim about your own
+output, and it is the only entry here you can run without a corpus, without a
+vendor account, and without knowing what the true totals are.
+
+State it as `sum(events) == projection` and it fails for the wrong reason.
+D-1 writes every sample twice and D-4 adds a third under a retried step, so a
+raw sum of usage sightings lands near 2× the projection on any session at all,
+compaction or no compaction. The left side has to be a corrected fold: collapse
+per `(turn, step)`, treat a failed terminal chunk as an attempt boundary, skip
+the inherited prefix on `seedLength`.
+
+Then the assertion has content:
+
+> On a session carrying at least one `compaction/summary` with `usage`, the
+> corrected fold minus the official projection equals the sum of
+> `compaction/summary.usage`, bucket for bucket. Any other residual is a
+> different bug.
+
+Two sides computed from the same file, no ground truth in between. A residual
+of zero says your consumer inherited D-3. A residual that is neither zero nor
+the compaction total says something else is wrong and the compaction gap is
+not it, which is worth more than a red test that only says "high".
+
+**Check.** `dsh_usage_probe.py` already prints both sides; the residual is the
+`C - S` line. `--self-test` exercises it on a constructed session that
+compacts once: corrected 4,710 against seed-aware 4,260, residual 450, which
+is the fixture summary's 300 input plus 150 output and nothing else. That runs
+in under a second on stdlib alone, so it belongs in CI on day one rather than
+behind a corpus you have to collect first.
+
+**Direction, stated plainly.** Against the official projection today this
+assertion fails by construction, because failing is what D-3 *is*. Its use is
+as a consumer-side gate now, and as the acceptance test for the upstream fix
+later: when [#1886](https://github.com/deepseek-ai/deepseek-harness/discussions/1886)
+lands, the residual against the official projection goes to zero, and the same
+line that was the bug report becomes the regression.
+
+Asked for by Ethan Walker, who wanted the cheap internal-consistency case
+rather than another measurement. The corpus-free substrate is
+`le-soleil-se-couche`'s synthetic fixture in that thread, which carries a
+compacted session, a retried step and a fork seed in one file, so the residual
+can be exercised against all three without anyone's private logs.
+
 ---
 
 ## Structurally satisfied — recorded so the catalog can be trusted
@@ -315,6 +362,10 @@ Read these before quoting anything above.
 - **D-4's second consequence has no number.** The undercount mechanism for
   retried steps is read from source; every failed attempt observed here
   reported zeros.
+- **D-5 is a predicate, not a measurement.** It has been exercised on the
+  self-test fixture and on this corpus, both with the residual landing exactly
+  on the compaction total. It has not been run against a third party's
+  implementation, so how often it catches something other than D-3 is unknown.
 - **The price figures under S-4 are dated, not measured.** Read from the
   vendor's page on 2026-08-19; everything else here was folded from the corpus.
   Neither route in the corpus is a DeepSeek route, so the 30× gap sizes the
