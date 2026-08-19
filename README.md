@@ -431,7 +431,15 @@ recomputations overturned it: the give-up cap is now solved by a sweep instead
 of hand-picked, expiry cost is a bracket instead of one bound, mid-gap **model
 switches** are measured instead of assumed, and the reportable conclusion is a
 *band* (`RECOMMENDED CAP: 9h..12h`) rather than a single argmax. `--benchmark`
-pins the window every quoted number comes from. See the
+pins the window every quoted number comes from.
+
+**1.4.0** lets that audit leave the laptop. `--emit-share` writes an aggregate
+JSON summary and `--show-share` prints the exact bytes first, so the sender
+reads all of it before deciding; a `corpus.fingerprint` identifies which traces
+a window actually loaded, because a closed window bounds timestamps and not the
+corpus; entries are immutable and refuse to be overwritten; and
+`generated_at` / `settling_days` record when the pull happened, not only what
+it pulled. `benchmark/` collects the results. See the
 [package README](packages/traceguard/README.md#cache-efficiency-audit).
 
 ## License
