@@ -76,6 +76,21 @@ makes no network calls and has no upload path.
   `NNN-<source>-<first 8 of corpus.fingerprint>.json`, so a re-run over grown
   traffic is a new entry sitting beside the old one rather than replacing it.
 
+- **`generated_at` / `settling_days`: when you pulled it, not just what you
+  pulled.** `corpus.fingerprint` shows that two submissions are different
+  corpora and cannot show why. `settling_days` — export time minus
+  `window.until` — can: a file exported the day a window shut reports a tail
+  still filling in, one exported a month later reports a tail that has probably
+  stopped. Proposed by **Boris Dzhingarov**, from the Google Search Console
+  version of the same bug, where the last days of any date range are
+  provisional and quietly revise themselves after export so a weekly report
+  never reconciles with the previous one. Neither field feeds the fingerprint:
+  mixing a clock into it would make every re-run of unchanged traffic look like
+  fresh traffic. `settling_days` may be negative and is not validated away —
+  `--until <date>` closes at 23:59:59.999999, so a 09:00 export legitimately
+  sits ten hours before its own bound, and a rule that refused it would pass at
+  23:59 and fail at 09:00, which is the opposite of reproducible.
+
 **`benchmark/`** — schema specification, submission criteria, and the first
 entry. It holds one file and says plainly that under 20 submissions any
 cross-organisation number in it is an anecdote.

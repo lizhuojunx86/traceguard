@@ -54,8 +54,8 @@ yourself, to whoever you decide, or not at all.
 
 Aggregates only: per-model token counts and hit rates, gap-bucket counts and
 costs, the cross-model switch rate cut by gap length, the keep-alive cap band,
-both ends of the net-benefit range, and a fingerprint identifying which traces
-the window loaded.
+both ends of the net-benefit range, a fingerprint identifying which traces the
+window loaded, and when the export ran relative to the window closing.
 
 Never: prompt text, answer text, file paths, session ids, per-trace timestamps,
 project or component names, error messages, or free-form strings of any kind.
@@ -130,6 +130,42 @@ so quoting both is double-counting.
 The honest version of the old advice: pick a window, state it, keep it, and
 publish the fingerprint so nobody has to take the first three on trust.
 
+## When you pulled it, not just what you pulled
+
+`corpus.fingerprint` can tell you two submissions are different corpora. It
+cannot tell you why. Two more fields can:
+
+- **`generated_at`** — when the file was exported, UTC, to the second.
+- **`settling_days`** — `generated_at` minus `window.until`, in days.
+
+`settling_days` is the one that earns its place. A window closes and the
+traffic inside it keeps arriving for a while afterwards, so a file exported the
+day the window shut is reporting a tail that is still filling in, and one
+exported a month later is probably reporting a tail that has stopped moving.
+Same window, two fingerprints, and this number is the difference between
+noticing the discrepancy and accounting for it. Our own first entry was
+exported at `settling_days` ≈ 2, which is exactly the regime where you should
+expect it to move again.
+
+**This field is here because a reader asked for it.** Boris Dzhingarov pointed
+out that we record what was pulled and not when, from the Google Search Console
+version of the same bug: the last few days of any date range there are
+provisional and quietly revise themselves after export, so a weekly report never
+reconciles with the one sent the week before. Late-arriving Claude Code
+transcripts are that disease with a different vector, and we had built the
+detector without building the explanation. It is the first time someone outside
+this repo handed over something that dropped straight into the schema, and the
+credit belongs in the file rather than in a commit message nobody reads.
+
+`settling_days` can be negative and is not validated away. A bare
+`--until <date>` closes at 23:59:59.999999, so an export at 09:00 has a window
+bound ten hours in its own future — an ordinary thing to do. Refusing it would
+break that, and the refusal would depend on the wall clock, so the identical
+command would pass at 23:59 and fail at 09:00. A tool whose accept/reject
+behaviour is not reproducible is the opposite of the point. A negative value is
+emitted and says what it means: exported before its own window closed, tail not
+provisional but unwritten.
+
 ## Entries are immutable
 
 `data/NNN-<source>-<first 8 of corpus.fingerprint>.json`, e.g.
@@ -169,10 +205,17 @@ A submission goes in `data/` if all of these hold:
    fraction of expired gaps where a NULL `model_id` makes the cross-model
    question unanswerable. Past half, the file cannot speak to the one axis this
    corpus is for. It is still welcome; it is labelled.
-4. **Produced by an unmodified released traceguard.** `tool_version` is read
+4. **Any `settling_days` is accepted, and a small one is labelled.** A
+   submission exported days after its window shut is not wrong, but its corpus
+   may not have finished arriving, so it is not yet a stable measurement of
+   anything. Nothing is rejected for this — the whole reason the field exists is
+   that a reader can weigh it — but entries under roughly a week of settling get
+   noted as such, and a negative one gets noted loudly. If your numbers are
+   worth re-running later, that is a second entry, not a correction.
+5. **Produced by an unmodified released traceguard.** `tool_version` is read
    from installed package metadata, not from a string anyone can edit, so a
    submission cannot claim a version it was not produced by.
-5. **You looked at it.** I cannot check this one. Ask yourself whether you would
+6. **You looked at it.** I cannot check this one. Ask yourself whether you would
    be comfortable if the file were public, because in this directory it is.
 
 Window length, model mix and traffic volume are not criteria. Small stores are
