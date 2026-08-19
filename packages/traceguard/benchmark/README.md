@@ -157,6 +157,15 @@ detector without building the explanation. It is the first time someone outside
 this repo handed over something that dropped straight into the schema, and the
 credit belongs in the file rather than in a commit message nobody reads.
 
+One wrinkle in our own first entry, said here so nobody has to reverse-engineer
+it: `001-traceguard-self-b07cc061.json` was re-pulled once, after these two
+fields were added, so **its `generated_at` is later than the date it was first
+published.** Read it as the timestamp of that re-pull, not as a publication
+date. The corpus itself did not move — the fingerprint is byte-identical across
+both pulls, which is the whole reason the file kept its name. That the digest
+survived a re-pull two days later is itself the first small piece of evidence
+that this window has stopped filling in.
+
 `settling_days` can be negative and is not validated away. A bare
 `--until <date>` closes at 23:59:59.999999, so an export at 09:00 has a window
 bound ten hours in its own future — an ordinary thing to do. Refusing it would
