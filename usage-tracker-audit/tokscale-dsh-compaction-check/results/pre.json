@@ -1,0 +1,52 @@
+{
+  "groupBy": "client,model",
+  "entries": [
+    {
+      "client": "dsh",
+      "mergedClients": null,
+      "model": "minimax-m3",
+      "provider": "minimax-cn",
+      "input": 51208,
+      "output": 4326,
+      "cacheRead": 208256,
+      "cacheWrite": 0,
+      "reasoning": 0,
+      "messageCount": 14,
+      "cost": 0.03304896,
+      "performance": {
+        "msPer1KTokens": null,
+        "totalDurationMs": 0,
+        "timedTokens": 0,
+        "sampleCount": 0,
+        "tokenCoverage": 0.0
+      }
+    },
+    {
+      "client": "dsh",
+      "mergedClients": null,
+      "model": "qwen2.5:14b",
+      "provider": "ollama",
+      "input": 10250,
+      "output": 1168,
+      "cacheRead": 0,
+      "cacheWrite": 0,
+      "reasoning": 0,
+      "messageCount": 5,
+      "cost": 0.0,
+      "performance": {
+        "msPer1KTokens": null,
+        "totalDurationMs": 0,
+        "timedTokens": 0,
+        "sampleCount": 0,
+        "tokenCoverage": 0.0
+      }
+    }
+  ],
+  "totalInput": 61458,
+  "totalOutput": 5494,
+  "totalCacheRead": 208256,
+  "totalCacheWrite": 0,
+  "totalMessages": 19,
+  "totalCost": 0.03304896,
+  "processingTimeMs": 4246
+}
