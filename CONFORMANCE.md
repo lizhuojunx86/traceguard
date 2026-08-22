@@ -217,6 +217,10 @@ against: append-only, `message.id`-keyed, Apache-2.0. `pip install traceguard`.
 | viberank | — | I-7, I-8, I-9 | #111, #121, #124 (I-10 open in #125) |
 | claude-code-templates | 30.1k | I-1 | PR #754 open |
 
+Where these invariants are now enforced by someone else's code, who
+reproduced a measurement independently, and what has been offered and not
+taken up: [`usage-tracker-audit/ADOPTERS.md`](usage-tracker-audit/ADOPTERS.md).
+
 ## Contributing a counterexample
 
 An invariant here is a claim, and claims are for breaking. If your corpus

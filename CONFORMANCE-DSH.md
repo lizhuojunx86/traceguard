@@ -393,6 +393,14 @@ Read these before quoting anything above.
   Anthropic-protocol or Responses-protocol route behaves the same is not
   established.
 
+## Who runs these
+
+D-3 is being fixed in a second implementation — tokscale's DSH parser, in
+[#1162](https://github.com/junhoyeo/tokscale/pull/1162). The independent
+reproductions of D-3 and D-4 on the harness side, and what is still
+outstanding upstream, are listed in
+[`usage-tracker-audit/ADOPTERS.md`](usage-tracker-audit/ADOPTERS.md).
+
 ## Contributing a counterexample
 
 An invariant is a claim, and claims are for breaking. If your corpus
