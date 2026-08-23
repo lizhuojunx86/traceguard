@@ -231,14 +231,14 @@ The same protocol pointed at
 [claude-code-templates](https://github.com/davila7/claude-code-templates)
 (30k★) found the opposite sign — a 2.36× over-count, fix submitted as
 [PR #754](https://github.com/davila7/claude-code-templates/pull/754):
-[`usage-tracker-audit/cct-dedup-check/`](usage-tracker-audit/cct-dedup-check/) ·
+[`cct-dedup-check/`](https://github.com/lizhuojunx86/token-accounting-conformance/tree/main/cct-dedup-check/) ·
 write-up: [The vendor documents this bug. A 30k-star repo shipped it anyway.](https://dev.to/lizhuojunx86/the-vendor-documents-this-bug-a-30k-star-repo-shipped-it-anyway-27pb)
 
 What the series adds up to is a catalog: eleven invariants anything counting
 tokens from `~/.claude/projects` has to hold, each one measured in a shipped
 tracker before it was written down — [`CONFORMANCE.md`](CONFORMANCE.md).
 Maintainers can run the checks in CI with a drop-in workflow:
-[`usage-tracker-audit/ci/`](usage-tracker-audit/ci/).
+[`ci/`](https://github.com/lizhuojunx86/token-accounting-conformance/tree/main/ci/).
 
 ## Install
 
