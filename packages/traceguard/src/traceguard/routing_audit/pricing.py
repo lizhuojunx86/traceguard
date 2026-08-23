@@ -142,7 +142,7 @@ def cache_creation_split(usage: Mapping[str, Any]) -> tuple[int, int]:
       flat one.** Driving ``compute_cost_usd`` over them twice, once with the
       flat keys present and once stripped, changed the total by **$0.00**
       across 142,957,275 one-hour cache tokens. Harness:
-      ``usage-tracker-audit/part4-routing-audit/settle_cache_split.py``.
+      a harness kept out of tree.
     * Store: **58,194 of 58,210 rows carry the flat form, none the nested one.**
 
     THE CONCLUSION THAT FOLLOWS, and it is two statements, not one:

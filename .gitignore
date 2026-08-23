@@ -90,7 +90,6 @@ pepper.*
 # — an unversioned dashboard has no history to catch that against. Its state,
 # logs and alert file stay ignored; only the script is tracked.
 launch/*
-!launch/outreach_watch.py
 /traceguard_定位与CC开发Prompt.md
 
 # iCloud/file-sync duplicates: "<name> 2.<ext>", "<name> 3.<ext>" — never commit
