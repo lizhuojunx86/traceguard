@@ -214,7 +214,7 @@ against: append-only, `message.id`-keyed, Apache-2.0. `pip install traceguard`.
 | splitrail | 216 | I-4, I-5 (+ an earlier dedup fix) | #208, #209, #222 |
 | tokscale | 4.6k | I-6, I-7 | v4.9.0, v4.11.0 |
 | Clawdmeter | — | I-1 (I-2, I-3 established in the fix exchange) | v3.0.1 |
-| viberank | — | I-7, I-8, I-9 | #111, #121, #124 (I-10 open in #125) |
+| viberank | — | I-7, I-8, I-9, I-10 | #111, #121, #124, #143 (CLI v1.9.0) |
 | claude-code-templates | 30.1k | I-1 | PR #754 open |
 
 Where these invariants are now enforced by someone else's code, who

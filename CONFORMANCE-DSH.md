@@ -395,10 +395,27 @@ Read these before quoting anything above.
 
 ## Who runs these
 
-D-3 is being fixed in a second implementation — tokscale's DSH parser, in
-[#1162](https://github.com/junhoyeo/tokscale/pull/1162). The independent
-reproductions of D-3 and D-4 on the harness side, and what is still
-outstanding upstream, are listed in
+D-3 is now held by a second implementation. tokscale's DSH parser folds
+`compaction/summary` as of
+[#1162](https://github.com/junhoyeo/tokscale/pull/1162) (`d97a829`, merged
+2026-08-22): the arm sits at `sessions/dsh.rs:153`, a summary is barred from
+claiming a turn start, its dedup key is namespaced so it cannot be mistaken
+for a reply, and the parser version is bumped 1→2 so existing caches refold.
+Verified on the corpus behind this catalog — 275,208 → 324,103, the delta
+being the three compaction events and nothing else, with a warm cache written
+by the pre-fix binary landing on the cold post-fix figure.
+
+That fix landed **before** the DSH client shipped, so unlike D-1's analogue on
+the Claude side there is no inflated history to migrate.
+
+Upstream in DSH itself, D-1 through D-5 are unchanged: checked 2026-08-23
+against `b150a551b8` (`dsh-v0.1.1-rc.2`), `usage-projection.ts` still matches
+only `assistant/chunk` and `assistant/message`, and `stateVersion` is still 1.
+Four independent implementations of the fix exist and none can move, because
+CONTRIBUTING closes external PRs.
+
+The reproductions, the regression tests other people wrote, and what was
+offered and not taken up are listed in
 [`usage-tracker-audit/ADOPTERS.md`](usage-tracker-audit/ADOPTERS.md).
 
 ## Contributing a counterexample
