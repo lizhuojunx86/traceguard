@@ -5,6 +5,8 @@
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 [![CI](https://github.com/lizhuojunx86/traceguard/actions/workflows/ci.yml/badge.svg)](https://github.com/lizhuojunx86/traceguard/actions/workflows/ci.yml)
 
+**The token-accounting conformance suite has moved** to [lizhuojunx86/token-accounting-conformance](https://github.com/lizhuojunx86/token-accounting-conformance), with its history. It was a different subject with a different audience, and burying it in a repository about look-ahead bias helped nobody looking for either. The old paths still resolve here, as stubs pointing there.
+
 **Point-in-time correct LLM instrumentation — the time-integrity layer for
 LLM pipelines.**
 
