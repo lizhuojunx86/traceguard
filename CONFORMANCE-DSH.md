@@ -8,7 +8,7 @@ If your plugin reads a DeepSeek Harness session log and reports tokens, cost,
 or usage totals, these are the invariants it has to hold.
 
 The Claude Code catalog exists because shipped trackers violated its entries.
-This one starts earlier: DSH is nine days old at v0.1.0-rc.6, and the
+This one starts earlier: DSH is nine days old at v0.1.0-rc.5, and the
 ecosystem around it is two days old. So the entries below are split by how
 they were established. Four were measured on a real corpus, two of those are
 gaps in the official projection itself, a fifth needs no corpus at all and is
@@ -17,7 +17,9 @@ invariants are recorded here as **structurally satisfied**, because a catalog
 that only ever adds rules is not a catalog, it is a list of fears.
 
 Corpus figures are measured, not estimated. Source citations are file and
-line in `deepseek-ai/deepseek-harness` at `47f9438` (v0.1.0-rc.6). What the
+line in `deepseek-ai/deepseek-harness` at `47f9438` (v0.1.0-rc.5 — its parent
+is `abe560f81 release(dsh): 0.1.0-rc.5`, and no tag points at it; earlier
+versions of this file said rc.6). What the
 corpus does *not* cover is stated in **Limits** at the bottom; read that
 before quoting any percentage here.
 
@@ -263,10 +265,19 @@ lands, the residual against the official projection goes to zero, and the same
 line that was the bug report becomes the regression.
 
 Asked for by Ethan Walker, who wanted the cheap internal-consistency case
-rather than another measurement. The corpus-free substrate is
-`le-soleil-se-couche`'s synthetic fixture in that thread, which carries a
+rather than another measurement. The idea of a corpus-free substrate is
+`le-soleil-se-couche`'s, from that thread: a synthetic fixture carrying a
 compacted session, a retried step and a fork seed in one file, so the residual
 can be exercised against all three without anyone's private logs.
+
+**Two such fixtures now exist and they are not interchangeable.** The one in
+`dsh-conformance/` is built here by `build_fixture.py` with its own numbers, two
+sessions and no reasoning bucket; `le-soleil-se-couche`'s lives in the thread and
+aggregates to 207 / 43 / 137 / 23 plus a reasoning column. Earlier versions of
+this file called the committed one "le-soleil-se-couche's fixture", which was
+sloppy — it was written after theirs and in the same spirit, but it is a
+different file and the totals do not compare. A number quoted from either has to
+say which.
 
 ---
 
@@ -367,9 +378,15 @@ Read these before quoting anything above.
 - **Four sessions, 78 usage samples, two routes.** D-1's ratio is exact and
   reproduced independently on both routes. D-2 has two observations, D-3
   three, D-4 one.
-- **`cacheWriteTokens` is still untested.** Neither route populated it —
-  MiniMax omits the key entirely. Cache *reads* are covered (249,728 tokens);
-  cache *writes* are not.
+- **`cacheWriteTokens` is unobserved, no longer untested.** Neither route in
+  the corpus populated it — MiniMax omits the key entirely — so cache *reads*
+  are covered by measurement (249,728 tokens) and cache *writes* are not. The
+  compaction path specifically is now exercised on that bucket: `a137460387`
+  folded `le-soleil-se-couche`'s fixture through `64ee978` and reported a
+  compaction increment of +31 / +9 / +37 / **+6**, a summary carrying cache
+  writes, handled correctly. Synthetic, so it says nothing about frequency in
+  the wild; but the claim that no implementation has ever been run against that
+  case is retired.
 - **D-3's share of the total is corpus-specific** (15.1% overall, 14.4% on
   the MiniMax route). Three compactions over two short sessions. The citable
   facts are 48,895 tokens and 3 events.
@@ -412,7 +429,23 @@ Upstream in DSH itself, D-1 through D-5 are unchanged: checked 2026-08-23
 against `b150a551b8` (`dsh-v0.1.1-rc.2`), `usage-projection.ts` still matches
 only `assistant/chunk` and `assistant/message`, and `stateVersion` is still 1.
 Four independent implementations of the fix exist and none can move, because
-CONTRIBUTING closes external PRs.
+CONTRIBUTING closes external PRs (line 9, read off the file: "we cannot accept
+external pull requests at the moment").
+
+**The file is not, however, untouched since the baseline, and I said it was.**
+`4c421ec88 refactor(session-projection): separate state from client views` and
+`9127d7e8b fix(session-projection): keep host state off wire` both landed on it
+after `47f9438`. The defects survive all of it, which is why the claim held up
+every time I checked the behaviour, but `ProjectionDefinition` changed shape:
+`stateSchema` is now required, `schema` and `view` are gone from the top level
+in favour of `wire: { viewSchema, view }`, and `tokenUsage` is registered
+through a `declare module` augmentation. The consequence for this catalog is
+that the line citations above are anchored to `47f9438` and do not transfer to
+master, and the consequence upstream is that `63688b0` — the reference
+implementation three of us verified — no longer applies to the tree it would
+have to land on. Only `64ee978` is written against current master.
+Cross-checked in [`usage-tracker-audit/dsh-1886-crosscheck/`](usage-tracker-audit/dsh-1886-crosscheck/):
+the two agree bucket for bucket on D-3 and differ by exactly the D-4 term.
 
 The reproductions, the regression tests other people wrote, and what was
 offered and not taken up are listed in

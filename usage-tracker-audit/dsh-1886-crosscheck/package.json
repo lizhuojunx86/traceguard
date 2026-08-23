@@ -1,0 +1,6 @@
+{
+  "name": "dsh-1886-crosscheck",
+  "private": true,
+  "type": "module",
+  "dependencies": { "zod": "^4.4.3", "esbuild": "^0.25.0" }
+}

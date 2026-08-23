@@ -1,0 +1,5 @@
+{"type": "session", "version": 0, "id": "nousage", "createdAt": 1, "delegationDepth": 0}
+{"type": "user/message", "data": {"turn": 0}, "seq": 0, "time": 1}
+{"type": "assistant/chunk", "data": {"turn": 0, "step": 0, "chunk": {"type": "usage", "usage": {"inputTokens": 100, "outputTokens": 10, "cacheReadTokens": 1000, "cacheWriteTokens": 5}}}, "seq": 1, "time": 2}
+{"type": "compaction/summary", "data": {}, "seq": 2, "time": 3}
+{"type": "assistant/message", "data": {"turn": 0, "step": 0, "message": {}, "usage": {"inputTokens": 100, "outputTokens": 10, "cacheReadTokens": 1000, "cacheWriteTokens": 5}}, "seq": 3, "time": 4}

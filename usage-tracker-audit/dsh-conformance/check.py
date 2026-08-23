@@ -28,6 +28,7 @@ Invariants: CONFORMANCE-DSH.md in lizhuojunx86/traceguard.
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import os
 import re
@@ -147,24 +148,45 @@ def report(got: dict, agg: dict, buckets) -> int:
         "gap_superseded": ("a superseded attempt's usage is being dropped", "D-4"),
         "gap_inherited": ("an inherited fork prefix is being counted", "D-2"),
     }
-    explained = False
-    for key, (why, invariant) in named.items():
-        term = agg[key]
-        if not _nonzero(term):
+    # Search signed combinations of the three terms, not just one at a time.
+    # A partial fix produces a combination: an implementation that folds
+    # compaction but leaves D-2 and D-4 open lands on inherited - superseded,
+    # which is the expected shape while the upstream fix is compaction-only.
+    keys = [k for k in named if _nonzero(agg[k])]
+    best = None
+    for coeffs in itertools.product((-1, 0, 1), repeat=len(keys)):
+        if not any(coeffs):
             continue
-        if _eq(residual, {b: -term[b] for b in ref.BUCKETS}, buckets):
-            print(f"  The residual is exactly the {key} term: {why}.")
+        combo = {b: sum(c * agg[k][b] for c, k in zip(coeffs, keys))
+                 for b in ref.BUCKETS}
+        if _eq(residual, combo, buckets):
+            weight = sum(1 for c in coeffs if c)
+            if best is None or weight < best[0]:
+                best = (weight, coeffs)
+    if best is not None:
+        _, coeffs = best
+        terms = [(k, c) for k, c in zip(keys, coeffs) if c]
+        if len(terms) == 1:
+            k, c = terms[0]
+            why, invariant = named[k]
+            lead = f"exactly the {k} term" if c < 0 else f"exactly +{k}"
+            tail = "" if c < 0 else ", in the other direction"
+            print(f"  The residual is {lead}: {why}{tail}.")
             print(f"  Invariant: {invariant}")
-            explained = True
-        elif _eq(residual, term, buckets):
-            print(f"  The residual is exactly +{key}: {why}, in the other direction.")
-            print(f"  Invariant: {invariant}")
-            explained = True
-    if not explained:
-        print("  The residual matches none of the three known gap terms alone.")
-        print("  Either two of them are combining, or this is something the")
-        print("  catalog does not describe yet. If it is the second, that is worth")
-        print("  filing: CONFORMANCE-DSH.md takes counterexamples.")
+        else:
+            print("  The residual is a combination of known terms:")
+            for k, c in terms:
+                why, invariant = named[k]
+                verb = "not folded" if c < 0 else "counted when it should not be"
+                print(f"    {'-' if c < 0 else '+'}{k:<16} {invariant}  {why} ({verb})")
+            print()
+            print("  A combination is what a partial fix looks like, not a new")
+            print("  finding. Each term above is open on its own.")
+    else:
+        print("  The residual matches no signed combination of the three known")
+        print("  gap terms. That is not a partial fix; it is something the")
+        print("  catalog does not describe yet, and it is worth filing:")
+        print("  CONFORMANCE-DSH.md takes counterexamples.")
     print()
     _print_gaps(agg)
     return 1
