@@ -4,11 +4,27 @@
 
   Install (edit the paths below first if your checkout is elsewhere):
 
-    cp scripts/routing_probe_daily.plist ~/Library/LaunchAgents/ai.traceguard.routing-probe.plist
+    # The log directory MUST exist first. launchd opens StandardOutPath before
+    # it execs anything, so a missing directory means the job never starts and
+    # leaves no log saying why; the script's own mkdir runs too late to help.
+    mkdir -p ~/Library/Application\ Support/traceguard
+
     chmod +x scripts/routing_probe_daily.sh
+    cp scripts/routing_probe_daily.plist ~/Library/LaunchAgents/ai.traceguard.routing-probe.plist
     launchctl load ~/Library/LaunchAgents/ai.traceguard.routing-probe.plist
 
+  Run the script by hand once before involving launchd. It is the only way to
+  tell a broken script from broken launchd wiring, and it produces the same
+  data either way:
+
+    bash scripts/routing_probe_daily.sh
+
   Check it:   launchctl list | grep traceguard
+              (columns are PID, last exit status, label. A non-zero second
+              column with no log file means launchd could not start the job at
+              all: almost always the missing log directory above, or macOS
+              denying a background job access to a protected folder such as
+              ~/Desktop.)
   Run it now: launchctl start ai.traceguard.routing-probe
   Watch it:   tail -f ~/Library/Application\ Support/traceguard/routing_probe.log
   Remove it:  launchctl unload ~/Library/LaunchAgents/ai.traceguard.routing-probe.plist
