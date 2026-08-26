@@ -203,3 +203,40 @@ def test_classify_trace_is_exported_for_single_row_use(engine) -> None:
     with Session(engine) as sess:
         trace = sess.scalars(__import__("sqlalchemy").select(Trace)).one()
         assert classify_trace(trace, engine=engine).verdict is Verdict.UNVERIFIABLE
+
+
+def test_a_failed_call_is_not_an_integrity_problem(engine) -> None:
+    """An expired key must not inflate the integrity report.
+
+    Found by running the harness against a bad key: the failed call was graded
+    'unregistered' and counted as actionable, which reads as a timeline defect
+    when it is an operational one.
+    """
+    tracer = Tracer(engine)
+    with pytest.raises(RuntimeError):
+        with tracer.span("proj", "comp", "llm_complete", feature_as_of=AS_OF) as span:
+            span.record_input({"x": 1})
+            span.record_model_prompt(model_id="orcarouter/auto")
+            raise RuntimeError("401 Invalid API key")
+
+    finding = next(iter(scan(engine)))
+    assert finding.verdict is Verdict.FAILED_CALL
+    assert finding.actionable is False
+    assert "call failed" in finding.detail
+
+
+def test_failed_calls_do_not_hide_real_problems(engine) -> None:
+    """Alongside a genuine divergence, the failure is ignored and it is not."""
+    tracer = Tracer(engine)
+    with pytest.raises(RuntimeError):
+        with tracer.span("proj", "comp", "llm_complete", feature_as_of=AS_OF) as span:
+            span.record_input({"x": 1})
+            span.record_model_prompt(model_id="orcarouter/auto")
+            raise RuntimeError("401")
+    _write(engine, model="orcarouter/auto", served="deepseek/deepseek-v4", as_of=AS_OF)
+
+    findings = list(scan(engine))
+    counts = summarise(findings)
+    assert counts[Verdict.FAILED_CALL] == 1
+    assert counts[Verdict.DIVERGED] == 1
+    assert [f.actionable for f in findings].count(True) == 1

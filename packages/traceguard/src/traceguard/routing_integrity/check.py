@@ -22,6 +22,11 @@ class Verdict(str, Enum):
     #: Requested a routing alias and the gateway never said who served it.
     #: The timeline underneath this trace is unknowable, not merely unchecked.
     UNVERIFIABLE = "unverifiable"
+    #: The call itself failed, so no model served it and none was ever going to.
+    #: Not an integrity problem — an operational one — and kept out of the
+    #: actionable count so a bad afternoon of 401s cannot masquerade as a
+    #: timeline defect.
+    FAILED_CALL = "failed_call"
     #: A concrete model served the call, but it is absent from model_registry,
     #: so invariant 2 has no timestamps to compare against.
     UNREGISTERED = "unregistered"
@@ -46,8 +51,13 @@ class Finding:
 
     @property
     def actionable(self) -> bool:
-        """True when this trace should not be trusted for a point-in-time claim."""
-        return self.verdict is not Verdict.VERIFIED
+        """True when this trace should not be trusted for a point-in-time claim.
+
+        A failed call is not in that set: it produced no result, so there is no
+        result to distrust. Counting it would let an expired key inflate the
+        integrity report, which is the fastest way to teach someone to ignore it.
+        """
+        return self.verdict not in (Verdict.VERIFIED, Verdict.FAILED_CALL)
 
 
 def _registered(model_id: str | None, engine: Engine) -> bool:
@@ -126,6 +136,19 @@ def classify_trace(trace: Trace, *, engine: Engine) -> Finding:
     parsed = trace.output_parsed if isinstance(trace.output_parsed, dict) else {}
     routing = parsed.get("routing")
     routing = routing if isinstance(routing, dict) else None
+
+    if trace.error_class:
+        # The call never produced a result. Grading its timeline would be
+        # grading nothing; say what happened instead.
+        return Finding(
+            trace_id=trace.trace_id,
+            verdict=Verdict.FAILED_CALL,
+            requested_model=(routing or {}).get("requested_model") or trace.model_id,
+            served_model=None,
+            feature_as_of=trace.feature_as_of,
+            detail=f"call failed ({trace.error_class}); no model served it",
+        )
+
     verdict, detail = classify(routing, engine=engine, model_id=trace.model_id)
     return Finding(
         trace_id=trace.trace_id,

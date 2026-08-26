@@ -15,6 +15,7 @@ from traceguard.store.models import make_engine
 
 _HEADLINE = {
     Verdict.UNVERIFIABLE: "cannot be verified at all",
+    Verdict.FAILED_CALL: "the call failed; nothing to verify",
     Verdict.UNREGISTERED: "served by a model missing from the registry",
     Verdict.DIVERGED: "checked the requested model, not the one that answered",
     Verdict.VERIFIED: "checked a real, registered model",
@@ -28,9 +29,15 @@ def _render(findings: Sequence[Finding], *, limit: int) -> str:
     for verdict in Verdict:
         lines.append(f"  {counts[verdict]:>6}  {verdict.value:<13} {_HEADLINE[verdict]}")
 
+    failed = counts[Verdict.FAILED_CALL]
     actionable = [f for f in findings if f.actionable]
     if not actionable:
-        lines.append("\nevery dated trace checked a registered model.")
+        lines.append("\nevery dated trace that produced a result checked a registered model.")
+        if failed:
+            lines.append(
+                f"({failed} failed call(s) ignored — an operational problem, not a "
+                "timeline one.)"
+            )
         return "\n".join(lines)
 
     lines.append(f"\n{len(actionable)} trace(s) need attention:")
