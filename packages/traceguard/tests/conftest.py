@@ -11,7 +11,11 @@ from traceguard.store.models import Base, make_engine
 # iCloud/file-sync duplicates new files as "<name> 2.py"; those stale copies
 # would be collected as tests. Ignore them (mirrors the build-time
 # `exclude = ["* 2.py"]` in pyproject).
-collect_ignore_glob = ["* 2.py"]
+#
+# " 3." and " 4." are included because sync produces them once a conflict
+# repeats — .gitignore already learned this ("extension-by-extension lists kept
+# missing new cases") and this list had not caught up.
+collect_ignore_glob = ["* 2.py", "* 3.py", "* 4.py"]
 
 
 @pytest.fixture
