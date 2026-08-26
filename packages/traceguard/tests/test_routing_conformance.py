@@ -206,3 +206,76 @@ def test_cli_exits_cleanly_when_the_extra_is_absent(
     )
     assert conformance.main(["--gateway", "orcarouter", "--repeats", "1"]) == 2
     assert "nope, install it" in capsys.readouterr().out
+
+
+def test_build_caller_wires_a_real_wrapped_client(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The one place that touches real SDK signatures, and the only one the
+    injected-caller tests above cannot see.
+
+    Every other test here passes its own ``call()``, so ``_build_caller`` ran
+    unexercised and shipped calling ``wrap_openai`` without its required
+    ``project`` / ``component``. A stub ``openai`` module lets the real
+    ``wrap_openai`` run here without the extra installed — which matters
+    because CI does not install it, so ``importorskip`` would protect nothing.
+    """
+    import sys
+    import types
+
+    from traceguard.routing_integrity import conformance
+
+    sent: dict[str, object] = {}
+
+    class _StubOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            self.init_kwargs = kwargs
+
+            def create(**call_kwargs: object) -> object:
+                sent.update(call_kwargs)
+                return types.SimpleNamespace(model="served/model-x", id="r1",
+                                             choices=[], usage=None)
+
+            self.chat = types.SimpleNamespace(
+                completions=types.SimpleNamespace(create=create)
+            )
+
+    stub = types.ModuleType("openai")
+    stub.OpenAI = _StubOpenAI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "openai", stub)
+    monkeypatch.setenv("ORCAROUTER_API_KEY", "sk-test")
+
+    caller = conformance._build_caller("orcarouter", "sqlite:///:memory:")
+    response = caller("orcarouter/auto", "hi", 64)
+
+    assert getattr(response, "model", None) == "served/model-x"
+    assert sent["model"] == "orcarouter/auto"
+    assert sent["max_tokens"] == 64
+
+
+def test_build_caller_result_drives_run_probes(monkeypatch: pytest.MonkeyPatch) -> None:
+    """End to end through the real wiring, still with no network."""
+    import sys
+    import types
+
+    from traceguard.routing_integrity import conformance
+
+    class _StubOpenAI:
+        def __init__(self, **kwargs: object) -> None:
+            self.chat = types.SimpleNamespace(
+                completions=types.SimpleNamespace(
+                    create=lambda **k: types.SimpleNamespace(
+                        model="served/model-x", id="r", choices=[], usage=None
+                    )
+                )
+            )
+
+    stub = types.ModuleType("openai")
+    stub.OpenAI = _StubOpenAI  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "openai", stub)
+    monkeypatch.setenv("ORCAROUTER_API_KEY", "sk-test")
+
+    report = run_probes(
+        conformance._build_caller("orcarouter", "sqlite:///:memory:"),
+        gateway="OrcaRouter", alias="orcarouter/auto",
+        probes=[Probe("trivial", "hi")], repeats=2,
+    )
+    assert report.served_models == {"served/model-x"}

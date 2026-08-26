@@ -71,7 +71,13 @@ def main() -> int:
     from traceguard.store.models import make_engine
 
     engine = make_engine("sqlite:///gateway_demo.db")
-    client = wrap_openai(OpenAI(**kwargs), tracer=Tracer(engine))
+    client = wrap_openai(
+        OpenAI(**kwargs),
+        project="gateway-demo",
+        component=name,
+        tracer=Tracer(engine),
+        feature_as_of=datetime.now(UTC),
+    )
 
     response = client.chat.completions.create(
         model=model,

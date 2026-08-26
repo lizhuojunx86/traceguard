@@ -297,7 +297,17 @@ def _build_caller(gateway: str, db: str):
     from traceguard.gateways import client_kwargs
     from traceguard.store.models import make_engine
 
-    client = wrap_openai(OpenAI(**client_kwargs(gateway)), tracer=Tracer(make_engine(db)))
+    # project/component land on every trace, so probe rows stay separable from
+    # real work sharing the same store.
+    client = wrap_openai(
+        OpenAI(**client_kwargs(gateway)),
+        project="routing-conformance",
+        component=gateway,
+        tracer=Tracer(make_engine(db)),
+        # Stamped now, so the probe traces are themselves checkable by
+        # invariant 2 and the routing_integrity scan has something to grade.
+        feature_as_of=datetime.now(UTC),
+    )
 
     def call(model: str, prompt: str, max_tokens: int) -> Any:
         return client.chat.completions.create(
