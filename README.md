@@ -90,6 +90,16 @@ unchanged. Use your dashboard for observability; use TraceGuard to guarantee the
 timeline underneath it. Step-by-step:
 [docs/integrations/otel-langfuse-phoenix.md](docs/integrations/otel-langfuse-phoenix.md).
 
+The same goes for OpenAI-compatible gateways. TraceGuard instruments whatever
+client you hand it, so a gateway is just a `base_url`; presets for OrcaRouter and
+OpenRouter ship in `traceguard.gateways`, in alphabetical order and with no
+provider recommended over another. Read
+[docs/integrations/gateways.md](docs/integrations/gateways.md) before pointing
+one at historical data: a routing alias like `orcarouter/auto` or
+`openrouter/auto` records the alias rather than the model that actually served
+the call, which defeats look-ahead invariant 2 *silently*. Pin a concrete model
+id for anything you intend to reproduce.
+
 One boundary worth stating here rather than 200 lines down. TraceGuard makes a
 record correct in time; it does not make that record something a third party can
 check without trusting you. That is
