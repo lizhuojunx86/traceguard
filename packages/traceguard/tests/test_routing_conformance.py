@@ -279,3 +279,28 @@ def test_build_caller_result_drives_run_probes(monkeypatch: pytest.MonkeyPatch) 
         probes=[Probe("trivial", "hi")], repeats=2,
     )
     assert report.served_models == {"served/model-x"}
+
+
+def test_console_scripts_point_at_real_entry_points() -> None:
+    """A typo in pyproject only surfaces at install time, which is too late.
+
+    Both CLIs exist because `python -m traceguard...` needs the package
+    importable from the working directory, and this repo's editable install
+    does not always provide that.
+    """
+    import tomllib
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent
+    scripts = tomllib.loads((root / "pyproject.toml").read_text())["project"]["scripts"]
+    assert scripts, "the console scripts disappeared"
+
+    for name, target in scripts.items():
+        module_path, _, func_name = target.partition(":")
+        module = __import__(module_path, fromlist=[func_name])
+        func = getattr(module, func_name, None)
+        assert callable(func), f"{name} -> {target} is not callable"
+        # Every entry point must accept argv so it is testable without sys.argv.
+        import inspect
+
+        assert len(inspect.signature(func).parameters) >= 1, name

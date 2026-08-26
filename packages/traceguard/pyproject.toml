@@ -63,6 +63,14 @@ contamination-hf = [
     "transformers>=4.40",
 ]
 
+[project.scripts]
+# Contract-external tools. Console scripts rather than `python -m ...` because
+# the latter needs the package importable from the current directory, and this
+# repo's editable install does not survive builds that skip _-prefixed .pth
+# files — so `python -m traceguard...` fails from anywhere but packages/traceguard.
+traceguard-routing-integrity = "traceguard.routing_integrity.__main__:main"
+traceguard-routing-probe = "traceguard.routing_integrity.conformance:main"
+
 [project.urls]
 Homepage = "https://github.com/lizhuojunx86/traceguard"
 Repository = "https://github.com/lizhuojunx86/traceguard"
