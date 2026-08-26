@@ -27,8 +27,16 @@ evaporates.
 
 Usage — needs a key, so run it where your key lives::
 
-    ORCAROUTER_API_KEY=sk-... python -m traceguard.routing_integrity.conformance \\
+    cd packages/traceguard
+    PYTHONPATH=src ORCAROUTER_API_KEY=sk-... \\
+        uv run python -m traceguard.routing_integrity.conformance \\
         --gateway orcarouter --db sqlite:///routing_probe.db --repeats 2
+
+``PYTHONPATH=src`` is not optional on every machine: some Python builds skip
+``_``-prefixed ``.pth`` files, which breaks uv's editable install and makes
+``python -m traceguard...`` fail with ``ModuleNotFoundError`` even after a
+successful ``uv sync``. pytest works because it sets ``pythonpath=["src"]``
+itself; the same workaround appears in ``examples/``.
 
 Start with ``--dry-run`` to see the plan and the cost ceiling without spending.
 """

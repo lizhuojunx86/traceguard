@@ -89,3 +89,15 @@ def test_every_declared_auto_alias_is_recognised() -> None:
     for entry in GATEWAYS.values():
         if entry.auto_alias:
             assert is_alias_model(entry.auto_alias), entry.name
+
+
+def test_whitespace_around_the_key_is_stripped(monkeypatch: pytest.MonkeyPatch) -> None:
+    """`$(cat key.txt)` brings a trailing newline; it must not reach the header."""
+    monkeypatch.setenv("ORCAROUTER_API_KEY", "  sk-orca-abc\n")
+    assert client_kwargs("orcarouter")["api_key"] == "sk-orca-abc"
+
+
+def test_a_whitespace_only_key_counts_as_missing(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ORCAROUTER_API_KEY", "   \n")
+    with pytest.raises(RuntimeError, match="ORCAROUTER_API_KEY"):
+        client_kwargs("orcarouter")

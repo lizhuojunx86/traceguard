@@ -138,7 +138,10 @@ def client_kwargs(
         known = ", ".join(sorted(GATEWAYS))
         raise KeyError(f"unknown gateway {gateway!r}; known: {known}") from None
 
-    key = api_key or os.environ.get(entry.env_key)
+    # Stripped because keys arrive via `$(cat key.txt)` more often than not, and
+    # a trailing newline rides into the Authorization header as a 401 that says
+    # nothing about its own cause.
+    key = (api_key or os.environ.get(entry.env_key) or "").strip()
     if not key:
         raise RuntimeError(
             f"no API key for {entry.name}: pass api_key= or set ${entry.env_key}"
