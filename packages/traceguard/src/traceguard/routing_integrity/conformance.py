@@ -278,9 +278,20 @@ def run_probes(
     return report
 
 
+class MissingExtra(RuntimeError):
+    """The optional SDK this harness needs is not installed."""
+
+
 def _build_caller(gateway: str, db: str):
     """Wire a traced OpenAI client for ``gateway``. Imported lazily on purpose."""
-    from openai import OpenAI
+    try:
+        from openai import OpenAI
+    except ImportError as exc:  # the extra is optional; say so in one line
+        raise MissingExtra(
+            "the openai SDK is not installed (it is an optional extra).\n"
+            "  install it:  uv sync --extra openai\n"
+            "  or:          pip install 'traceguard[openai]'"
+        ) from exc
 
     from traceguard import Tracer, wrap_openai
     from traceguard.gateways import client_kwargs
@@ -347,8 +358,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"\n${entry.env_key} is not set; nothing sent.")
         return 2
 
+    try:
+        caller = _build_caller(args.gateway, args.db)
+    except MissingExtra as exc:
+        print(f"\n{exc}")
+        return 2
+
     report = run_probes(
-        _build_caller(args.gateway, args.db),
+        caller,
         gateway=entry.name,
         alias=alias,
         repeats=args.repeats,

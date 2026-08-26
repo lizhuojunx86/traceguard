@@ -174,3 +174,35 @@ def test_report_survives_a_run_with_no_successful_calls() -> None:
     assert report.served_models == set()
     assert "0 call(s) named no model" not in report.render()
     assert "failed" in report.render()
+
+
+def test_missing_openai_extra_explains_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing optional extra must read as an instruction, not a traceback."""
+    import builtins
+
+    from traceguard.routing_integrity import conformance
+
+    real_import = builtins.__import__
+
+    def no_openai(name, *args, **kwargs):
+        if name == "openai":
+            raise ImportError("No module named 'openai'")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", no_openai)
+    with pytest.raises(conformance.MissingExtra, match="uv sync --extra openai"):
+        conformance._build_caller("orcarouter", "sqlite:///:memory:")
+
+
+def test_cli_exits_cleanly_when_the_extra_is_absent(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from traceguard.routing_integrity import conformance
+
+    monkeypatch.setenv("ORCAROUTER_API_KEY", "sk-test")
+    monkeypatch.setattr(
+        conformance, "_build_caller",
+        lambda *a, **k: (_ for _ in ()).throw(conformance.MissingExtra("nope, install it")),
+    )
+    assert conformance.main(["--gateway", "orcarouter", "--repeats", "1"]) == 2
+    assert "nope, install it" in capsys.readouterr().out
