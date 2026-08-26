@@ -361,6 +361,8 @@ assert_replay_set_locked(replay_set_id: str) -> None
 - `traceguard.loop` — 自我改进循环的 evidence-gating 辅助:只有 cutoff 之前可溯源的证据才被采纳为事实。
 - `traceguard.audit` — opt-in 审计证据层(实验性,零新增依赖):ORM 层 append-only 守卫(防误写)+ row hash chain(篡改可检测,非防篡改;无外部锚时全链重写/尾部截断不可检测)+ 可导出链头锚点。哈希覆盖字段**排除 `cost_usd`**(§3.1 合法就地补写路径),cost 修正经链内 cost event 记账。`import` 无副作用,须显式 `enable()/attach()`;链自身故障默认 fail-open(§4.1),strict 模式 opt-in。诚实分层与边界见 `docs/audit.md`。
 
+- `traceguard.routing_integrity` — 网关路由下的不变量 2 有效性审计。SDK wrapper 在 `output_parsed["routing"]` 附加 `requested_model` / `served_model`(**不**新增 MUST 列,与 contamination 评分同路)。§3.1 的 `model_id` 语义不变,仍是**请求的**模型;本扩展回答的是它之前的一个问题:不变量 2 这次检查的东西是不是真实存在的模型。自适应路由别名(`orcarouter/auto` 等)下,请求名与实际服务模型可以逐请求不同,别名没有 `available_to_us_at`,于是校验会**静默通过**。扩展给出四级判定(verified / diverged / unregistered / unverifiable)与 CLI,**不削弱**不变量 2 本身。见 `docs/integrations/gateways.md`。
+
 均为接入方可选;项目可只依赖上述核心契约而不安装其中任何一个。
 
 ---

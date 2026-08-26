@@ -259,6 +259,17 @@ algorithm, so each is a SemVer **minor**:
   default (§4.1) with an opt-in strict mode. Honest layering and limits:
   `docs/audit.md`.
 
+- `traceguard.routing_integrity` — audits whether invariant 2 meant anything
+  under a gateway. The SDK wrappers attach `requested_model` / `served_model`
+  to `output_parsed["routing"]` (**no** new MUST column — the same route the
+  contamination scores take). §3.1's `model_id` is unchanged and still holds
+  the *requested* model. Behind an adaptive routing alias (`orcarouter/auto`
+  and friends) the requested name and the model that answered can differ per
+  request, and an alias has no `available_to_us_at` — so the check passes
+  **silently** against a name that was never a model. The extension grades each
+  trace (verified / diverged / unregistered / unverifiable) and ships a CLI. It
+  does **not** weaken invariant 2. See `docs/integrations/gateways.md`.
+
 These are integrator-optional: a project may depend on the core contract above
 without installing any of them.
 

@@ -26,6 +26,7 @@ from traceguard.sdk.wrappers._base import (
     FeatureAsOf,
     _DelegatingWrapper,
     resolve_feature_as_of,
+    routing_detail,
 )
 
 
@@ -85,6 +86,13 @@ class _WrappedMessages(_DelegatingWrapper):
                 "content_text": content_text,
                 "stop_reason": stop_reason,
             }
+
+            # Anthropic direct always echoes the concrete model, so this is a
+            # formality there — but the SDK's base_url can point at a gateway,
+            # and then it is the only record of who actually answered.
+            routing = routing_detail(model, response)
+            if routing is not None:
+                parsed["routing"] = routing
 
             usage = getattr(response, "usage", None)
             if usage is not None:

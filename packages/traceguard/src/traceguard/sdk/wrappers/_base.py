@@ -77,6 +77,46 @@ def resolve_feature_as_of(value: FeatureAsOf) -> Optional[datetime]:
     return value
 
 
+#: Requested model names that name a router's choice rather than a model.
+#: Kept here rather than imported from ``traceguard.gateways`` so the wrappers
+#: stay independent of that contract-external module.
+_ALIAS_SUFFIXES = ("/auto", ":auto", "/router", "-auto")
+
+
+def routing_detail(requested: Any, response: Any) -> Optional[dict[str, Any]]:
+    """Describe which model was *asked for* versus which one *answered*.
+
+    Direct against a provider the two agree and this is a formality. Behind an
+    OpenAI-compatible gateway they can differ per request: you ask for
+    ``orcarouter/auto`` and something else serves it. ``model_id`` on the trace
+    records what was *requested* (that is the SPEC §3.1 MUST field and does not
+    change), so without this the served model is simply absent from the record
+    and look-ahead invariant 2 ends up checking a name that was never a model.
+
+    Attached under ``output_parsed["routing"]`` — the same contract-external
+    route SPEC §6.6 gives the contamination scores. No MUST column is added.
+
+    Returns ``None`` when no model was requested, so callers can skip the key
+    entirely rather than storing a dict full of ``None``.
+    """
+    if requested is None:
+        return None
+    requested_str = str(requested)
+    served = getattr(response, "model", None)
+    served_str = str(served) if served is not None else None
+    lowered = requested_str.lower()
+    return {
+        "requested_model": requested_str,
+        "served_model": served_str,
+        # Recorded rather than derived at read time: the alias vocabulary can
+        # grow, and a trace should keep the verdict that applied when written.
+        "requested_is_alias": any(lowered.endswith(s) for s in _ALIAS_SUFFIXES),
+        # None (not False) when the gateway told us nothing — "we do not know"
+        # and "they agree" are different states and must not collapse.
+        "diverged": None if served_str is None else served_str != requested_str,
+    }
+
+
 class _DelegatingWrapper:
     """Mixin providing copy-safe attribute delegation for the SDK wrappers."""
 

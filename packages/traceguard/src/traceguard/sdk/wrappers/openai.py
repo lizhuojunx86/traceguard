@@ -30,6 +30,7 @@ from traceguard.sdk.wrappers._base import (
     FeatureAsOf,
     _DelegatingWrapper,
     resolve_feature_as_of,
+    routing_detail,
 )
 
 # A streaming call returns an iterator, not a materialized response: text/usage
@@ -151,6 +152,10 @@ class _WrappedCompletions(_DelegatingWrapper):
                 "finish_reason": _first_finish_reason(response),
             }
 
+            routing = routing_detail(model, response)
+            if routing is not None:
+                parsed["routing"] = routing
+
             usage = getattr(response, "usage", None)
             if usage is not None:
                 parsed["usage"] = _chat_usage_detail(usage)
@@ -230,6 +235,10 @@ class _WrappedResponses(_DelegatingWrapper):
                 "content_text": _responses_text(response),
                 "status": getattr(response, "status", None),
             }
+
+            routing = routing_detail(model, response)
+            if routing is not None:
+                parsed["routing"] = routing
 
             usage = getattr(response, "usage", None)
             if usage is not None:

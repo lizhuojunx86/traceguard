@@ -7,6 +7,43 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [Unreleased]
+
+Contract-external, SemVer **minor** when released: no MUST field is added or
+changed, no existing signature moves, the normalize algorithm is untouched.
+
+**One release, one problem: invariant 2 could pass without checking a model.**
+`validate_model_timing` checks the trace's `model_id`, and SPEC §3.1 fixes that
+as the model the caller *requested*. Direct against a provider, requested and
+served are the same string. Behind an OpenAI-compatible gateway asked for a
+routing alias — `orcarouter/auto`, `openrouter/auto` — they are not: something
+else answers, chosen per request by the router's policy and upstream health. An
+alias has no `available_to_us_at`, so the invariant compared a name that was
+never a model, did not raise, and the backtest came out green.
+
+### Added
+
+- `traceguard.gateways` — presets for OpenAI-compatible gateways (OrcaRouter,
+  OpenRouter), alphabetical and with none recommended over another. Adding one
+  is a dict entry, not code. `is_alias_model()` flags routing aliases.
+- The SDK wrappers record who actually answered, under
+  `output_parsed["routing"]`: `requested_model`, `served_model`,
+  `requested_is_alias`, `diverged`. `diverged` is `null`, never `false`, when
+  the gateway reported no model — "we don't know" and "they agree" are
+  different states.
+- `traceguard.routing_integrity` — grades each trace `verified` / `diverged` /
+  `unregistered` / `unverifiable`, with a CLI that exits 1 on anything
+  actionable: `python -m traceguard.routing_integrity --db …`. Traces with no
+  `feature_as_of` are skipped by default; they make no point-in-time claim.
+- `examples/gateway_call.py` — runnable offline (prints the client config it
+  would build when no key is set).
+
+### Not in this release
+
+The scan reports that a diverged trace needs re-checking; it does not yet
+re-run invariant 2 against the served model and fail on the result. Until it
+does, `diverged` means "go look", not "this is fine".
+
 ## [1.4.0] - 2026-08-19
 
 Contract-external, all inside `traceguard.routing_audit`. Additive: sections

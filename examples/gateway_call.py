@@ -79,15 +79,16 @@ def main() -> int:
     )
     print(f"\nresponse  {response.choices[0].message.content!r}")
 
-    # What the gateway actually served. TraceGuard does not record this yet —
-    # printing it here is the honest version of the gap the docs describe.
+    # Who actually answered. The trace keeps model_id as the *requested* id
+    # (SPEC §3.1) and records this alongside it under output_parsed["routing"].
     served = getattr(response, "model", None)
     print(f"requested {model}")
     print(f"served    {served}")
     if served and served != model:
-        print("  ^ these differ: the trace stored the requested id, not this one")
+        print("  ^ these differ; model_id holds the requested id, routing holds both")
 
     print(f"\ntrace written to gateway_demo.db at {datetime.now(UTC).isoformat()}")
+    print("audit it: python -m traceguard.routing_integrity --db sqlite:///gateway_demo.db")
     return 0
 
 

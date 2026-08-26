@@ -40,9 +40,11 @@ __all__ = [
 #: model — it does not raise, and the run looks clean.
 ROUTING_CAVEAT = (
     "Adaptive routing aliases (e.g. 'orcarouter/auto', 'openrouter/auto') are "
-    "recorded as-is from the request. The model that actually served the call "
-    "is not captured, so look-ahead invariant 2 cannot be enforced on it. Pin "
-    "a concrete model id for any run over historical data."
+    "recorded as-is in model_id, so look-ahead invariant 2 checks the alias "
+    "rather than the model that answered. The wrappers also record the "
+    "served model under output_parsed['routing'] — audit a store with "
+    "`python -m traceguard.routing_integrity`. Still pin a concrete model id "
+    "for any run over historical data."
 )
 
 #: Model names that mean "you pick" rather than naming a model. Traces carrying
