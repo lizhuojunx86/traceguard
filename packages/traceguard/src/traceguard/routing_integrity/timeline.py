@@ -36,9 +36,15 @@ from traceguard.store.models import Trace
 
 @dataclass
 class Run:
-    """One probe run: every trace sharing a ``feature_as_of`` stamp."""
+    """One probe run: every trace sharing a ``feature_as_of`` stamp.
+
+    Two gateways probed in the same minute are still two runs, because each
+    resolves its own stamp when its client is built. ``gateway`` comes from the
+    trace's ``component``, so a store holding several gateways stays legible.
+    """
 
     stamp: datetime
+    gateway: str = ""
     models: Counter[str] = field(default_factory=Counter)
     failures: int = 0
     silent: int = 0
@@ -54,16 +60,31 @@ class Run:
         return self.models.most_common(1)[0][0] if self.models else None
 
 
-def collect_runs(engine: Engine, *, project: str = "routing-conformance") -> list[Run]:
-    """Group the store's traces into runs, oldest first."""
-    runs: dict[datetime, Run] = {}
+def collect_runs(
+    engine: Engine,
+    *,
+    project: str = "routing-conformance",
+    gateway: str | None = None,
+) -> list[Run]:
+    """Group the store's traces into runs, oldest first.
+
+    ``gateway`` filters to one gateway (the trace's ``component``). Leave it
+    unset to see every gateway interleaved by time, which is the view that
+    shows whether two routers moved together or independently.
+    """
+    runs: dict[tuple[datetime, str], Run] = {}
     stmt = select(Trace).where(Trace.feature_as_of.is_not(None))
     if project:
         stmt = stmt.where(Trace.project == project)
+    if gateway:
+        stmt = stmt.where(Trace.component == gateway)
     with Session(engine) as sess:
         for trace in sess.scalars(stmt):
             assert trace.feature_as_of is not None
-            run = runs.setdefault(trace.feature_as_of, Run(stamp=trace.feature_as_of))
+            key = (trace.feature_as_of, trace.component or "")
+            run = runs.setdefault(
+                key, Run(stamp=trace.feature_as_of, gateway=trace.component or "")
+            )
             run.tokens_in += trace.tokens_in or 0
             run.tokens_out += trace.tokens_out or 0
             if trace.error_class:
@@ -80,16 +101,25 @@ def collect_runs(engine: Engine, *, project: str = "routing-conformance") -> lis
 
 
 def regime_changes(runs: Sequence[Run]) -> list[tuple[Run, Run]]:
-    """Consecutive runs whose dominant model differs.
+    """Consecutive runs of the SAME gateway whose dominant model differs.
 
     The blunt version of the finding: not "one prompt drifted" but "the model
     most requests landed on is a different model than it was last time".
+
+    Compared within a gateway, never across. Two routers naturally pick
+    different models; that is a product difference, not instability, and
+    reporting it as a shift would be the kind of overclaim this whole exercise
+    exists to avoid.
     """
     out = []
-    for earlier, later in zip(runs, runs[1:]):
-        if earlier.dominant and later.dominant and earlier.dominant != later.dominant:
-            out.append((earlier, later))
-    return out
+    by_gateway: dict[str, list[Run]] = {}
+    for run in runs:
+        by_gateway.setdefault(run.gateway, []).append(run)
+    for series in by_gateway.values():
+        for earlier, later in zip(series, series[1:]):
+            if earlier.dominant and later.dominant and earlier.dominant != later.dominant:
+                out.append((earlier, later))
+    return sorted(out, key=lambda pair: pair[1].stamp)
 
 
 def render(runs: Sequence[Run]) -> str:
@@ -99,11 +129,18 @@ def render(runs: Sequence[Run]) -> str:
     lines = [f"{len(runs)} probe run(s), {sum(r.calls for r in runs)} call(s)", ""]
     width = max(len(m) for r in runs for m in r.models) if any(r.models for r in runs) else 8
 
+    gateways = sorted({r.gateway for r in runs if r.gateway})
+    if len(gateways) > 1:
+        lines.insert(1, f"gateways: {', '.join(gateways)}")
+
     for run in runs:
         parts = ", ".join(
             f"{model:<{width}} {n}x" for model, n in run.models.most_common()
         )
-        lines.append(f"{run.stamp.isoformat(timespec='seconds')}  {run.calls:>3} calls")
+        label = f" [{run.gateway}]" if len(gateways) > 1 and run.gateway else ""
+        lines.append(
+            f"{run.stamp.isoformat(timespec='seconds')}{label}  {run.calls:>3} calls"
+        )
         lines.append(f"    {parts or '(no model reported)'}")
         flags = []
         if run.failures:
@@ -126,8 +163,9 @@ def render(runs: Sequence[Run]) -> str:
     if shifts:
         lines.append(f"{len(shifts)} shift(s) in the dominant model between consecutive runs:")
         for earlier, later in shifts:
+            tag = f"[{later.gateway}] " if len(gateways) > 1 and later.gateway else ""
             lines.append(
-                f"  {earlier.stamp.isoformat(timespec='seconds')} {earlier.dominant}"
+                f"  {tag}{earlier.stamp.isoformat(timespec='seconds')} {earlier.dominant}"
                 f"  ->  {later.stamp.isoformat(timespec='seconds')} {later.dominant}"
             )
         lines.append(
@@ -157,11 +195,18 @@ def main(argv: list[str] | None = None) -> int:
         "--project", default="routing-conformance",
         help="empty string to include every project in the store",
     )
+    parser.add_argument(
+        "--gateway", default=None,
+        help="restrict to one gateway (default: all, interleaved by time)",
+    )
     args = parser.parse_args(argv)
 
     from traceguard.store.models import make_engine
 
-    print(render(collect_runs(make_engine(args.db), project=args.project)))
+    runs = collect_runs(
+        make_engine(args.db), project=args.project, gateway=args.gateway
+    )
+    print(render(runs))
     return 0
 
 

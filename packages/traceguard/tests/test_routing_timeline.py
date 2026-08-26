@@ -45,6 +45,20 @@ def _run(engine, stamp: datetime, served: list[str | None], *, project="routing-
             span.record_output(parsed=parsed, parse_status="success")
 
 
+def _run_gw(engine, stamp, served, *, gateway, project="routing-conformance"):
+    """Like _run but records a different gateway in the component field."""
+    tracer = Tracer(engine)
+    for model in served:
+        with tracer.span(project, gateway, "llm_complete", feature_as_of=stamp) as span:
+            span.record_input({"p": "hi"})
+            span.record_model_prompt(model_id=f"{gateway}/auto")
+            parsed = {"content_text": "ok"}
+            routing = routing_detail(f"{gateway}/auto", _Resp(model))
+            if routing:
+                parsed["routing"] = routing
+            span.record_perf(tokens_in=100, tokens_out=50)
+            span.record_output(parsed=parsed, parse_status="success")
+
 def test_traces_group_into_runs_by_stamp(engine) -> None:
     _run(engine, T0, ["qwen3.7-plus"] * 3)
     _run(engine, T0 + timedelta(minutes=20), ["deepseek-v4-pro"] * 3)
@@ -132,3 +146,47 @@ def test_timeline_stays_off_the_frozen_surface() -> None:
 
     for name in ("timeline", "collect_runs", "regime_changes"):
         assert name not in traceguard.__all__, name
+
+
+def test_two_gateways_stay_separate_runs(engine) -> None:
+    """Same minute, two gateways: two runs, each labelled."""
+    _run(engine, T0, ["qwen3.7-plus"] * 2)
+    _run_gw(engine, T0, ["anthropic/claude-opus-5"] * 2, gateway="openrouter")
+
+    runs = collect_runs(engine)
+    assert len(runs) == 2
+    assert {r.gateway for r in runs} == {"orcarouter", "openrouter"}
+    out = render(runs)
+    assert "[orcarouter]" in out and "[openrouter]" in out
+
+
+def test_a_shift_is_never_reported_across_gateways(engine) -> None:
+    """Two routers picking different models is a product difference, not
+    instability. Reporting it as a shift would be exactly the overclaim this
+    whole exercise exists to avoid."""
+    _run(engine, T0, ["qwen3.7-plus"] * 3)
+    _run_gw(engine, T0 + timedelta(minutes=1), ["anthropic/claude-opus-5"] * 3,
+            gateway="openrouter")
+
+    assert regime_changes(collect_runs(engine)) == []
+
+
+def test_a_shift_within_one_gateway_is_still_caught(engine) -> None:
+    _run(engine, T0, ["qwen3.7-plus"] * 3)
+    _run_gw(engine, T0 + timedelta(minutes=1), ["anthropic/claude-opus-5"] * 3,
+            gateway="openrouter")
+    _run(engine, T0 + timedelta(hours=1), ["deepseek-v4-pro"] * 3)
+
+    shifts = regime_changes(collect_runs(engine))
+    assert len(shifts) == 1
+    assert shifts[0][0].gateway == shifts[0][1].gateway == "orcarouter"
+    assert shifts[0][1].dominant == "deepseek-v4-pro"
+
+
+def test_filtering_to_one_gateway(engine) -> None:
+    _run(engine, T0, ["qwen3.7-plus"] * 2)
+    _run_gw(engine, T0, ["anthropic/claude-opus-5"] * 2, gateway="openrouter")
+
+    only = collect_runs(engine, gateway="openrouter")
+    assert len(only) == 1
+    assert only[0].dominant == "anthropic/claude-opus-5"
