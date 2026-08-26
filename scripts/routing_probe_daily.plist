@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd job: run the routing probe once a day.
+
+  Install (edit the paths below first if your checkout is elsewhere):
+
+    cp scripts/routing_probe_daily.plist ~/Library/LaunchAgents/ai.traceguard.routing-probe.plist
+    chmod +x scripts/routing_probe_daily.sh
+    launchctl load ~/Library/LaunchAgents/ai.traceguard.routing-probe.plist
+
+  Check it:   launchctl list | grep traceguard
+  Run it now: launchctl start ai.traceguard.routing-probe
+  Watch it:   tail -f ~/Library/Application\ Support/traceguard/routing_probe.log
+  Remove it:  launchctl unload ~/Library/LaunchAgents/ai.traceguard.routing-probe.plist
+
+  RunAtLoad is false on purpose: loading the job should not spend money as a
+  side effect. Start it by hand the first time, read the log, then let the
+  schedule take over.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>ai.traceguard.routing-probe</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>/Users/lizhuojun/Desktop/APP/traceguard/scripts/routing_probe_daily.sh</string>
+    </array>
+
+    <!-- 09:30 local. Not on the hour: routers see load spikes at :00, and a
+         probe that only ever samples the same minute of the same conditions
+         is a weaker time series than one taken slightly off-peak. -->
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>9</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <false/>
+
+    <!-- The script writes its own timestamped log; these catch anything that
+         escapes it (a bash syntax error, a missing interpreter). -->
+    <key>StandardOutPath</key>
+    <string>/Users/lizhuojun/Library/Application Support/traceguard/launchd.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/lizhuojun/Library/Application Support/traceguard/launchd.err.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
