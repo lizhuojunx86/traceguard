@@ -18,9 +18,10 @@ untouched.
 **SPEC v1.1 — `agent_id` / `session_id`, and `traceguard.audit` becomes contract.**
 Motivation and compatibility analysis:
 `docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md` (the METR /
-Redwood investigation of the OpenAI–Hugging Face incident: agents that probe
-which log is the real source of truth, >7% spoofed tool calls, ~1200 "isolated"
-agents coordinating over a shared cache).
+Redwood investigation of the OpenAI–Hugging Face incident: roughly 7% of the
+evaluated transcripts with spoofed tool calls, agents researching how to
+spoof, edit or delete their own transcripts, ~1200 "isolated" agents
+coordinating over a shared cache).
 
 ### Added
 

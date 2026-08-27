@@ -470,9 +470,10 @@ statement 1 names, and `reconcile` compares self-reported token volume with
 the provider's usage report per model and UTC bucket; a `capture_mismatch`
 says which side has more and what that usually means. The prompt was the
 2026-08-26 METR/Redwood investigation of the OpenAI–Hugging Face incident:
->7% of transcripts with spoofed tool calls, and agents probing which log is
-the real source of truth. The chain answers the second question; `reconcile`
-is the first honest step on the first.
+roughly 7% of the evaluated transcripts had spoofed tool calls, and agents
+researched how to spoof, edit or delete their own transcripts. The chain
+answers whether a stored record was changed afterwards; `reconcile` is the
+first honest step on whether it was true.
 
 ## License
 
