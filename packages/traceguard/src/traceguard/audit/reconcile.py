@@ -5,7 +5,8 @@ afterwards. It says nothing about capture fidelity: whether what the SDK saw
 is what actually happened. Wrapper self-reports are produced inside the
 process the agent controls, so a compromised or misbehaving agent can fake
 calls, drop calls, or replay old ones, and the chain will faithfully attest
-the lie (METR 2026-08-26: >7% of transcripts contained spoofed tool calls).
+the lie (METR 2026-08-26: roughly 7% of the evaluated transcripts had spoofed
+tool calls).
 
 This module is the cheapest cross-check available: compare the traces table's
 self-reported token volume, per model and time window, with what the model
