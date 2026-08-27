@@ -96,6 +96,16 @@ def test_no_conflict_copies_in_the_package_source() -> None:
 @pytest.mark.parametrize("pattern", ["* 2.py", "* 3.py", "* 4.py"])
 def test_conftest_ignores_every_conflict_generation(pattern: str) -> None:
     """.gitignore learned to cover ' 3.' and ' 4.'; conftest had not."""
-    from tests import conftest  # type: ignore[import-not-found]
+    # Load the sibling conftest.py by path: ``tests`` is not a package (no
+    # __init__.py) and is not on sys.path under ``uv run pytest``, so a
+    # ``from tests import conftest`` only works when the cwd happens to be
+    # importable (``python -m pytest``) — CI ran it the other way and was red.
+    import importlib.util
+
+    location = Path(__file__).with_name("conftest.py")
+    spec = importlib.util.spec_from_file_location("_traceguard_tests_conftest", location)
+    assert spec is not None and spec.loader is not None
+    conftest = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(conftest)
 
     assert pattern in conftest.collect_ignore_glob
