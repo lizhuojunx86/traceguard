@@ -7,9 +7,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
-## [Unreleased]
+## [1.5.0] - 2026-08-28
 
-SemVer **minor** when released, on two counts: SPEC v1.0 → v1.1 (two new
+SemVer **minor**, on two counts: SPEC v1.0 → v1.1 (two new
 nullable `traces` columns, new defaulted SDK parameters — §6.2 / §6.3), and
 the audit evidence layer graduating out of experimental. No existing
 signature moves, the normalize algorithm and the audit algo v1 envelope are

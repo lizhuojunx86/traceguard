@@ -457,6 +457,23 @@ corpus; entries are immutable and refuse to be overwritten; and
 it pulled. `benchmark/` collects the results. See the
 [package README](packages/traceguard/README.md#cache-efficiency-audit).
 
+**1.5.0** makes the audit layer part of the contract and gives every trace
+an owner. SPEC v1.1 adds `agent_id` / `session_id` to `traces` — nullable,
+indexed, added to an existing database on open — so several executors can be
+correlated after the fact; both columns sit outside the algo v1 hash envelope,
+and [docs/audit.md](docs/audit.md) says so rather than implying otherwise.
+`traceguard.audit` is no longer experimental: its surface, finding kinds and
+boundary statements are frozen by the same CI job that guards the public
+import surface. On top of it, anchor sinks (`file:` / `git-note:` /
+`webhook:`, `--every` for a cadence) shrink the exposure window that boundary
+statement 1 names, and `reconcile` compares self-reported token volume with
+the provider's usage report per model and UTC bucket; a `capture_mismatch`
+says which side has more and what that usually means. The prompt was the
+2026-08-26 METR/Redwood investigation of the OpenAI–Hugging Face incident:
+>7% of transcripts with spoofed tool calls, and agents probing which log is
+the real source of truth. The chain answers the second question; `reconcile`
+is the first honest step on the first.
+
 ## License
 
 Licensed under the [Apache License 2.0](LICENSE).
