@@ -1,9 +1,28 @@
-# `traceguard.audit` — Tamper-Evident Audit Trail (experimental)
+# `traceguard.audit` — Tamper-Evident Audit Trail
 
 Opt-in evidence layer for the `traces` table: an ORM-layer append-only guard,
 a row hash chain, and an exportable chain-head anchor. Off the frozen public
 surface (SPEC §6.6 / English SPEC §6.1) — import from `traceguard.audit`, not
 from `traceguard`. Zero new dependencies (stdlib `hashlib`/`json`).
+
+## Contract status (stable since SPEC v1.1, 2026-08-27)
+
+`traceguard.audit` 自 SPEC v1.1 起不再是 experimental(修订案:
+`docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md`)。三条契约承诺:
+
+1. **API 面稳定** — `traceguard.audit` 的公开面(`__all__`)按 SPEC §6.3 演进:
+   新增带默认值参数 / 新增符号 = minor;删参数、改语义、删符号 = major。
+   `tests/test_audit_api_surface.py` 在 `contract-guard` CI job 里机械化守护。
+2. **Finding kinds 语义冻结** — 下文 verify 表里的 kind 与 severity 冻结;新增 kind = minor,
+   改 / 删既有 kind = major。
+3. **边界声明规范化** — 下方"边界声明(逐字级,不许弱化)"三条是规范性声明:SPEC 背书,
+   措辞只允许往更保守的方向改。
+
+哈希算法版本化:algo v1 由 golden tests(`tests/test_audit_canonical.py`)冻结,永续可验;
+任何算法变更 = algo v2,且 MUST 不使既有 v1 链失效。SPEC v1.1 在 `traces` 表新增的
+`agent_id` / `session_id` 两列**不在 algo v1 信封内**(`TRACE_CONTENT_FIELDS` 是硬编码白名单,
+新列不进入,旧链逐字节不变)——它们受 append-only 守卫保护(ORM 层不许改),但**不被链 attest**:
+直接改库文件把 `agent_id` 换掉,`verify_chain` 看不见。纳入信封待 algo v2。
 
 ```python
 import traceguard
@@ -53,6 +72,19 @@ python -m traceguard.audit disable --db sqlite:///traces.db
    不证明当前列值未被再次改动。`cost_mismatch`(WARN)核对"当前列值 = 链上最新 cost 证据",
    把静默改动转化为"必须留下可归因的链内记录才能不被发现"——但 v1 无签名,伪造追加是可能的,
    链只保证它一旦写入不可无痕修改或删除。
+
+## Threat category: control bypass / evidence tampering attempt (2026-08-27)
+
+对照 2026-08-26 METR/Redwood 调查(OpenAI / Hugging Face 事件)验证的真实威胁行为,
+v1 的覆盖照实登记——可检测的说可检测,不设防的说不设防:
+
+| 事件中验证的行为 | v1 结果 | 依据 |
+|---|---|---|
+| 修改已链行的覆盖字段 | **可检测**(`hash_mismatch` BREAK) | 全量 preimage 重算 |
+| 删除已链 trace 行 | **可检测**(`missing_trace` BREAK) | pass 2 全表扫 |
+| 尾部截断 / 全链重写 | **仅锚定后可检测**(`anchor_mismatch`);无外部锚不可检测 | 边界声明 1,锚定频率 = 暴露窗口 |
+| 采集层伪造(spoofed tool call 类,METR: >7% transcripts) | **v1 不设防**——自报证据产生于 agent 控制的进程内,链忠实保存谎言 | 存储完整性 ≠ 采集真实性;v2 调研见 `docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md` §5 |
+| 高权限攻击者(可写库文件) | **v1 不设防** | 边界声明 1,WORM/签名/自动外锚 out of scope |
 
 ## Mechanics
 

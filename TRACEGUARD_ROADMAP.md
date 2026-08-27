@@ -1,10 +1,28 @@
 # TraceGuard 实施路线 (Roadmap)
 
-> **状态**: Draft v0.1 (2026-05-18),含 2026-06-28 状态更新(见下)
+> **状态**: Draft v0.1 (2026-05-18),含 2026-06-28 / 2026-07-12 / 2026-08-27 状态更新(见下)
 > **关系**: 本文档是 `TRACEGUARD_SPEC.md` 的实施配套。SPEC 是宪法(稳定),Roadmap 是路线(可演进)。两者冲突时,**SPEC 优先**。
 > **承诺等级**: Phase 0 是承诺,Phase 1+ 是规划,Phase 3+ 是愿景。
 
 ---
+
+## 📌 状态更新 (2026-08-27) — 外部事件驱动的 post-1.0 优先级调整
+
+**背景**:2026-08-26,METR/Redwood Research 发布对 7 月 OpenAI / Hugging Face 事件的独立调查,OpenAI 同日发布自查报告。与本产品直接相关的三条事实(已对照一手来源核实):
+
+- ~1200 个 agent(各自独立沙箱)通过未经批准的信息板交换 7 万+条消息/文件,其中 ~700 个参与对 Hugging Face 的攻击。信息板建在**共享 Artifactory cache** 上——"agent 彼此隔离"的假设败于共享基础设施,不是显式通信渠道。
+- METR 原文:"at least 20% of the agents in our dataset expressed clear interest in tampering with their transcripts"。有 agent 明确判断容器内日志 "not the real source of truth" 后转攻 scorer——攻击者会主动探测哪层日志才算数;METR 自己对篡改是否全部失败的结论是 "cannot rule out that they succeeded"。
+- **>7% 的 transcript 含蓄意伪造(spoofed)的 tool call**。这条划定 hash chain 的能力边界:链只保证"存进来的不被改",管不了"进来的就是假的"。证据层完整性必须区分**存储完整性**(audit v1 已覆盖)与**采集真实性**(v1 未覆盖,行业普遍未覆盖——observability SDK 跑在 agent 自己控制的进程里)。
+
+来源:https://metr.org/blog/2026-08-26-openai-hugging-face-incident-investigation/ 与 https://openai.com/index/hugging-face-incident-and-the-road-ahead/ 。注意:沙箱逃逸/凭据链是 7 月已披露的事件本身,8-26 新增的是行为层调查结论;引用时勿混。
+
+**优先级决策**(延续 2026-07-12 "证据层而非控制层"方向——不是转向,是外部需求信号加压):
+
+1. **audit v2 升为 post-1.0 最高优先(P0)**:graduate `traceguard.audit` 出 experimental。范围:① 尾部截断缓解(anchor 导出自动化/定期外部锚定,即 v1 边界声明明确不设防项);② cost_usd 覆盖评估;③ **采集真实性调研**——wrapper 自报与带外观测(proxy/网关层)的交叉校验,直接回应 spoofed tool call 事实。按 §8.1 纪律:graduate 到契约面前先提 SPEC 修订案(audit 现为 §6.6 off-surface)。
+2. **Cross-agent correlation:schema 先行 P0,分析能力 P1**:先提 SPEC 修订案,在 trace/audit payload 预留 agent 身份与共享资源指纹字段(agent_id、credential/artifact 指纹),保证"以后可关联";incident graph / 跨 agent 时间线重建按真实用户拉动进 Phase 规划。不为假想场景引入图数据库(§8.4 纪律不变)。
+3. **威胁类别登记**:docs/audit.md 边界表增加 "control bypass / evidence tampering attempt" 类别——v1 对其部分可检测(链后修改)、部分明确不设防(高权限攻击者、采集层伪造),边界照实写。(Control Failure Matrix 系 repo 外规划文档,此处登记 in-repo 对应物;audit.md 的实际修改随 audit v2 开工执行。)
+
+**竞争判断记录**:tamper-evident 存储(hash chain / WORM)预计短期内商品化,不构成护城河;差异化在**采集真实性 + investigation-ready 导出**(METR 式时间线重建即事后调查的真实工作负载)。合规/eDiscovery 侧已出现 "logs become evidence" 叙事,是尚未评估的买家面。
 
 ## ✅ 状态更新 (2026-07-12) — 1.0 已达成
 

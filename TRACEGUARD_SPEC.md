@@ -1,6 +1,6 @@
 # TraceGuard 集成规范 (Spec)
 
-> **状态**: v1.0 (2026-07-12) — 契约生效,随 `traceguard` 包 v1.0.0 冻结,按 §6 SemVer 演进(SPEC 版本从此跟随包的 major)
+> **状态**: v1.1 (2026-08-27) — 契约生效(v1.0 于 2026-07-12 随 `traceguard` 包 v1.0.0 冻结),按 §6 SemVer 演进(SPEC 版本从此跟随包的 major;v1.1 为 **minor** 修订,内容见附录 D)
 > **类型**: 接口契约 / "宪法"
 > **范围**: 任何接入 TraceGuard 的项目都必须遵守本文档定义的数据模型、SDK 接口签名、不变量。
 > **非范围**: 实现路线、Phase 计划、具体业务的 check 清单、运维细节,统一搬到 `TRACEGUARD_ROADMAP.md` 和各业务方的 `<project>_TRACEGUARD_INTEGRATION.md`。
@@ -76,6 +76,8 @@ LLM 管线里有**两类** look-ahead bias,需要不同工具,本规范只约束
 | `operation` | text | ✔ | 操作分类:`llm_complete` \| `embedding` \| `ml_inference` \| `parse` \| 其他 |
 | `correlation_id` | text | nullable | 业务对象关联标识 |
 | `parent_trace_id` | int | nullable | 父 trace 引用(支持嵌套) |
+| `agent_id` | text | nullable | 产生本次调用的执行主体稳定标识(agent 实例 / 服务 / 人)。多执行体事后关联的身份维度 |
+| `session_id` | text | nullable | 一次运行会话 / episode 的分组标识;同 session 的 trace 属同一执行上下文 |
 | `input_hash` | text | ✔ | SHA-256(canonicalized input);**MUST** 用 SDK 提供的 normalize 函数计算 |
 | `input_summary` | text | nullable | 人类可读摘要,长度 SHOULD ≤ 500 字符 |
 | `model_id` | text | nullable | 若非空,**MUST** 在 `model_registry` 已注册 |
@@ -97,6 +99,8 @@ LLM 管线里有**两类** look-ahead bias,需要不同工具,本规范只约束
 - `input_hash` **MUST** 由 SDK 内置的 normalize 函数计算(§4.4),业务方不得自行实现。
 - `feature_as_of` 与 `invoked_at` 是**两个独立的时间**,backfill 场景下两者会显著不同(详见 §5)。
 - `cost_usd` 是 list price,精确账单由事后调和补正,本规范不约束调和流程。
+- `agent_id` / `session_id` 不参与 `input_hash` 计算(§4.4 算法不变),不参与不变量 1–4。
+- 共享资源 / 凭据指纹 SHOULD 经 `output_parsed["correlation"]` 记录(约定见 docs/spec-changes/2026-08-27),**MUST NOT** 记录明文凭据,只记录单向散列指纹。
 
 ### 3.2 `model_registry`
 
@@ -184,6 +188,8 @@ replay_set_items:
     *,
     correlation_from: Callable[..., str] | None = None,
     feature_as_of_from: Callable[..., datetime] | None = None,
+    agent_id: str | None = None,        # v1.1
+    session_id: str | None = None,      # v1.1
 )
 def fn(...): ...
 
@@ -195,6 +201,8 @@ with tracer.span(
     *,
     correlation_id: str | None = None,
     feature_as_of: datetime | None = None,
+    agent_id: str | None = None,        # v1.1
+    session_id: str | None = None,      # v1.1
 ) as span:
     span.record_input(data)
     span.record_model_prompt(model_id=..., prompt_template_id=...)
@@ -204,6 +212,8 @@ with tracer.span(
 ```
 
 手动 API、客户端 wrapper(`wrap_anthropic` 等)为可选实现,不在本规范约束。
+
+**身份维度(v1.1):** `agent_id` / `session_id` 为 keyword-only 可选参数(§6.3:新增带默认值参数 = minor),原样写入 §3.1 同名字段;`wrap_anthropic` 接受同样的两个参数。实现 SHOULD 提供环境变量回退 `TRACEGUARD_AGENT_ID` / `TRACEGUARD_SESSION_ID`(显式参数优先于环境变量,两者皆无则为 NULL),因为 agent 场景常无法逐调用传参。两字段不参与 `input_hash`(§4.4)与不变量 1–4。
 
 **失败语义 (MUST)：** 插桩 **MUST NOT** 破坏被插桩的业务调用。trace 持久化失败默认 **fail-open**——吞掉并记 WARNING,绝不向调用方传播;且在错误路径上**绝不替换**原始业务异常(调用方始终看到自己的异常)。实现 **MUST** 同时提供 opt-in 的 **fail-closed** 模式(如 `strict_persistence` 标志 / `TRACEGUARD_STRICT_PERSISTENCE` 环境变量),用于"宁可中断也不能静默丢 trace"的回测场景。
 
@@ -359,7 +369,7 @@ assert_replay_set_locked(replay_set_id: str) -> None
 - `traceguard[otel]` — 把 trace 额外导出为 OpenTelemetry / OpenInference (OTLP) span,**附加**于(绝不替换)SQLite/SQLAlchemy 存储。
 - `traceguard[contamination]` — 训练污染估计器(成员推断、regime decay、claim 级检查)。**仅检测**;评分通过 `output_parsed` 挂到 trace,**不**新增 MUST 列。
 - `traceguard.loop` — 自我改进循环的 evidence-gating 辅助:只有 cutoff 之前可溯源的证据才被采纳为事实。
-- `traceguard.audit` — opt-in 审计证据层(实验性,零新增依赖):ORM 层 append-only 守卫(防误写)+ row hash chain(篡改可检测,非防篡改;无外部锚时全链重写/尾部截断不可检测)+ 可导出链头锚点。哈希覆盖字段**排除 `cost_usd`**(§3.1 合法就地补写路径),cost 修正经链内 cost event 记账。`import` 无副作用,须显式 `enable()/attach()`;链自身故障默认 fail-open(§4.1),strict 模式 opt-in。诚实分层与边界见 `docs/audit.md`。
+- `traceguard.audit` — opt-in 审计证据层(**stable since SPEC v1.1**,零新增依赖):ORM 层 append-only 守卫(防误写)+ row hash chain(篡改可检测,非防篡改;无外部锚时全链重写/尾部截断不可检测)+ 可导出链头锚点。哈希覆盖字段**排除 `cost_usd`**(§3.1 合法就地补写路径),cost 修正经链内 cost event 记账。`import` 无副作用,须显式 `enable()/attach()`;链自身故障默认 fail-open(§4.1),strict 模式 opt-in。自 SPEC v1.1 起:其公开 API 面按 §6.3 演进规则约束;verify finding kinds 及 severity 语义冻结(新增 = minor,改/删 = major);`docs/audit.md` 边界声明三条为规范性声明,只许更保守。哈希算法版本化:algo v1 由 golden tests 冻结永续可验,算法变更 = algo v2 且 MUST 不使既有链失效。诚实分层与边界见 `docs/audit.md`。
 
 - `traceguard.routing_integrity` — 网关路由下的不变量 2 有效性审计。SDK wrapper 在 `output_parsed["routing"]` 附加 `requested_model` / `served_model`(**不**新增 MUST 列,与 contamination 评分同路)。§3.1 的 `model_id` 语义不变,仍是**请求的**模型;本扩展回答的是它之前的一个问题:不变量 2 这次检查的东西是不是真实存在的模型。自适应路由别名(`orcarouter/auto` 等)下,请求名与实际服务模型可以逐请求不同,别名没有 `available_to_us_at`,于是校验会**静默通过**。扩展给出四级判定(verified / diverged / unregistered / unverifiable)与 CLI,**不削弱**不变量 2 本身。见 `docs/integrations/gateways.md`。
 
@@ -564,6 +574,12 @@ MUST,不触发 SemVer,但每一条都有具体代价支撑,写在这里是为了
 ---
 
 ## 附录 D: 修订历史
+
+### v1.1 (2026-08-27)
+
+- §3.1 新增 nullable 字段 `agent_id` / `session_id`(多执行体关联的身份维度);共享资源指纹走 `output_parsed["correlation"]` 约定。不参与 input_hash 与不变量。
+- §6.6 `traceguard.audit` 去实验性标记,API 面 / finding kinds / 边界声明契约化;algo v1 golden 冻结永续可验。
+- 动机与兼容性分析:`docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md`。SemVer **minor**。
 
 ### v0.3 (2026-06-28)
 

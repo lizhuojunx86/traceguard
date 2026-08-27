@@ -352,8 +352,8 @@ SemVer rules — lives in [docs/SPEC.md](docs/SPEC.md) (English) and
 ## Evidence layer: `traceguard.audit`
 
 Time-correct traces are only worth as much as the guarantee that they were not
-edited afterwards. The opt-in `traceguard.audit` submodule (1.1.0, experimental,
-off the frozen surface) adds that guarantee to the `traces` table:
+edited afterwards. The opt-in `traceguard.audit` submodule (1.1.0; contract-stable
+since SPEC v1.1, off the frozen import surface) adds that guarantee to the `traces` table:
 
 - **Append-only guard at the ORM layer** — blocks accidental UPDATE/DELETE
   against `traces`; `cost_usd`-only updates pass, since repricing is the one
