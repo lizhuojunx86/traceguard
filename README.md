@@ -365,7 +365,10 @@ since SPEC v1.1, off the frozen import surface) adds that guarantee to the `trac
 - **Exportable anchor** — `export_anchor()` emits the chain head for storage
   outside the database, which is what turns tamper-*evident* into something an
   auditor can actually check.
-- **CLI** — `python -m traceguard.audit enable|disable|verify|anchor`.
+- **CLI** — `python -m traceguard.audit enable|disable|verify|anchor|reconcile`;
+  `anchor --sink file:…|git-note:…|webhook:… [--every SECONDS]` stores the head
+  outside the DB on a cadence, and `reconcile` checks self-reported token
+  volume against the provider's usage report (`capture_mismatch`).
 
 Boundaries are stated rather than glossed: this is tamper-**evident**, not
 tamper-proof. Core SQL, raw drivers, and bulk APIs bypass the ORM guard, and

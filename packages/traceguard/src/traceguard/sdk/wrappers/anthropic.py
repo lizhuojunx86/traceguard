@@ -39,12 +39,16 @@ class _WrappedMessages(_DelegatingWrapper):
         project: str,
         component: str,
         feature_as_of: FeatureAsOf = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         self._original = original
         self._tracer = tracer
         self._project = project
         self._component = component
         self._feature_as_of = feature_as_of
+        self._agent_id = agent_id
+        self._session_id = session_id
 
     def create(self, **kwargs: Any) -> Any:
         model = kwargs.get("model")
@@ -54,6 +58,8 @@ class _WrappedMessages(_DelegatingWrapper):
             self._component,
             operation="llm_complete",
             feature_as_of=resolve_feature_as_of(self._feature_as_of),
+            agent_id=self._agent_id,
+            session_id=self._session_id,
         ) as span:
             extra = {k: v for k, v in kwargs.items() if k not in {"model", "messages"}}
             span.record_input({"messages": messages, "model": model, "params": extra})
@@ -175,6 +181,8 @@ class WrappedAnthropicClient(_DelegatingWrapper):
         project: str,
         component: str,
         feature_as_of: FeatureAsOf = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         self._client = client
         self.messages = _WrappedMessages(
@@ -183,6 +191,8 @@ class WrappedAnthropicClient(_DelegatingWrapper):
             project=project,
             component=component,
             feature_as_of=feature_as_of,
+            agent_id=agent_id,
+            session_id=session_id,
         )
 
 
@@ -193,6 +203,8 @@ def wrap_anthropic(
     component: str,
     tracer: Tracer | None = None,
     feature_as_of: FeatureAsOf = None,
+    agent_id: str | None = None,
+    session_id: str | None = None,
 ) -> WrappedAnthropicClient:
     """Return ``client`` wrapped so ``messages.create()`` produces traces.
 
@@ -201,6 +213,10 @@ def wrap_anthropic(
     to record no stamp. Stamping makes the resulting traces checkable by the
     look-ahead invariants (SPEC §3); a callable that raises is swallowed
     (fail-open) and that trace records ``feature_as_of=None``.
+
+    ``agent_id`` / ``session_id`` (SPEC §3.1 v1.1) stamp the identity dimensions
+    on every trace this client produces; when omitted, the tracer falls back to
+    ``TRACEGUARD_AGENT_ID`` / ``TRACEGUARD_SESSION_ID``, then NULL.
     """
     return WrappedAnthropicClient(
         client,
@@ -208,4 +224,6 @@ def wrap_anthropic(
         project=project,
         component=component,
         feature_as_of=feature_as_of,
+        agent_id=agent_id,
+        session_id=session_id,
     )

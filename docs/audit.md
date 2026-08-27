@@ -47,6 +47,12 @@ python -m traceguard.audit enable  --db sqlite:///traces.db   # [--chain-only] [
 python -m traceguard.audit verify  --db sqlite:///traces.db   # exit 1 on BREAK findings
 python -m traceguard.audit verify  --db ... --anchor '<json>' # full walk + anchor check(加测截断/重写)
 python -m traceguard.audit anchor  --db sqlite:///traces.db   # print the head digest
+python -m traceguard.audit anchor  --db ... --sink file:/mnt/other-host/anchors.jsonl \
+                                            --sink git-note:/path/repo --sink webhook:https://...   # v2: store it OUTSIDE the DB
+python -m traceguard.audit anchor  --db ... --sink file:... --every 300             # v2: keep anchoring (interval = exposure window)
+python -m traceguard.audit verify  --db ... --anchor-file /mnt/other-host/anchors.jsonl  # v2: verify against the newest stored anchor
+python -m traceguard.audit reconcile --db ... --source anthropic-usage --window 2026-08-01T00:00:00Z,2026-08-08T00:00:00Z \
+                                            --api-key-id apikey_...              # v2: self-reported vs provider totals (capture_mismatch)
 python -m traceguard.audit disable --db sqlite:///traces.db
 ```
 
@@ -82,8 +88,8 @@ v1 的覆盖照实登记——可检测的说可检测,不设防的说不设防:
 |---|---|---|
 | 修改已链行的覆盖字段 | **可检测**(`hash_mismatch` BREAK) | 全量 preimage 重算 |
 | 删除已链 trace 行 | **可检测**(`missing_trace` BREAK) | pass 2 全表扫 |
-| 尾部截断 / 全链重写 | **仅锚定后可检测**(`anchor_mismatch`);无外部锚不可检测 | 边界声明 1,锚定频率 = 暴露窗口 |
-| 采集层伪造(spoofed tool call 类,METR: >7% transcripts) | **v1 不设防**——自报证据产生于 agent 控制的进程内,链忠实保存谎言 | 存储完整性 ≠ 采集真实性;v2 调研见 `docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md` §5 |
+| 尾部截断 / 全链重写 | **仅锚定后可检测**(`anchor_mismatch`);无外部锚不可检测。v2 的 anchor sink + 定期锚定把暴露窗口缩到锚定间隔,不改变"两次锚定之间不可检测"这一事实 | 边界声明 1,锚定频率 = 暴露窗口;下文 Anchors |
+| 采集层伪造(spoofed tool call 类,METR: >7% transcripts) | **逐条不设防**——自报证据产生于 agent 控制的进程内,链忠实保存谎言。v2 `reconcile` 做**总量**对账:同 model 同时间窗的自报 token 量 vs 供应商 usage 报告,超阈值 = `capture_mismatch`(WARN);单条 trace 的真实性仍不可证 | 存储完整性 ≠ 采集真实性;分层见下文 Reconcile 与 `docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md` §5 |
 | 高权限攻击者(可写库文件) | **v1 不设防** | 边界声明 1,WORM/签名/自动外锚 out of scope |
 
 ## Mechanics
@@ -173,6 +179,7 @@ about rows inserted while audit was off. Findings:
 | `cost_mismatch` | WARN | current `cost_usd` ≠ newest chained cost evidence |
 | `deleted_with_record` | WARN | chained trace gone, deletion tombstone exists |
 | `coverage_gap` | GAP | traces with no entry (pre-enable / disable window / fail-open skip) |
+| `capture_mismatch` | WARN | (`reconcile`, not `verify_chain`) self-reported token volume for a model/window disagrees with the provider's out-of-band usage report beyond the tolerance, or a model appears on only one side |
 
 Full walk is O(n) and the default (~26k entries verify in well under a
 second). `from_anchor=` **adds** an anchor-consistency check on top of the
@@ -184,8 +191,69 @@ in that mode. Coverage and cost checks always run in full, in every mode.
 
 **Anchors.** `export_anchor()` → `{seq, row_hash, algo_version, entry_count,
 exported_at}`. Store the JSON line **outside the DB**: a git commit message, a
-sent email, a third-party timestamping service. v1 exports only — automated
-anchoring (and WORM/signing) is future work.
+sent email, a third-party timestamping service. WORM storage and signing stay
+future work.
+
+**Anchor sinks + periodic anchoring (v2).** `traceguard.audit.anchors` is the
+scheduling layer on top of the unchanged `export_anchor()` contract:
+
+```python
+from traceguard import audit
+
+sinks = [
+    audit.FileAnchorSink("/mnt/other-host/anchors.jsonl"),   # JSON lines; latest() reads back
+    audit.GitNoteAnchorSink("/path/repo"),                   # git notes --ref refs/notes/traceguard-audit
+    audit.WebhookAnchorSink("https://...", headers={"Authorization": "Bearer ..."}),
+]
+audit.anchor_to(engine, sinks)                     # once; raises AnchorSinkError if ANY sink failed
+audit.AnchorScheduler(engine, sinks, interval_s=300).start()   # daemon thread; logs ERROR and keeps going
+```
+
+What each sink honestly gives you: a **file** sink is out of the DB, not out of
+the host — whoever can edit the DB file can usually edit a sibling file, so put
+it on another host / filesystem / append-only medium. A **git note** is as
+tamper-evident as the repository's history, which is only as good as a remote
+the DB writer cannot force-push (`git push origin refs/notes/traceguard-audit`).
+A **webhook** delivers; what the receiver does with the anchor is the actual
+guarantee. `anchor_to` tries every sink and then raises if any failed — an
+anchor that silently never landed is a false sense of coverage (SPEC B3.4).
+The scheduler interval IS the exposure window: entries appended since the last
+tick can still be truncated without trace. `verify --anchor-file PATH` closes
+the loop against the newest anchor a file sink wrote.
+
+**Reconcile (v2, capture-fidelity layer L1).** The chain answers "was what the
+SDK stored changed afterwards?"; it cannot answer "was what the SDK stored
+true?" — wrapper self-reports are produced inside the process the agent
+controls. `traceguard.audit.reconcile` is the cheapest cross-check: per model
+and UTC time bucket, compare the traces table's self-reported token volume with
+the provider's usage report, an out-of-band source the agent does not write to.
+
+| 层 | 机制 | 证明什么 | 证明不了什么 |
+|---|---|---|---|
+| L0 | wrapper 自报 + hash chain | SDK 看到的调用事后未被无痕改动 | 自报本身的真实性 |
+| **L1(v2)** | `reconcile`:traces 聚合 vs 供应商 usage 报告 | 同 model 同时间窗的 token 总量在容差内一致 | 单条 trace 的真实性 |
+| L2(不做) | 逐条真实性:供应商签名请求日志 | — | 超出 SDK 能力边界,不承诺 |
+
+```bash
+export ANTHROPIC_ADMIN_KEY=sk-ant-admin...   # Admin API key; never a regular key, never in a tracked file
+python -m traceguard.audit reconcile --db sqlite:///traces.db --source anthropic-usage \
+    --window 2026-08-01T00:00:00Z,2026-08-08T00:00:00Z --bucket-width 1d \
+    --api-key-id apikey_01... --workspace-id wrkspc_01...   # narrow the org-wide report to THIS DB's traffic
+# or, from a saved report (a curl dump; also the deterministic test path):
+python -m traceguard.audit reconcile --db ... --source json:usage.json --window ...
+```
+
+Conventions that MUST line up, or every finding is a false positive: `tokens_in`
+is full prompt volume (`uncached_input_tokens` + `cache_read_input_tokens` +
+`cache_creation` 5m + 1h — exactly what `wrap_anthropic` records); windows are
+snapped outward to UTC bucket edges (`align_window`) and compared on
+`invoked_at`; model names must match (`--model-map trace=provider` for dated
+snapshot ids). The Usage API reports **tokens only, not request counts** — call
+counts are shown for context, never compared. The direction of a mismatch is
+spelled out in the finding: **traces > provider** = self-reports the provider
+never served (spoofed or replayed), or a report filtered narrower than the DB;
+**provider > traces** = traffic the SDK never recorded (uninstrumented calls,
+traces dropped fail-open, or an org-wide report wider than this DB).
 
 ## Legal-deletion path
 

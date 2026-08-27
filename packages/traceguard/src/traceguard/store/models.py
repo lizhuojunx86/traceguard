@@ -27,9 +27,12 @@ from sqlalchemy import (
     UniqueConstraint,
     create_engine,
     event,
+    inspect,
     select,
+    text,
 )
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError, ProgrammingError
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -85,6 +88,15 @@ class Trace(Base):
         Integer, ForeignKey("traces.trace_id"), nullable=True
     )
     correlation_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+
+    # Identity dimensions (SPEC §3.1, v1.1): who ran this call, and in which
+    # session. Indexed aggregation keys for correlating several executors after
+    # the fact. By contract they take no part in input_hash or invariants 1-4;
+    # they are also outside the audit algo v1 hash envelope (see
+    # audit/canonical.py TRACE_CONTENT_FIELDS) — append-only under the guard,
+    # but not attested by the chain until algo v2.
+    agent_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
+    session_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
 
     # Input
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
@@ -234,15 +246,96 @@ def _block_locked_set_delete(mapper, connection, target: ReplaySet) -> None:
 
 DEFAULT_DB_URL = "sqlite:///traceguard.db"
 
+# Columns added to the contract ``traces`` table after 1.0 (SPEC v1.1).
+# Databases created before then lack them, and ``create_all`` never ALTERs an
+# existing table — so :func:`ensure_trace_columns` adds them on open. Once a
+# column is mapped on :class:`Trace`, every ORM SELECT names it: a legacy DB
+# would fail on READ (including ``python -m traceguard.audit verify``), not
+# merely on write, which is why this runs on every :func:`make_engine`.
+TRACE_COLUMNS_ADDED_SINCE_1_0: tuple[str, ...] = ("agent_id", "session_id")
+
+
+def _trace_column_names(engine: Engine) -> set[str]:
+    return {c["name"] for c in inspect(engine).get_columns("traces")}
+
+
+def ensure_trace_columns(engine: Engine) -> list[str]:
+    """Add the SPEC v1.1 ``traces`` columns to an existing table (idempotent).
+
+    Additive only: nullable columns plus their indexes, via
+    ``ALTER TABLE traces ADD COLUMN`` (the one ALTER every dialect this
+    package targets supports). A no-op when ``traces`` does not exist yet
+    (``create_all`` builds it complete) or already has every column. Returns
+    the names of the columns it added, so callers can log the migration.
+
+    Concurrency: two processes opening the same legacy DB at once both see
+    the column missing; the loser's ALTER fails with "duplicate column". That
+    is re-checked by inspection and treated as success. A failure that leaves
+    the column missing (read-only file, insufficient privilege) is raised with
+    the manual statement in the message — the ORM could not read the table
+    anyway, so a loud error beats a puzzling one at first SELECT.
+
+    This is deliberately NOT a migration framework (the audit and routing_audit
+    tables keep their manual-ALTER posture); it covers exactly the contract
+    columns listed in :data:`TRACE_COLUMNS_ADDED_SINCE_1_0`.
+    """
+    if "traces" not in inspect(engine).get_table_names():
+        return []
+    table = Trace.__table__
+    added: list[str] = []
+    for name in TRACE_COLUMNS_ADDED_SINCE_1_0:
+        if name not in _trace_column_names(engine):
+            column = table.c[name]
+            ddl_type = column.type.compile(dialect=engine.dialect)
+            statement = f"ALTER TABLE traces ADD COLUMN {name} {ddl_type}"
+            try:
+                with engine.begin() as conn:
+                    conn.execute(text(statement))
+            except (OperationalError, ProgrammingError) as exc:
+                if name not in _trace_column_names(engine):
+                    raise RuntimeError(
+                        f"traces table lacks column {name!r} (added in SPEC v1.1) and it "
+                        f"could not be added automatically ({exc.__class__.__name__}: "
+                        f"{exc.orig if exc.orig is not None else exc}). Run manually: "
+                        f"{statement}"
+                    ) from exc
+                # A concurrent opener added it between our inspect and ALTER.
+            else:
+                added.append(name)
+        # ``index=True`` on the mapped column registers Index ix_traces_<col> on
+        # the Table; create_all builds it for new DBs, this builds it for
+        # migrated ones. Reuse THAT Index object — constructing a new
+        # ``Index(name, column)`` would attach a duplicate to the shared Table
+        # metadata and break every later create_all in the process. checkfirst
+        # makes it idempotent; a concurrent creator's collision is re-checked
+        # the same way as the column above.
+        index_name = f"ix_traces_{name}"
+        index = next((ix for ix in table.indexes if ix.name == index_name), None)
+        if index is None:  # pragma: no cover - index=True guarantees it exists
+            continue
+        try:
+            index.create(bind=engine, checkfirst=True)
+        except (OperationalError, ProgrammingError):
+            existing = {ix["name"] for ix in inspect(engine).get_indexes("traces")}
+            if index_name not in existing:
+                raise
+    return added
+
 
 def make_engine(url: str | None = None, *, create_all: bool = True) -> Engine:
     """Build a SQLAlchemy engine and optionally create the schema.
 
     Resolution order for the URL: explicit arg → TRACEGUARD_DB_URL env →
     DEFAULT_DB_URL (sqlite:///traceguard.db in the current working directory).
+
+    An existing ``traces`` table created before SPEC v1.1 is brought up to
+    date on open (:func:`ensure_trace_columns`: additive nullable columns
+    only) regardless of ``create_all``, because the ORM cannot read the table
+    without them.
     """
     resolved = url or os.environ.get("TRACEGUARD_DB_URL") or DEFAULT_DB_URL
     engine = create_engine(resolved, future=True)
     if create_all:
         Base.metadata.create_all(engine)
+    ensure_trace_columns(engine)
     return engine

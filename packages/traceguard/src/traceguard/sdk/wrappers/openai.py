@@ -115,12 +115,16 @@ class _WrappedCompletions(_DelegatingWrapper):
         project: str,
         component: str,
         feature_as_of: FeatureAsOf = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         self._original = original
         self._tracer = tracer
         self._project = project
         self._component = component
         self._feature_as_of = feature_as_of
+        self._agent_id = agent_id
+        self._session_id = session_id
 
     def create(self, **kwargs: Any) -> Any:
         model = kwargs.get("model")
@@ -130,6 +134,8 @@ class _WrappedCompletions(_DelegatingWrapper):
             self._component,
             operation="llm_complete",
             feature_as_of=resolve_feature_as_of(self._feature_as_of),
+            agent_id=self._agent_id,
+            session_id=self._session_id,
         ) as span:
             extra = {k: v for k, v in kwargs.items() if k not in {"model", "messages"}}
             span.record_input({"messages": messages, "model": model, "params": extra})
@@ -178,6 +184,8 @@ class _WrappedChat(_DelegatingWrapper):
         project: str,
         component: str,
         feature_as_of: FeatureAsOf = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         self._original = original
         self.completions = _WrappedCompletions(
@@ -186,6 +194,8 @@ class _WrappedChat(_DelegatingWrapper):
             project=project,
             component=component,
             feature_as_of=feature_as_of,
+            agent_id=agent_id,
+            session_id=session_id,
         )
 
 
@@ -200,12 +210,16 @@ class _WrappedResponses(_DelegatingWrapper):
         project: str,
         component: str,
         feature_as_of: FeatureAsOf = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         self._original = original
         self._tracer = tracer
         self._project = project
         self._component = component
         self._feature_as_of = feature_as_of
+        self._agent_id = agent_id
+        self._session_id = session_id
 
     def create(self, **kwargs: Any) -> Any:
         model = kwargs.get("model")
@@ -215,6 +229,8 @@ class _WrappedResponses(_DelegatingWrapper):
             self._component,
             operation="llm_complete",
             feature_as_of=resolve_feature_as_of(self._feature_as_of),
+            agent_id=self._agent_id,
+            session_id=self._session_id,
         ) as span:
             extra = {k: v for k, v in kwargs.items() if k not in {"model", "input"}}
             span.record_input({"input": input_, "model": model, "params": extra})
@@ -267,6 +283,8 @@ class WrappedOpenAIClient(_DelegatingWrapper):
         project: str,
         component: str,
         feature_as_of: FeatureAsOf = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
     ) -> None:
         self._client = client
         self.chat = _WrappedChat(
@@ -275,6 +293,8 @@ class WrappedOpenAIClient(_DelegatingWrapper):
             project=project,
             component=component,
             feature_as_of=feature_as_of,
+            agent_id=agent_id,
+            session_id=session_id,
         )
         # The Responses API only exists on newer openai SDKs. Wrap it only when
         # present so older clients are unaffected; absent, attribute access on
@@ -286,6 +306,8 @@ class WrappedOpenAIClient(_DelegatingWrapper):
                 project=project,
                 component=component,
                 feature_as_of=feature_as_of,
+                agent_id=agent_id,
+                session_id=session_id,
             )
 
 
@@ -296,6 +318,8 @@ def wrap_openai(
     component: str,
     tracer: Tracer | None = None,
     feature_as_of: FeatureAsOf = None,
+    agent_id: str | None = None,
+    session_id: str | None = None,
 ) -> WrappedOpenAIClient:
     """Return ``client`` wrapped so OpenAI calls produce traces.
 
@@ -317,6 +341,11 @@ def wrap_openai(
             stamp. Stamping it makes the resulting traces checkable by the
             look-ahead invariants (SPEC §3); a callable that raises is swallowed
             (fail-open) and that trace records ``feature_as_of=None``.
+        agent_id: Identity of the executing principal (SPEC §3.1 v1.1), stamped
+            on every trace this client produces. Falls back to
+            ``TRACEGUARD_AGENT_ID`` when omitted, then NULL.
+        session_id: Run / session grouping key (SPEC §3.1 v1.1); same fallback
+            via ``TRACEGUARD_SESSION_ID``.
 
     Returns:
         A :class:`WrappedOpenAIClient` delegating to ``client``.
@@ -327,4 +356,6 @@ def wrap_openai(
         project=project,
         component=component,
         feature_as_of=feature_as_of,
+        agent_id=agent_id,
+        session_id=session_id,
     )

@@ -33,6 +33,29 @@ def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+AGENT_ID_ENV = "TRACEGUARD_AGENT_ID"
+SESSION_ID_ENV = "TRACEGUARD_SESSION_ID"
+
+
+def _identity(explicit: str | None, env_name: str) -> str | None:
+    """Resolve an identity dimension (SPEC §4.1, v1.1).
+
+    Precedence: the explicit argument, else the environment variable, else
+    ``None`` (the column stays NULL). Read per span rather than at import so an
+    agent runtime that exports ``TRACEGUARD_AGENT_ID`` after this module was
+    imported — the common case: the harness sets it, the SDK is imported
+    earlier by a library — is still honoured. Empty / whitespace-only
+    environment values read as unset.
+    """
+    if explicit is not None:
+        return explicit
+    value = os.environ.get(env_name)
+    if value is None:
+        return None
+    value = value.strip()
+    return value or None
+
+
 class _OtelSink(Protocol):
     """Structural type for the optional real-time OTel dual-write sink.
 
@@ -87,6 +110,8 @@ class Span:
         correlation_id: str | None = None,
         feature_as_of: datetime | None = None,
         parent_trace_id: int | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
         otel_sink: _OtelSink | None = None,
         strict_persistence: bool = False,
     ) -> None:
@@ -96,6 +121,10 @@ class Span:
         self.correlation_id = correlation_id
         self.feature_as_of = feature_as_of
         self.parent_trace_id = parent_trace_id
+        # Identity dimensions (SPEC §3.1 v1.1); already resolved against the
+        # environment by Tracer.span, stored verbatim.
+        self.agent_id = agent_id
+        self.session_id = session_id
 
         self._engine = engine
         self._otel_sink = otel_sink
@@ -199,6 +228,8 @@ class Span:
             operation=self.operation,
             parent_trace_id=self.parent_trace_id,
             correlation_id=self.correlation_id,
+            agent_id=self.agent_id,
+            session_id=self.session_id,
             input_hash=self._input_hash,
             input_summary=self._input_summary,
             model_id=self._model_id,
@@ -373,7 +404,15 @@ class Tracer:
         correlation_id: str | None = None,
         feature_as_of: datetime | None = None,
         parent_trace_id: int | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
     ) -> Iterator[Span]:
+        """Open one trace as a context manager (SPEC §4.1).
+
+        ``agent_id`` / ``session_id`` (v1.1) identify who ran the call and in
+        which session; when omitted they fall back to ``TRACEGUARD_AGENT_ID`` /
+        ``TRACEGUARD_SESSION_ID``, and to NULL when neither is set.
+        """
         span = Span(
             project=project,
             component=component,
@@ -382,6 +421,8 @@ class Tracer:
             correlation_id=correlation_id,
             feature_as_of=feature_as_of,
             parent_trace_id=parent_trace_id,
+            agent_id=_identity(agent_id, AGENT_ID_ENV),
+            session_id=_identity(session_id, SESSION_ID_ENV),
             otel_sink=self._otel_sink,
             strict_persistence=self.strict_persistence,
         )
@@ -409,9 +450,15 @@ class Tracer:
         *,
         correlation_from: Callable[..., str] | None = None,
         feature_as_of_from: Callable[..., datetime] | None = None,
+        agent_id: str | None = None,
+        session_id: str | None = None,
     ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         """Decorator form. Best-effort auto-records (args, kwargs) as input and
         the return value as ``output_parsed``. For finer control use ``span``.
+
+        ``agent_id`` / ``session_id`` are fixed per decoration; for values that
+        change per run, set ``TRACEGUARD_AGENT_ID`` / ``TRACEGUARD_SESSION_ID``
+        in the environment (resolved at each call) or use ``span`` directly.
         """
         def decorator(fn: Callable[..., Any]) -> Callable[..., Any]:
             @wraps(fn)
@@ -424,6 +471,8 @@ class Tracer:
                     operation,
                     correlation_id=corr,
                     feature_as_of=feat,
+                    agent_id=agent_id,
+                    session_id=session_id,
                 ) as sp:
                     sp.record_input({"args": list(args), "kwargs": dict(kwargs)})
                     result = fn(*args, **kwargs)
