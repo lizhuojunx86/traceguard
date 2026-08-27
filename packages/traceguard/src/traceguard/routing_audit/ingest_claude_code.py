@@ -60,6 +60,12 @@ Field mapping:
 - ``input_hash`` ← SDK :func:`traceguard.input_hash` over the stable source
   identity ``{"source", "session_id", "message_id"}`` (SPEC §3.1: the hash
   MUST come from the SDK normalize function).
+- ``session_id`` ← the Claude Code ``sessionId`` (SPEC §3.1 v1.1; subagent
+  lines carry the *parent* session, so a session's subagents share it);
+  ``agent_id`` ← the subagent's ``agentId`` for subagent transcripts, NULL
+  for the main transcript (which has no executor id of its own). Both are
+  also kept in ``output_parsed`` (``session_id`` / ``agent_id``), which is
+  where rows ingested before 1.5.0 still carry them.
 
 Privacy: prompt/completion content, tool inputs/outputs and error text are
 NEVER read into the database. ``input_summary`` is a short synthetic label;
@@ -486,6 +492,13 @@ def _build_trace(rec: ParsedRecord) -> Trace:
             }
         ),
         input_summary=summary,
+        # Identity dimensions (SPEC §3.1 v1.1): the Claude Code session is the
+        # session; a subagent transcript names its executor (agent-<id>), the
+        # main transcript has no separate one and stays NULL — same rule as
+        # meta["agent_id"] below. Both also remain inside output_parsed, so
+        # rows written before 1.5.0 can still be joined on the JSON.
+        agent_id=rec.agent_id,
+        session_id=rec.source_session_id if rec.source_session_id != "unknown" else None,
         model_id=rec.model_id,
         output_parsed=rec.meta,
         parse_status=rec.parse_status,

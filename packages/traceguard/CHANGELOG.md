@@ -50,6 +50,14 @@ agents coordinating over a shared cache).
   Disagreement is the new finding kind `capture_mismatch` (WARN), with the
   direction spelled out. CLI: `reconcile --source anthropic-usage|json:PATH
   --window START,END`. Totals only — it cannot vouch for a single call.
+- `routing_audit.ingest_claude_code` fills the new columns: `session_id` is
+  the Claude Code `sessionId`, `agent_id` the subagent's `agentId` (NULL for
+  the main transcript). Rows ingested earlier keep both inside
+  `output_parsed`; the columns are not backfilled — they are outside the
+  audit envelope, but not outside the append-only guard.
+- The OTel exporter emits them as `traceguard.agent_id` /
+  `traceguard.session_id` and, for backends that group natively, as the
+  semantic-convention `gen_ai.agent.id` / `session.id`. Omitted when NULL.
 
 ### Changed
 

@@ -176,6 +176,7 @@ consumers get what they need:
 | `traceguard.prompt_template_id` / `traceguard.prompt_template_hash` | `traceguard.*` | The exact prompt version, pinned into the trace |
 | `traceguard.trace_id` | `traceguard.*` | Stable id for **deduplication** if you both dual-write and batch-export |
 | `traceguard.correlation_id`, `traceguard.project`, `traceguard.component` | `traceguard.*` | Group spans by run / pipeline stage |
+| `traceguard.agent_id` / `traceguard.session_id` — also as `gen_ai.agent.id` / `session.id` | `traceguard.*` + semconv | **Who ran it, in which session** (SPEC §3.1 v1.1, 1.5.0). The semconv pair is what Phoenix / Langfuse group by natively; omitted when the column is NULL |
 
 The standard `gen_ai.*` fields populate the dashboard's native model and
 token-usage views, so cost and latency look exactly as you expect. The
