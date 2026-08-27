@@ -125,6 +125,14 @@ def trace_to_attributes(
 
     put("traceguard.correlation_id", trace.correlation_id)
     put("traceguard.parent_trace_id", trace.parent_trace_id)
+    # Identity dimensions (SPEC §3.1 v1.1). Emitted under traceguard.* like
+    # the other row facts, and ALSO under the semantic-convention names
+    # (`session.id`, `gen_ai.agent.id`) so Phoenix / Langfuse-style backends
+    # group by session and agent without a custom mapping.
+    put("traceguard.agent_id", trace.agent_id)
+    put("traceguard.session_id", trace.session_id)
+    put("gen_ai.agent.id", trace.agent_id)
+    put("session.id", trace.session_id)
     put("traceguard.model_id", trace.model_id)
     put("gen_ai.request.model", model_name if model_name is not None else trace.model_id)
     put("gen_ai.usage.input_tokens", trace.tokens_in)

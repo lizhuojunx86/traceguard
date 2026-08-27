@@ -16,11 +16,13 @@ this frozen surface — import them from their submodule paths:
   ``[contamination-hf]``) — training-contamination estimators.
 - ``traceguard.loop`` — self-improvement-loop evidence gating.
 - ``traceguard.audit`` — opt-in tamper-evident audit trail (append-only guard,
-  row hash chain, exportable anchors); see docs/audit.md.
+  row hash chain, anchors + sinks, out-of-band reconcile); see docs/audit.md.
+  Not experimental since SPEC v1.1: its own surface is contract-bound
+  (tests/test_audit_api_surface.py), it just stays off THIS list.
 """
 from __future__ import annotations
 
-__version__ = "1.4.0"
+__version__ = "1.5.0"
 
 from traceguard.registry.models import NoEligibleModelError, register_model, select_model
 from traceguard.registry.prompts import PromptTemplate, load_prompt

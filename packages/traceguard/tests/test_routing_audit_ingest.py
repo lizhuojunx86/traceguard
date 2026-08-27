@@ -992,3 +992,21 @@ def test_registered_kinds_are_all_actually_emittable() -> None:
         assert f'"{kind}",' in src or f"'{kind}'," in src, (
             f"WARNING_KINDS declares {kind!r} but no warn() call emits it"
         )
+
+
+def test_identity_columns_mirror_the_json_meta(source_root: Path, db_url: str) -> None:
+    """SPEC §3.1 v1.1: session_id / agent_id are the JSON meta lifted into
+    queryable columns — same values, never a different source of truth."""
+    ingest(source_root, db_url, write=True)
+    engine = make_engine(db_url)
+    with Session(engine) as sess:
+        rows = list(sess.scalars(select(Trace)))
+    assert rows
+    for r in rows:
+        assert r.session_id == r.output_parsed["session_id"]
+        assert r.agent_id == r.output_parsed.get("agent_id")
+    assert all(r.session_id for r in rows)  # every fixture record names its session
+    subagents = [r for r in rows if r.agent_id is not None]
+    assert subagents, "fixture has subagent transcripts; their agent_id must be populated"
+    assert all(r.component != "main" for r in subagents)
+    assert all(r.agent_id is None for r in rows if r.component == "main")

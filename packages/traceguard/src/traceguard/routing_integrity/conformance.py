@@ -359,7 +359,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"plan: {n_calls} calls to {alias} via {entry.base_url}")
     print(f"      max_tokens={budget.max_tokens}, worst case ${worst:.2f}")
-    print(f"      (worst case assumes every call hits the priciest model; it will not)")
+    print("      (worst case assumes every call hits the priciest model; it will not)")
 
     if args.dry_run:
         print("\ndry run: nothing sent.")

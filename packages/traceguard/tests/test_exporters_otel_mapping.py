@@ -130,3 +130,48 @@ def test_export_traces_batches_registry_lookup_into_one_query(engine):
 
     assert n == 3
     assert len(seen) == 1  # single batched SELECT, not 3
+
+
+def _insert_trace_with_identity(engine, *, agent_id, session_id) -> Trace:
+    with Session(engine) as sess:
+        row = Trace(
+            project="p",
+            component="c",
+            operation="llm",
+            input_hash="0" * 64,
+            parse_status="success",
+            invoked_at=datetime(2024, 5, 1, tzinfo=UTC),
+            agent_id=agent_id,
+            session_id=session_id,
+        )
+        sess.add(row)
+        sess.commit()
+        tid = row.trace_id
+    with Session(engine) as sess:
+        return sess.get(Trace, tid)
+
+
+def test_identity_columns_are_exported_under_both_vocabularies(engine):
+    """SPEC §3.1 v1.1: agent_id / session_id ride along as traceguard.* AND as the
+    semantic-convention names backends already group by."""
+    trace = _insert_trace_with_identity(engine, agent_id="agent-7", session_id="run-42")
+    provider, exporter = _provider()
+
+    export_trace(trace, tracer_provider=provider, engine=engine)
+
+    a = exporter.get_finished_spans()[0].attributes
+    assert a["traceguard.agent_id"] == "agent-7"
+    assert a["traceguard.session_id"] == "run-42"
+    assert a["gen_ai.agent.id"] == "agent-7"
+    assert a["session.id"] == "run-42"
+
+
+def test_identity_columns_are_omitted_when_null(engine):
+    trace = _insert_trace_with_identity(engine, agent_id=None, session_id=None)
+    provider, exporter = _provider()
+
+    export_trace(trace, tracer_provider=provider, engine=engine)
+
+    a = exporter.get_finished_spans()[0].attributes
+    for key in ("traceguard.agent_id", "traceguard.session_id", "gen_ai.agent.id", "session.id"):
+        assert key not in a  # OTel attributes may not be None; absent means NULL

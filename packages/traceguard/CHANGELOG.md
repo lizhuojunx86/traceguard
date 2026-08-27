@@ -7,10 +7,69 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
-## [Unreleased]
+## [1.5.0] - 2026-08-28
 
-Contract-external, SemVer **minor** when released: no MUST field is added or
-changed, no existing signature moves, the normalize algorithm is untouched.
+SemVer **minor**, on two counts: SPEC v1.0 → v1.1 (two new
+nullable `traces` columns, new defaulted SDK parameters — §6.2 / §6.3), and
+the audit evidence layer graduating out of experimental. No existing
+signature moves, the normalize algorithm and the audit algo v1 envelope are
+untouched.
+
+**SPEC v1.1 — `agent_id` / `session_id`, and `traceguard.audit` becomes contract.**
+Motivation and compatibility analysis:
+`docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md` (the METR /
+Redwood investigation of the OpenAI–Hugging Face incident: agents that probe
+which log is the real source of truth, >7% spoofed tool calls, ~1200 "isolated"
+agents coordinating over a shared cache).
+
+### Added
+
+- `traces.agent_id` / `traces.session_id` (SPEC §3.1 v1.1): nullable, indexed
+  identity dimensions for correlating several executors after the fact.
+  `tracer.span` / `tracer.trace` / `wrap_anthropic` / `wrap_openai` take them as
+  keyword-only arguments; `TRACEGUARD_AGENT_ID` / `TRACEGUARD_SESSION_ID` are
+  the fallback, resolved per span. They take no part in `input_hash` or the
+  invariants, and they are **outside the audit algo v1 hash envelope** —
+  append-only under the guard, not attested by the chain (algo v2 pending).
+- Databases created before this release get the two columns added on open
+  (`ensure_trace_columns`, run by `make_engine`): `ALTER TABLE traces ADD
+  COLUMN`, nullable, plus the index — additive only. Verified on a 58,769-row
+  store (286 ms). A DB the process cannot alter raises with the manual
+  statement in the message, since the ORM could not read it either.
+- `traceguard.audit` is stable since SPEC v1.1: its `__all__`, finding kinds
+  and severities (`FINDING_SEVERITY`), public function parameters, and the
+  three boundary statements in `docs/audit.md` are frozen by
+  `tests/test_audit_api_surface.py` in the contract-guard CI job.
+- `traceguard.audit.anchors` — `FileAnchorSink` / `GitNoteAnchorSink` /
+  `WebhookAnchorSink`, `anchor_to()` (tries every sink, then raises if any
+  failed), `AnchorScheduler` (periodic anchoring; the interval is the exposure
+  window). CLI: `anchor --sink SPEC [--every SECONDS]`, `verify --anchor-file`.
+- `traceguard.audit.reconcile` — capture-fidelity layer L1: self-reported
+  token volume per model and UTC bucket vs the provider's usage report
+  (`fetch_anthropic_usage` against the Usage Admin API, or a saved JSON).
+  Disagreement is the new finding kind `capture_mismatch` (WARN), with the
+  direction spelled out. CLI: `reconcile --source anthropic-usage|json:PATH
+  --window START,END`. Totals only — it cannot vouch for a single call.
+- `routing_audit.ingest_claude_code` fills the new columns: `session_id` is
+  the Claude Code `sessionId`, `agent_id` the subagent's `agentId` (NULL for
+  the main transcript). Rows ingested earlier keep both inside
+  `output_parsed`; the columns are not backfilled — they are outside the
+  audit envelope, but not outside the append-only guard.
+- The OTel exporter emits them as `traceguard.agent_id` /
+  `traceguard.session_id` and, for backends that group natively, as the
+  semantic-convention `gen_ai.agent.id` / `session.id`. Omitted when NULL.
+
+### Changed
+
+- `docs/audit.md`: threat-category table for control bypass / evidence
+  tampering; "(experimental)" dropped; anchor sinks and reconcile documented
+  with what they do and do not prove.
+
+---
+
+Earlier in this release — contract-external, SemVer **minor**: no MUST field
+is added or changed, no existing signature moves, the normalize algorithm is
+untouched.
 
 **One release, one problem: invariant 2 could pass without checking a model.**
 `validate_model_timing` checks the trace's `model_id`, and SPEC §3.1 fixes that

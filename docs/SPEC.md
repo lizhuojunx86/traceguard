@@ -1,9 +1,11 @@
 # TraceGuard Integration Specification (English)
 
 > **Status**: translation of [`TRACEGUARD_SPEC.md`](../TRACEGUARD_SPEC.md)
-> v1.0 (2026-07-12) — the contract is in force, frozen with `traceguard`
-> v1.0.0 and evolving under SemVer per §6. The Chinese original is
-> authoritative; if the two disagree, the original wins.
+> v1.1 (2026-08-27) — the contract is in force (v1.0 was frozen with
+> `traceguard` v1.0.0 on 2026-07-12) and evolves under SemVer per §6; v1.1
+> is a **minor** revision (revision history: Appendix D of the Chinese
+> original). The Chinese original is authoritative; if the two disagree, the
+> original wins.
 >
 > **Type**: interface contract. Any project integrating TraceGuard MUST
 > conform to the data model, SDK signatures, and invariants defined here.
@@ -61,6 +63,8 @@ they MUST NOT rename, delete, or retype the fields below.
 | `operation` | text | ✔ | `llm_complete` \| `embedding` \| `ml_inference` \| `parse` \| other |
 | `correlation_id` | text | nullable | Business-object link |
 | `parent_trace_id` | int | nullable | Nesting support |
+| `agent_id` | text | nullable | Stable identifier of the executing principal that made this call (agent instance / service / person). The identity dimension for correlating multiple executors after the fact |
+| `session_id` | text | nullable | Grouping key for one run / session / episode; traces sharing a session belong to the same execution context |
 | `input_hash` | text | ✔ | SHA-256 of canonicalized input; MUST be computed by the SDK normalizer (§4.4) |
 | `input_summary` | text | nullable | Human-readable, SHOULD be ≤ 500 chars |
 | `model_id` | text | nullable | If set, MUST be registered in `model_registry` |
@@ -76,6 +80,12 @@ they MUST NOT rename, delete, or retype the fields below.
 
 `feature_as_of` and `invoked_at` are two independent times; under backfill
 they differ significantly (see §5).
+
+`agent_id` / `session_id` (v1.1) take no part in the `input_hash` computation
+(the §4.4 algorithm is unchanged) and no part in invariants 1–4. Shared-resource
+/ credential fingerprints SHOULD be recorded under `output_parsed["correlation"]`
+(convention: `docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md`);
+plaintext credentials MUST NOT be recorded — only one-way hashed fingerprints.
 
 ### 3.2 `model_registry`
 
@@ -125,11 +135,13 @@ renaming or changing the semantics of existing parameters is a major bump.
 
 ```python
 @tracer.trace(project, component, operation, *,
-              correlation_from=None, feature_as_of_from=None)
+              correlation_from=None, feature_as_of_from=None,
+              agent_id=None, session_id=None)          # v1.1
 def fn(...): ...
 
 with tracer.span(project, component, operation, *,
-                 correlation_id=None, feature_as_of=None) as span:
+                 correlation_id=None, feature_as_of=None,
+                 agent_id=None, session_id=None) as span:   # v1.1
     span.record_input(data)
     span.record_model_prompt(model_id=..., prompt_template_id=..., prompt_template_hash=...)
     span.record_output(parsed=..., parse_status=...)
@@ -138,6 +150,15 @@ with tracer.span(project, component, operation, *,
 
 Client wrappers (`wrap_anthropic`, …) are optional implementations and not
 constrained by this spec.
+
+**Identity dimensions (v1.1).** `agent_id` / `session_id` are keyword-only
+optional parameters (§6: a new parameter with a default is a minor) written
+verbatim to the §3.1 columns of the same name; `wrap_anthropic` accepts the
+same two parameters. Implementations SHOULD offer an environment-variable
+fallback, `TRACEGUARD_AGENT_ID` / `TRACEGUARD_SESSION_ID` (an explicit
+argument wins over the environment; with neither, the column is NULL),
+because agent runtimes often cannot pass them per call. Neither field takes
+part in `input_hash` (§4.4) or invariants 1–4.
 
 **Failure semantics (MUST).** Instrumentation MUST NOT break the instrumented
 call. Trace persistence is **fail-open** by default — a failure is swallowed and
@@ -248,15 +269,23 @@ algorithm, so each is a SemVer **minor**:
   scores attach to a trace via `output_parsed`, **not** via new MUST columns.
 - `traceguard.loop` — evidence-gating helpers for self-improving loops, so only
   evidence traceable before a cutoff is admitted as fact.
-- `traceguard.audit` — opt-in audit evidence layer (experimental, zero new
-  dependencies): an ORM-layer append-only guard (anti-mistake), a row hash
+- `traceguard.audit` — opt-in audit evidence layer (**stable since SPEC
+  v1.1**, zero new dependencies): an ORM-layer append-only guard (anti-mistake), a row hash
   chain (tamper-EVIDENT, not tamper-proof — without an externally stored
   anchor, a full-chain rewrite or tail truncation is undetectable), and an
   exportable chain-head anchor. The hash envelope **excludes `cost_usd`**
   (its legal in-place write path, §3.1); cost corrections are evidenced via
   chained cost events. Importing has no side effects — explicit
   `enable()/attach()` required; the chain's own failures are fail-open by
-  default (§4.1) with an opt-in strict mode. Honest layering and limits:
+  default (§4.1) with an opt-in strict mode. Since SPEC v1.1: its public API
+  surface evolves under the §6 rules (a new defaulted parameter is a minor;
+  removing a parameter or changing its semantics is a major); the verify
+  finding kinds and their severities are frozen (a new kind is a minor;
+  changing or removing an existing kind is a major); the three boundary
+  statements in `docs/audit.md` are normative and may only be made more
+  conservative. The hash algorithm is versioned: algo v1 is frozen by golden
+  tests and stays verifiable forever; an algorithm change is algo v2 and MUST
+  NOT invalidate existing chains. Honest layering and limits:
   `docs/audit.md`.
 
 - `traceguard.routing_integrity` — audits whether invariant 2 meant anything

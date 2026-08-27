@@ -43,7 +43,8 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from types import MappingProxyType
+from typing import Any, Mapping
 
 from sqlalchemy import func, select
 from sqlalchemy.engine import Engine
@@ -232,7 +233,16 @@ _SEVERITY = {
     "cost_mismatch": WARN,
     "deleted_with_record": WARN,
     "coverage_gap": GAP,
+    # v2 (SPEC v1.1): produced by traceguard.audit.reconcile, not by
+    # verify_chain — the self-reported token volume disagrees with the
+    # provider's out-of-band report for the same model and window.
+    "capture_mismatch": WARN,
 }
+
+#: Finding kind → severity. Contract-frozen since SPEC v1.1 (§6.6): adding a
+#: kind is a minor, changing or removing one is a major; guarded by
+#: tests/test_audit_api_surface.py in the contract-guard CI job.
+FINDING_SEVERITY: Mapping[str, str] = MappingProxyType(_SEVERITY)
 
 
 def verify_chain(

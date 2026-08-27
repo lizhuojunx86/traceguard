@@ -1,10 +1,15 @@
-"""traceguard.audit — opt-in, tamper-evident audit trail for traces (EXPERIMENTAL).
+"""traceguard.audit — opt-in, tamper-evident audit trail for traces.
 
 Off the frozen 29-symbol public surface (SPEC §6.6 posture, like
 ``exporters.otel`` and ``contamination``): import from THIS submodule path,
-not from ``traceguard``. Experimental means the audit API may evolve in minor
-releases; the core contract is untouched either way. Zero extra dependencies
-(stdlib ``hashlib``/``json`` only).
+not from ``traceguard``. **Stable since SPEC v1.1 (2026-08-27)**: ``__all__``
+below is contract-bound under SPEC §6.3 (a new defaulted parameter or a new
+symbol is a minor; removing a parameter, changing its semantics, or removing
+a symbol is a major), the verify finding kinds and severities are frozen
+(:data:`FINDING_SEVERITY`), and the three boundary statements in
+docs/audit.md are normative. Guarded mechanically by
+tests/test_audit_api_surface.py in the contract-guard CI job. Zero extra
+dependencies (stdlib ``hashlib``/``json``/``urllib``/``subprocess`` only).
 
 Three honestly-layered capabilities (docs/audit.md has the full table):
 
@@ -18,6 +23,19 @@ Three honestly-layered capabilities (docs/audit.md has the full table):
    externally stored anchor.
 3. **Exportable anchor** — ``export_anchor()`` emits the chain head digest for
    storage OUTSIDE the DB (git commit, email, third-party timestamping).
+
+v2 adds two layers on top, both implementation (SPEC §6.6 keeps them out of
+the MUST set):
+
+4. **Anchor sinks + periodic anchoring** (:mod:`traceguard.audit.anchors`) —
+   ``anchor_to(engine, [FileAnchorSink(...), GitNoteAnchorSink(...),
+   WebhookAnchorSink(...)])`` and ``AnchorScheduler`` shrink "anchoring
+   frequency = exposure window" to an interval you choose.
+5. **Out-of-band reconciliation** (:mod:`traceguard.audit.reconcile`) —
+   ``reconcile()`` compares self-reported token volume per model and window
+   with the provider's usage report; disagreement is a ``capture_mismatch``
+   finding. Storage integrity (the chain) and capture fidelity (this) are
+   different questions; only totals are cross-checked, never single calls.
 
 Importing this module has no side effects; nothing activates until
 :func:`enable` / :func:`attach`. Chain failures are fail-open by default
@@ -71,11 +89,35 @@ from traceguard.audit.models import (
     ensure_audit_tables,
 )
 from traceguard.audit.verify import (
+    FINDING_SEVERITY,
     ChainAnchor,
     ChainFinding,
     ChainVerificationResult,
     export_anchor,
     verify_chain,
+)
+from traceguard.audit.anchors import (
+    AnchorScheduler,
+    AnchorSink,
+    AnchorSinkError,
+    FileAnchorSink,
+    GitNoteAnchorSink,
+    WebhookAnchorSink,
+    anchor_to,
+    parse_sink_spec,
+)
+from traceguard.audit.reconcile import (
+    CAPTURE_MISMATCH,
+    ModelComparison,
+    ReconcileResult,
+    SideTotals,
+    UsageBucket,
+    align_window,
+    fetch_anthropic_usage,
+    load_usage_report,
+    reconcile,
+    traces_usage,
+    usage_from_report,
 )
 
 __all__ = [
@@ -100,6 +142,28 @@ __all__ = [
     "ChainAnchor",
     "ChainFinding",
     "ChainVerificationResult",
+    "FINDING_SEVERITY",
+    # anchor sinks + periodic anchoring (v2)
+    "AnchorSink",
+    "AnchorSinkError",
+    "FileAnchorSink",
+    "GitNoteAnchorSink",
+    "WebhookAnchorSink",
+    "anchor_to",
+    "AnchorScheduler",
+    "parse_sink_spec",
+    # out-of-band reconciliation (v2, L1)
+    "reconcile",
+    "ReconcileResult",
+    "ModelComparison",
+    "SideTotals",
+    "UsageBucket",
+    "CAPTURE_MISMATCH",
+    "align_window",
+    "usage_from_report",
+    "load_usage_report",
+    "fetch_anthropic_usage",
+    "traces_usage",
     # hash algo (frozen v1)
     "ALGO_VERSION",
     "GENESIS_PREV_HASH",

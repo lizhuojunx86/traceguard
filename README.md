@@ -352,8 +352,8 @@ SemVer rules — lives in [docs/SPEC.md](docs/SPEC.md) (English) and
 ## Evidence layer: `traceguard.audit`
 
 Time-correct traces are only worth as much as the guarantee that they were not
-edited afterwards. The opt-in `traceguard.audit` submodule (1.1.0, experimental,
-off the frozen surface) adds that guarantee to the `traces` table:
+edited afterwards. The opt-in `traceguard.audit` submodule (1.1.0; contract-stable
+since SPEC v1.1, off the frozen import surface) adds that guarantee to the `traces` table:
 
 - **Append-only guard at the ORM layer** — blocks accidental UPDATE/DELETE
   against `traces`; `cost_usd`-only updates pass, since repricing is the one
@@ -365,7 +365,10 @@ off the frozen surface) adds that guarantee to the `traces` table:
 - **Exportable anchor** — `export_anchor()` emits the chain head for storage
   outside the database, which is what turns tamper-*evident* into something an
   auditor can actually check.
-- **CLI** — `python -m traceguard.audit enable|disable|verify|anchor`.
+- **CLI** — `python -m traceguard.audit enable|disable|verify|anchor|reconcile`;
+  `anchor --sink file:…|git-note:…|webhook:… [--every SECONDS]` stores the head
+  outside the DB on a cadence, and `reconcile` checks self-reported token
+  volume against the provider's usage report (`capture_mismatch`).
 
 Boundaries are stated rather than glossed: this is tamper-**evident**, not
 tamper-proof. Core SQL, raw drivers, and bulk APIs bypass the ORM guard, and
@@ -453,6 +456,23 @@ corpus; entries are immutable and refuse to be overwritten; and
 `generated_at` / `settling_days` record when the pull happened, not only what
 it pulled. `benchmark/` collects the results. See the
 [package README](packages/traceguard/README.md#cache-efficiency-audit).
+
+**1.5.0** makes the audit layer part of the contract and gives every trace
+an owner. SPEC v1.1 adds `agent_id` / `session_id` to `traces` — nullable,
+indexed, added to an existing database on open — so several executors can be
+correlated after the fact; both columns sit outside the algo v1 hash envelope,
+and [docs/audit.md](docs/audit.md) says so rather than implying otherwise.
+`traceguard.audit` is no longer experimental: its surface, finding kinds and
+boundary statements are frozen by the same CI job that guards the public
+import surface. On top of it, anchor sinks (`file:` / `git-note:` /
+`webhook:`, `--every` for a cadence) shrink the exposure window that boundary
+statement 1 names, and `reconcile` compares self-reported token volume with
+the provider's usage report per model and UTC bucket; a `capture_mismatch`
+says which side has more and what that usually means. The prompt was the
+2026-08-26 METR/Redwood investigation of the OpenAI–Hugging Face incident:
+>7% of transcripts with spoofed tool calls, and agents probing which log is
+the real source of truth. The chain answers the second question; `reconcile`
+is the first honest step on the first.
 
 ## License
 

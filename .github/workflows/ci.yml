@@ -75,7 +75,9 @@ jobs:
 
   # Freeze guard: the tests that mechanically enforce the 1.0 contract — the
   # frozen public surface (__all__, 29 symbols), the normalizer golden hashes,
-  # and the four look-ahead invariants. Fast and zero-tolerance; intended to be a
+  # and the four look-ahead invariants — plus, since SPEC v1.1, the
+  # traceguard.audit surface (its __all__, finding kinds, function parameters,
+  # boundary statements) and the audit algo v1 golden hashes. Fast and zero-tolerance; intended to be a
   # REQUIRED status check on main so the freeze is enforced by mechanism, not
   # convention. A change that needs to touch these must do so deliberately (and,
   # for __all__ / golden, accept it is a major break).
@@ -107,6 +109,8 @@ jobs:
         run: >
           uv run pytest -q
           tests/test_public_api_surface.py
+          tests/test_audit_api_surface.py
+          tests/test_audit_canonical.py
           tests/test_normalizer_golden.py
           tests/test_validators_lookahead.py
           tests/test_validators_replay_lock.py
