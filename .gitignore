@@ -84,11 +84,10 @@ pepper.*
 # personal positioning/dev-prompt doc. Kept out of every commit.
 #
 # `launch/*` rather than `launch/`: git cannot re-include a file whose parent
-# directory is excluded, and the outreach watcher needs to be versioned. It is
-# the instrument every adoption judgement is read off, and it silently
-# under-reported for a week (a hardcoded article list stopped at four of six)
-# — an unversioned dashboard has no history to catch that against. Its state,
-# logs and alert file stay ignored; only the script is tracked.
+# directory is excluded, and the outreach watcher was versioned here until
+# 6c961ce moved it (with its history) to the private workbench repo. The
+# file-level pattern is kept so a future `!launch/<file>` still works. The
+# script itself, its state, logs and alert file are all local-only now.
 launch/*
 /traceguard_定位与CC开发Prompt.md
 

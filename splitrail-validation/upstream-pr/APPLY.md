@@ -11,13 +11,13 @@ git remote add upstream https://github.com/Piebald-AI/splitrail.git
 git fetch upstream && git checkout -b test/rewrite-retention-check upstream/main
 
 # 2. Copy the staged files in:
-cp -R /Users/lizhuojun/Desktop/APP/traceguard/splitrail-validation/upstream-pr/scripts/rewrite-retention-check scripts/
+cp -R /Users/lizhuojun/dev/traceguard/splitrail-validation/upstream-pr/scripts/rewrite-retention-check scripts/
 chmod +x scripts/rewrite-retention-check/run_check.sh
 
 # 3. Sanity-run. No Rust toolchain needed — reuse the 3.6.0 release binary
 #    already downloaded by the earlier A/B run (equivalent to a local build):
-SPLITRAIL_BIN=/Users/lizhuojun/Desktop/APP/traceguard/splitrail-validation/work/bin/3.6.0/splitrail \
-SPLITRAIL_BASELINE_BIN=/Users/lizhuojun/Desktop/APP/traceguard/splitrail-validation/work/bin/3.5.9/splitrail \
+SPLITRAIL_BIN=/Users/lizhuojun/dev/traceguard/splitrail-validation/work/bin/3.6.0/splitrail \
+SPLITRAIL_BASELINE_BIN=/Users/lizhuojun/dev/traceguard/splitrail-validation/work/bin/3.5.9/splitrail \
   scripts/rewrite-retention-check/run_check.sh
 # expect: PASS R1..R4, RESULT: ALL PASS
 # (with cargo installed you'd instead do: cargo build --release && scripts/rewrite-retention-check/run_check.sh)

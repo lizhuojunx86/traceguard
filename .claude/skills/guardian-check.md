@@ -25,7 +25,7 @@ echo '<output_data>' > /tmp/guardian_input.json
 Then run:
 
 ```bash
-cd /Users/lizhuojun/Desktop/APP/traceguard
+cd /Users/lizhuojun/dev/traceguard
 uv run guardian check \
   --pipeline <config_path> \
   --step <step_name> \

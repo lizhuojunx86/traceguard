@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # traceguard — 提交并推送本轮全部改动。
 #
-# 用法：  cd ~/Desktop/APP/traceguard && bash commit_and_push.sh
+# 用法：  cd ~/dev/traceguard && bash commit_and_push.sh
 #
 # 闸门全部内置。任何一道不过就中止并说明怎么办，不会留下半提交状态。
 set -uo pipefail

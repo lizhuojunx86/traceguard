@@ -27,7 +27,7 @@
 
 set -uo pipefail
 
-REPO="${TRACEGUARD_REPO:-$HOME/Desktop/APP/traceguard}"
+REPO="${TRACEGUARD_REPO:-$HOME/dev/traceguard}"
 PKG="$REPO/packages/traceguard"
 KEY_DIR="${TRACEGUARD_KEY_DIR:-$HOME/Desktop/APP/Keys}"
 
