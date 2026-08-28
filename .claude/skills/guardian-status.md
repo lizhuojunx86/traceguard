@@ -14,7 +14,7 @@ Determine what the user wants, then run the appropriate query:
 ### List all pipelines
 
 ```bash
-cd /Users/lizhuojun/Desktop/APP/traceguard
+cd /Users/lizhuojun/dev/traceguard
 uv run python -c "
 from guardian.store.reader import TraceReader
 import json

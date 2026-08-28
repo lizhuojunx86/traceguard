@@ -94,7 +94,8 @@ Data caveats (read before trusting the numbers):
   predates the cutoff; because resume/compact bumps mtime, a rewritten file
   is always re-scanned and the idempotency layer dedupes. A full scan (no
   ``--since``) remains the backstop for correctness.
-- **iCloud sync hazard (this repo lives under a synced Desktop path).** iCloud
+- **iCloud sync hazard (if the checkout lives under a synced path such as
+  ``~/Desktop`` -- this one did until 2026-08-28).** iCloud
   produces ``"<name> 2.<ext>"`` conflict copies; for a live SQLite DB or a log
   being appended, that can surface as corruption/duplication exposure (a sister
   project, quant_alpha_v2, relocated to ``~/apps`` for exactly this reason).

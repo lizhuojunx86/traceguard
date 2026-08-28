@@ -17,7 +17,7 @@ Analyze failure patterns and generate actionable optimization suggestions.
 ## Execute
 
 ```bash
-cd /Users/lizhuojun/Desktop/APP/traceguard
+cd /Users/lizhuojun/dev/traceguard
 uv run guardian suggest \
   --pipeline <config_path> \
   --step <step_name> \

@@ -41,7 +41,7 @@
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>/Users/lizhuojun/Desktop/APP/traceguard/scripts/routing_probe_daily.sh</string>
+        <string>/Users/lizhuojun/dev/traceguard/scripts/routing_probe_daily.sh</string>
     </array>
 
     <!-- 09:30 local. Not on the hour: routers see load spikes at :00, and a

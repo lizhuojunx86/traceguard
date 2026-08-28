@@ -95,25 +95,25 @@ SPEC §7 要求每个接入项目维护一份 `<project>_TRACEGUARD_INTEGRATION.
 ```
 你正在接入 TraceGuard。在做任何实质工作之前,按顺序完成:
 
-1. 读 /Users/lizhuojun/Desktop/APP/traceguard/INTEGRATING.md(本接入工作流总说明)
-2. 读 /Users/lizhuojun/Desktop/APP/traceguard/TRACEGUARD_SPEC.md(接口契约,MUST 遵守)
-3. 读 /Users/lizhuojun/Desktop/APP/traceguard/TRACEGUARD_ROADMAP.md(当前 Phase 状态)
-4. 读 /Users/lizhuojun/Desktop/APP/traceguard/consumers/huadian.md(参考一个已有接入的样子)
+1. 读 /Users/lizhuojun/dev/traceguard/INTEGRATING.md(本接入工作流总说明)
+2. 读 /Users/lizhuojun/dev/traceguard/TRACEGUARD_SPEC.md(接口契约,MUST 遵守)
+3. 读 /Users/lizhuojun/dev/traceguard/TRACEGUARD_ROADMAP.md(当前 Phase 状态)
+4. 读 /Users/lizhuojun/dev/traceguard/consumers/huadian.md(参考一个已有接入的样子)
 
 然后:
 
 5. 在本项目 repo 根目录创建 <project>_TRACEGUARD_INTEGRATION.md,
-   用 /Users/lizhuojun/Desktop/APP/traceguard/templates/PROJECT_INTEGRATION_TEMPLATE.md
+   用 /Users/lizhuojun/dev/traceguard/templates/PROJECT_INTEGRATION_TEMPLATE.md
    填空(component / model_id / prompt_template_id / drift check)。
 
 6. 在本项目 repo 根目录创建 traceguard-feedback/ 目录(空,稍后用)。
 
 工作期间纪律:
 
-- 不修改 /Users/lizhuojun/Desktop/APP/traceguard/ 仓库下的任何文件
+- 不修改 /Users/lizhuojun/dev/traceguard/ 仓库下的任何文件
 - 任何 traceguard 不够用 / SPEC 不清晰 / 想加新功能的想法,写到
   traceguard-feedback/YYYY-MM-DD-<slug>.md
-  用 /Users/lizhuojun/Desktop/APP/traceguard/templates/FEEDBACK_TEMPLATE.md 填空
+  用 /Users/lizhuojun/dev/traceguard/templates/FEEDBACK_TEMPLATE.md 填空
 - 不要试图绕过 SPEC §5 的四条 look-ahead 不变量
 
 报告: 完成 1-6 后,告诉我你的 INTEGRATION 文档草稿和当前阻塞项(如有)。
