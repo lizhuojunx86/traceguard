@@ -57,8 +57,31 @@ log() { printf '%s  %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$*" >>"$LOG"; }
 
 cd "$PKG" || exit 1
 
+# The probe needs the openai SDK, which sits behind an optional extra. A plain
+# `uv sync` in this package uninstalls it (verified 2026-08-29: `Uninstalled 11
+# packages`, openai among them), so a routine dependency sync silently disarms
+# this job -- every gateway then dies with exit 2 before sending a single call,
+# and two days of comparison data went missing before anyone looked. `uv run`
+# does not prune, which is why the nightly ingest never noticed. Self-heal with
+# --inexact (leaves the rest of the venv untouched), then fail loudly.
+if ! "$PKG/.venv/bin/python" -c 'import openai' >/dev/null 2>&1; then
+    log "openai SDK missing -- self-healing with: uv sync --extra openai --inexact"
+    UV="${TRACEGUARD_UV:-$HOME/.local/bin/uv}"
+    if [ -x "$UV" ]; then
+        env -u VIRTUAL_ENV "$UV" sync --extra openai --inexact >>"$LOG" 2>&1
+    else
+        log "uv not found at $UV; cannot self-heal"
+    fi
+    "$PKG/.venv/bin/python" -c 'import openai' >/dev/null 2>&1 || {
+        log "ABORT: openai SDK not importable; run: cd $PKG && uv sync --extra openai"
+        exit 1
+    }
+    log "self-heal ok: openai importable again"
+fi
+
 failures=0
 attempted=0
+succeeded=0
 
 for entry in "${GATEWAYS[@]}"; do
     gateway="${entry%%:*}"
@@ -102,6 +125,7 @@ for entry in "${GATEWAYS[@]}"; do
         failures=$((failures + 1))
     else
         log "run ok for $gateway"
+        succeeded=$((succeeded + 1))
     fi
 done
 
@@ -111,5 +135,5 @@ if [ $attempted -gt 0 ]; then
         --db "sqlite:///$DB_PATH" >>"$LOG" 2>&1
 fi
 
-log "done: $attempted gateway(s) probed, $failures problem(s)"
+log "done: $attempted gateway(s) attempted, $succeeded ok, $failures problem(s)"
 [ $failures -eq 0 ] || exit 1

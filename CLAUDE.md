@@ -16,8 +16,9 @@ Downstream consumers pin git tags: huadian → `v0.1.0-huadian-baseline` (guardi
 ```bash
 # ── traceguard SDK (packages/traceguard) ──
 cd packages/traceguard
-uv sync
-uv run pytest                    # 486 tests (3 skip without contamination-hf extra)
+uv sync --extra openai           # keep the extra: a plain `uv sync` uninstalls it,
+                                 # which silently disarms scripts/routing_probe_daily.sh
+uv run pytest                    # 801 tests (3 skip without contamination-hf extra)
 uv run python ../../examples/quickstart/run_quickstart.py
 
 # ── pipeline-guardian (repo root) ──
