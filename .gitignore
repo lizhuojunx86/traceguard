@@ -113,3 +113,4 @@ launch/*
 
 # Probe artefacts left by a sandbox with create-but-not-delete mounts.
 .probe.*
+pit-archive-strategy/
