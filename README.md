@@ -7,6 +7,8 @@
 
 **The token-accounting conformance suite has moved** to [lizhuojunx86/token-accounting-conformance](https://github.com/lizhuojunx86/token-accounting-conformance), with its history. It was a different subject with a different audience, and burying it in a repository about look-ahead bias helped nobody looking for either. The old paths still resolve here, as stubs pointing there.
 
+> **A routing audit for your team, fixed price.** The routing-audit method in this repo (`traceguard.routing_audit`, written up in the [dev.to series](https://dev.to/lizhuojunx86)) runs on any Claude Code trace store. Send me 30 days of your team's usage records (model, tokens, timestamps, agent and session ids; I'll send a one-line `jq` filter that drops prompt and answer text before anything leaves your machine) and within ten working days you get one number and a five-page report: what share of your spend ran on a tier your own routing policy would not have chosen, what that cost at list price, and which components caused it. On my own 26,131 traces the number was 22.6% and $1,248.13, all of it on subagents and none on the main thread. US$1,500, flat. Write to info@zhuojun.li with the subject "routing audit".
+
 **Point-in-time correct LLM instrumentation — the time-integrity layer for
 LLM pipelines.**
 
