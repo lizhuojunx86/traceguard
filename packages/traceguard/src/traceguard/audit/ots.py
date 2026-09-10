@@ -284,7 +284,15 @@ class OtsAnchorSink:
         return sorted(directory.glob("*.ots")) if directory.exists() else []
 
     def latest(self) -> ChainAnchor | None:
-        """The anchor beside the newest ``.ots`` proof, if any."""
+        """The anchor beside the LAST proof in name order.
+
+        Names sort by ``seq`` first, so this is the highest-seq anchor — the
+        chain head, which is what a caller wants. Among several proofs at the
+        SAME seq (an idle chain anchored repeatedly) the tie breaks on digest
+        hex, not on time; those statements are identical except for
+        ``exported_at``, which nothing verifies against. Use :meth:`proofs` when
+        you want every witness rather than one.
+        """
         proofs = self.proofs()
         if not proofs:
             return None

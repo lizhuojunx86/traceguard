@@ -252,6 +252,20 @@ untouched, and the frozen 29-symbol public surface is unchanged.
   - Proof and sidecar are written via a temp file and `os.replace`, sidecar
     first: `upgrade_proof` rewrites the only copy of a proof, and a partial
     write there destroys evidence rather than merely failing.
+  - `rekor:` is registered in SPEC v1.2 as a DESIGN only. Both SPECs listed it
+    beside `ots:` as an added sink with no marker; it appears in the bundle's
+    `anchors[].kind` enum so the format can settle, and `parse_sink_spec` does
+    not accept it.
+- The append-only guard called every blocked column "hash-covered". `agent_id`,
+  `session_id` and `provider_response_id` are outside the algo v1 envelope and
+  still blocked — append-only is a policy about the row, not a consequence of
+  the hash. The message now separates the two and says plainly that
+  `verify_chain` would not detect an edit to the second group.
+- `source_snapshots.source_version` is `String(256)` rather than unbounded
+  `Text`, and a test enforces the "digests and metadata only" claim
+  mechanically: no column may be named for content, and no new column may be
+  unbounded text (the shape a retrieved body would arrive in). That claim is
+  bolded in three places and had nothing checking it.
   - A complete proof bounds the digest to "existed before block N" — block times
     carry minutes-to-hours of uncertainty, and confirming the block needs a
     Bitcoin node or an explorer you choose to trust. traceguard does neither; it

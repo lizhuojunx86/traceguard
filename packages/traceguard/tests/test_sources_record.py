@@ -291,3 +291,78 @@ def test_actionable_covers_the_two_failure_verdicts_only():
     # would teach the reader to ignore the report (SPEC B3.4).
     assert not SourceVerdict.VERIFIED.actionable
     assert not SourceVerdict.UNCHECKED.actionable
+
+
+# ── the bolded claim, made mechanical ───────────────────────────────────────
+
+CONTENT_BEARING_HINTS = ("content", "body", "text", "payload", "raw", "response", "html")
+CONTENT_HASH_COLUMNS = frozenset({"content_hash", "normalized_hash", "content_encoding"})
+
+
+def test_no_column_on_source_snapshots_can_hold_retrieved_content():
+    """models.py, docs/sources.md and the CLI all state, in bold, that this
+    extension stores digests and metadata and never the retrieved bytes.
+
+    That claim had nothing enforcing it: a future column called `content` or
+    `response_body` would contradict three documents and pass every test. This
+    is the guard. If a new column legitimately needs one of these words in its
+    name, add it to CONTENT_HASH_COLUMNS deliberately — the point is that it
+    cannot happen by accident.
+    """
+    from traceguard.sources.models import SourceSnapshotRow
+
+    suspicious = []
+    for column in SourceSnapshotRow.__table__.columns:
+        if column.name in CONTENT_HASH_COLUMNS:
+            continue
+        if any(hint in column.name.lower() for hint in CONTENT_BEARING_HINTS):
+            suspicious.append(column.name)
+    assert not suspicious, (
+        f"column(s) {suspicious} on source_snapshots may hold retrieved content, which "
+        "contradicts the 'digests and metadata only' claim in models.py, docs/sources.md "
+        "and the sources CLI"
+    )
+
+    # And no NEW column is unbounded. One is, for a real reason: a URI has no
+    # useful maximum. Anything else arriving as unbounded text is the shape a
+    # body would take, so it has to be added here on purpose.
+    from sqlalchemy import String, Text
+
+    UNBOUNDED_BY_DESIGN = {"source_uri"}
+    for column in SourceSnapshotRow.__table__.columns:
+        if isinstance(column.type, Text):
+            assert column.name in UNBOUNDED_BY_DESIGN, (
+                f"{column.name} is unbounded TEXT; source_snapshots stores digests and "
+                "metadata, and an unbounded column is the shape retrieved content takes"
+            )
+        if isinstance(column.type, String) and column.type.length is not None:
+            assert column.type.length <= 2048, (
+                f"{column.name} is String({column.type.length}) — wide enough to hold a "
+                "retrieved document, which this table promises never to store"
+            )
+
+
+def test_a_snapshot_does_not_retain_the_content_it_digested():
+    """content_digest takes bytes and returns a digest; nothing keeps them."""
+    from dataclasses import fields
+
+    from traceguard.sources.record import SourceSnapshot
+
+    names = {f.name for f in fields(SourceSnapshot)}
+    for name in names:
+        if name in CONTENT_HASH_COLUMNS:
+            continue
+        assert not any(hint in name for hint in CONTENT_BEARING_HINTS), (
+            f"SourceSnapshot.{name} may carry retrieved content"
+        )
+
+    body = b"the vendor's actual response body"
+    snapshot = SourceSnapshot(
+        source_uri="https://v.example/eps",
+        source_kind="http",
+        content_hash=content_digest(body)[0],
+        retrieved_at=NOW,
+    )
+    blob = repr(snapshot).encode()
+    assert body not in blob
+    assert b"vendor's actual response" not in blob

@@ -89,7 +89,10 @@ class SourceSnapshotRow(SourcesBase):
     published_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
     effective_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), nullable=True)
 
-    source_version: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Bounded on purpose: a version identifier (ETag, dataset revision) has a
+    # natural size, and an unbounded column here is the one shape a retrieved
+    # body could ride in on a table that promises to store digests only.
+    source_version: Mapped[str | None] = mapped_column(String(256), nullable=True)
     mcp_server_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     tool_name: Mapped[str | None] = mapped_column(String(256), nullable=True)
     cache_status: Mapped[str | None] = mapped_column(String(64), nullable=True)

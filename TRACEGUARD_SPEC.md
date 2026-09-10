@@ -378,7 +378,7 @@ assert_replay_set_locked(replay_set_id: str) -> None
 - `traceguard[otel]` — 把 trace 额外导出为 OpenTelemetry / OpenInference (OTLP) span,**附加**于(绝不替换)SQLite/SQLAlchemy 存储。
 - `traceguard[contamination]` — 训练污染估计器(成员推断、regime decay、claim 级检查)。**仅检测**;评分通过 `output_parsed` 挂到 trace,**不**新增 MUST 列。
 - `traceguard.loop` — 自我改进循环的 evidence-gating 辅助:只有 cutoff 之前可溯源的证据才被采纳为事实。
-- `traceguard.audit` — opt-in 审计证据层(**stable since SPEC v1.1**,零新增依赖):ORM 层 append-only 守卫(防误写)+ row hash chain(篡改可检测,非防篡改;无外部锚时全链重写/尾部截断不可检测)+ 可导出链头锚点。哈希覆盖字段**排除 `cost_usd`**(§3.1 合法就地补写路径),cost 修正经链内 cost event 记账。`import` 无副作用,须显式 `enable()/attach()`;链自身故障默认 fail-open(§4.1),strict 模式 opt-in。自 SPEC v1.1 起:其公开 API 面按 §6.3 演进规则约束;verify finding kinds 及 severity 语义冻结(新增 = minor,改/删 = major);`docs/audit.md` 边界声明三条为规范性声明,只许更保守。哈希算法版本化:algo v1 由 golden tests 冻结永续可验,算法变更 = algo v2 且 MUST 不使既有链失效。自 SPEC v1.2 起增补:finding kind 新增 `capture_unmatched`(WARN,逐请求存在性核对,带 `direction`);anchor sink 新增 `ots:` / `rekor:`(extra `traceguard[anchors]`,网络依赖,边界声明 1 的暴露窗口措辞不因此放松);证据 bundle 导出格式 `evidence-bundle/v1` 定义于 `docs/specs/evidence-bundle.md`。诚实分层与边界见 `docs/audit.md`。
+- `traceguard.audit` — opt-in 审计证据层(**stable since SPEC v1.1**,零新增依赖):ORM 层 append-only 守卫(防误写)+ row hash chain(篡改可检测,非防篡改;无外部锚时全链重写/尾部截断不可检测)+ 可导出链头锚点。哈希覆盖字段**排除 `cost_usd`**(§3.1 合法就地补写路径),cost 修正经链内 cost event 记账。`import` 无副作用,须显式 `enable()/attach()`;链自身故障默认 fail-open(§4.1),strict 模式 opt-in。自 SPEC v1.1 起:其公开 API 面按 §6.3 演进规则约束;verify finding kinds 及 severity 语义冻结(新增 = minor,改/删 = major);`docs/audit.md` 边界声明三条为规范性声明,只许更保守。哈希算法版本化:algo v1 由 golden tests 冻结永续可验,算法变更 = algo v2 且 MUST 不使既有链失效。自 SPEC v1.2 起增补:finding kind 新增 `capture_unmatched`(WARN,逐请求存在性核对,带 `direction`);anchor sink 新增 `ots:`(extra `traceguard[anchors]`,网络依赖,边界声明 1 的暴露窗口措辞不因此放松);`rekor:` 在本版**只登记为设计,未实现** —— 它出现在 bundle 的 `anchors[].kind` 枚举里是为了让格式先稳住,`parse_sink_spec` 不接受它;证据 bundle 导出格式 `evidence-bundle/v1` 定义于 `docs/specs/evidence-bundle.md`。诚实分层与边界见 `docs/audit.md`。
 
 - `traceguard.sources` — **实验性** opt-in 扩展(v1.2):取回数据的时点正确性。记录 `source_snapshot`(`source_uri` / `source_kind` / `content_hash` / `retrieved_at` 为 MUST,`published_at` / `effective_at` / `normalized_hash` + `normalizer_id` / `source_version` / `mcp_server_id` / `tool_name` / `cache_status` 可选),把不变量 3 的判定落到 `verdict`(`verified` / `anachronistic` / `unverifiable` / `unchecked`)。**不存原文**——只存摘要与元数据,原文归档是消费者自己的事。`import` 无副作用,须显式 `sources.enable(engine)`;写入失败按 §4.1 fail-open,绝不影响 trace 写入与宿主调用。字段表与决策记录见 `docs/spec-changes/2026-09-10-source-snapshot-approval-binding.md`,诚实分层见 `docs/sources.md`。实验性期间其 API 面**不进** contract-guard;graduate 需在真实 trace 上实跑两个 minor。
 
@@ -592,7 +592,7 @@ MUST,不触发 SemVer,但每一条都有具体代价支撑,写在这里是为了
 
 - §3.1 新增 nullable 字段 `provider_response_id`(逐请求带外对账的 join key);与 `agent_id` / `session_id` 同,不参与 input_hash 与不变量,在 audit algo v1 信封之外。
 - §5 不变量 3 适用范围明文加入“取回的外部数据”;补 `valid_from` 未知时的行为规定(strict 拒绝 / loose 产出 `unverifiable`),作用域限定在 §6.6 `traceguard.sources`。**不新增第五条不变量**——这是不变量 3 项下的新拒绝条件,按 §6.4 归 minor,ramp 由 `strict` 无默认值承担。
-- §6.6 新增 `traceguard.sources`(实验性)与 `traceguard.approval`(规划);audit 条目增补 `capture_unmatched` finding kind、`ots:` / `rekor:` anchor sink、`evidence-bundle/v1` 导出格式。
+- §6.6 新增 `traceguard.sources`(实验性)与 `traceguard.approval`(规划);audit 条目增补 `capture_unmatched` finding kind、`ots:` anchor sink(以及 `rekor:` 的**设计登记,未实现**)、`evidence-bundle/v1` 导出格式。
 - 动机与兼容性分析:`docs/spec-changes/2026-09-10-source-snapshot-approval-binding.md`。SemVer **minor**。
 
 ### v1.1 (2026-08-27)

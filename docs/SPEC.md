@@ -321,9 +321,12 @@ algorithm, so each is a SemVer **minor**:
   tests and stays verifiable forever; an algorithm change is algo v2 and MUST
   NOT invalidate existing chains. Added in SPEC v1.2: the finding kind
   `capture_unmatched` (WARN — per-request existence reconciliation, carrying
-  a `direction`); the anchor sinks `ots:` / `rekor:` (extra
+  a `direction`); the anchor sink `ots:` (extra
   `traceguard[anchors]`, network-dependent — boundary statement 1's exposure
-  window is NOT relaxed by them); and the evidence bundle export format
+  window is NOT relaxed by it; `rekor:` is registered as a DESIGN only in this
+  version and is not implemented — it appears in the bundle's
+  `anchors[].kind` enum so the format can settle, and `parse_sink_spec` does
+  not accept it); and the evidence bundle export format
   `evidence-bundle/v1`, defined in `docs/specs/evidence-bundle.md`. Honest
   layering and limits: `docs/audit.md`.
 

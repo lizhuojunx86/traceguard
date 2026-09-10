@@ -37,12 +37,16 @@ from traceguard.audit.chain import (
     _attached_engines,
     read_settings,
 )
+from traceguard.audit.canonical import TRACE_CONTENT_FIELDS
 from traceguard.store.models import Trace
 
 __all__ = ["AppendOnlyViolationError", "register_guard_listeners"]
 
 # The one field with a legal in-place UPDATE path (reprice backfill/rollback,
-# SPEC §3.1). Everything else on traces is hash-covered and append-only.
+# SPEC §3.1). Every other column on traces is append-only under the guard —
+# which is NOT the same set as the hash-covered columns: agent_id, session_id
+# and provider_response_id are outside the algo v1 envelope and still blocked,
+# because append-only is a policy about the row, not a consequence of the hash.
 UPDATE_ALLOWED_FIELDS = frozenset({"cost_usd"})
 
 _registered = False
@@ -72,9 +76,22 @@ def _guard_before_update(mapper: Any, connection: Connection, target: Trace) -> 
         return
     blocked = _changed_columns(target) - UPDATE_ALLOWED_FIELDS
     if blocked:
+        # Say which of them the chain would actually catch. Calling an
+        # uncovered column "hash-covered" overstates what the chain detects,
+        # in the one message a developer reads about this layer.
+        covered = sorted(blocked & set(TRACE_CONTENT_FIELDS))
+        uncovered = sorted(blocked - set(TRACE_CONTENT_FIELDS))
+        detail = []
+        if covered:
+            detail.append(f"hash-covered field(s) {covered}")
+        if uncovered:
+            detail.append(
+                f"append-only field(s) {uncovered} (outside the algo v1 hash envelope: "
+                "editing them is blocked here, but verify_chain would not detect it)"
+            )
         raise AppendOnlyViolationError(
             f"traces row {target.trace_id} is append-only under the audit layer; "
-            f"refusing ORM UPDATE of hash-covered field(s) {sorted(blocked)}. "
+            f"refusing ORM UPDATE of {' and '.join(detail)}. "
             "Only cost_usd has a legal in-place write path (record it via "
             "traceguard.audit.record_cost_event); for anything else, write a "
             "new trace. Disable with traceguard.audit.disable(engine)."

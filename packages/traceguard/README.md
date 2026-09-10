@@ -430,7 +430,8 @@ interval.
 **No retrieved content is stored** — digests and metadata only. A snapshot
 proves which bytes the host handed over and how their claimed publication time
 relates to `feature_as_of`; it does not prove the host fetched them from
-`source_uri`, nor that `published_at` is true. Details: `docs/sources.md`.
+`source_uri`, nor that `published_at` is true. Details:
+[docs/sources.md](https://github.com/lizhuojunx86/traceguard/blob/main/docs/sources.md).
 
 ## Contract
 
