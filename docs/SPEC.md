@@ -373,6 +373,23 @@ algorithm, so each is a SemVer **minor**:
 These are integrator-optional: a project may depend on the core contract above
 without installing any of them.
 
+### 6.2 Runtime design principles (non-normative)
+
+The full list is appendix B3 of `TRACEGUARD_SPEC.md` (Chinese, authoritative);
+each entry is distilled from a bug that actually shipped. One of them constrains
+the audit extension directly, so it is repeated here:
+
+- **B3.6 — an export's verdict may never be stronger than the database's.** On
+  the same chain data, `verify_bundle` MUST NOT reach a stronger conclusion than
+  `verify_chain`. Weaker is allowed and expected (damage outside the exported
+  window is invisible; a bundle whose anchor binds nothing can only be
+  INTERNALLY CONSISTENT). Stronger is a bug: the database FAILs and the bundle
+  says VERIFIED. Both audit false negatives found in v1.2 review — tail
+  truncation, mid-chain row deletion — were this principle being violated. The
+  differential matrix in `tests/test_audit_differential.py` guards it.
+
+Appendices are not contract surface: they add no MUST and do not trigger SemVer.
+
 ## 7. Minimal obligations of an integrating project
 
 A project integrating TraceGuard MUST:

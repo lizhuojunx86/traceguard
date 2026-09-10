@@ -508,7 +508,7 @@ who / when / batch / 重建前后 / 逐行变更归因,对应 pit-archive 的 `r
 
 ## 附录 B3: 运行期设计原则(非规范)
 
-四条,都是从实跑的 bug 里提炼的,不是从设计里推导的。**非规范**——不构成
+六条,都是从实跑的 bug 里提炼的,不是从设计里推导的。**非规范**——不构成
 MUST,不触发 SemVer,但每一条都有具体代价支撑,写在这里是为了让下一个人在同一
 个坑前面停一下。每条附**真实实例**,没有实例的原则不收录。
 
@@ -574,6 +574,23 @@ MUST,不触发 SemVer,但每一条都有具体代价支撑,写在这里是为了
   报成了「系统**已经**算出了什么」——两条计价路径,我只读了一条。
 - **实例**:「$1,248.0292 是 void,它假定一次不可能发生的刷新」。那次刷新在
   一个 commit 之后就发生了。它当时不可达,只是因为缺陷存在,而缺陷正要被修。
+
+### B3.6 导出件的结论不得强于库的结论(新增 2026-09-10)
+
+同一份链数据上,导出件(evidence bundle)的验证结论不得**强于**库
+(`verify_chain`)的结论。可以更弱——窗口之外的破坏看不见,锚不绑定任何窗口内
+条目时只能给 INTERNALLY CONSISTENT;不可以更强——库判 FAIL 而导出件判 VERIFIED。
+导出件是库的一个**子视图**,子视图只会丢信息,不会凭空长出保证。
+
+- **实例**:尾部截断。锚取在 seq 10,删掉最后两条后链头是 seq 8,bundle 里的锚
+  seq 大于链头。第一版把这一律判 BREAK(诚实的旧锚被误报),改成一律 WARN 之后,
+  真截断也只剩 WARN,而 `verify_chain(from_anchor=…)` 判 FAIL——修一个假阳性
+  修出了一个假阴性。分开两者靠的是 bundle 里已有的 `exported_at` 与 `entry_count`。
+- **实例**:链中删行。稀疏导出(`trace_ids` 子集)本就不连续,于是把
+  `link_broken` 降级成 `chain_gap`;结果中间整行被删的库(`verify_chain` 判 FAIL)
+  导出后判 INTERNALLY CONSISTENT。
+- 这条由 `tests/test_audit_differential.py` 的差分矩阵常驻守卫:同一份数据上同时
+  跑 `verify_chain` 与 `verify_bundle`,任何「库 FAIL 而导出件 VERIFIED」都是 bug。
 
 ---
 

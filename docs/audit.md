@@ -384,6 +384,11 @@ CONSISTENT ——"内部自洽"正是重链之后的样子。部分导出(窗口
 种情形,要么把窗口扩到被锚的 `seq`,要么趁这个窗口还是链尾时再锚一次。
 细节见 `docs/specs/evidence-bundle.md` §2 与 §4。
 
+上面这一整段的约束条件是 SPEC 附录 **B3.6**:同一份链数据上,bundle 的结论不得
+**强于** `verify_chain` 的结论——可以更弱(窗口外的破坏看不见、锚不绑定时只给
+INTERNALLY CONSISTENT),不可以更强(库判 FAIL 而 bundle 判 VERIFIED)。
+`tests/test_audit_differential.py` 用差分矩阵常驻守卫这一条。
+
 格式与字段:`docs/specs/evidence-bundle.md`;JSON Schema:
 `docs/specs/evidence-bundle-v1.schema.json`。tg-attest 按同一 schema 产出时间戳部分,
 两包继续零代码依赖,**schema 是契约**。
