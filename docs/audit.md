@@ -306,6 +306,39 @@ python -m traceguard.audit --db sqlite:///traces.db reconcile \
 聚合层的 `capture_mismatch` 行为**完全不变**——两种 finding 证明的东西不同,混成一个
 kind 会让它们共用一个阈值和一套处置。
 
+## 证据 bundle(`evidence-bundle/v1`)
+
+把选定的 trace、覆盖它们的链段与链头、锚记录、`source_snapshot` 与 findings 打成一份
+自包含 JSON,好让**拿到它的人在没有数据库、没有网络、没有 traceguard 的情况下**自己验一遍。
+
+```bash
+python -m traceguard.audit --db sqlite:///traces.db bundle --out evidence.json \
+    --since 2026-09-01T00:00:00Z --anchor-file /mnt/other-host/anchors.jsonl
+python -m traceguard.audit verify-bundle evidence.json      # BREAK 时退出码 1
+```
+
+两种 `content_mode`,**结论不许合并成同一个词**:
+
+| 模式 | 验了什么 | summary 措辞 |
+|---|---|---|
+| `full` | 链衔接 + **逐条重算 `row_hash`**(内容被改则 `hash_mismatch` BREAK)+ 链头对锚 | `bundle VERIFIED (full)` |
+| `hash_only` | 链衔接 + 链头对锚。内容字段被剥掉,**条目哈希无法重算** | `bundle LINKAGE OK (hash_only) … content was NOT recomputed` |
+
+`hash_only` 通过意味着"这段链首尾相连、链头与锚一致",它**没有**对内容说过任何话。
+把它读成"内容已验证"是这个格式最容易犯、后果最大的误读,所以 `hash_only` 下永远至少带
+一条 `content_not_recomputed`(INFO),两种模式的 summary 也用两套措辞。
+(`content_not_recomputed` 是 **bundle 层的标注,不是 audit 的 finding kind**——
+不进 `FINDING_SEVERITY`,不受 §6.6 的 kind 冻结约束。)
+
+**锚只做结构校验,不做验签。** `rfc3161` 锚会被报成"这里有一个结构完整的 token,
+imprint 是 X",**不会**被报成"这个 token 有效":验签需要收件人自己选的信任根,而本包
+零新增运行时依赖。要后者,把 `token_b64` 交给 `openssl ts` 和一份你自己取回的 CA 证书。
+`ots` 锚处于 **pending** 时会发 WARN —— 日历服务器的承诺不是证据。
+
+格式与字段:`docs/specs/evidence-bundle.md`;JSON Schema:
+`docs/specs/evidence-bundle-v1.schema.json`。tg-attest 按同一 schema 产出时间戳部分,
+两包继续零代码依赖,**schema 是契约**。
+
 ## Legal-deletion path
 
 If a trace must genuinely be removed (e.g. `routing_audit` ingest rollback of

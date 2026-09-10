@@ -116,6 +116,39 @@ untouched, and the frozen 29-symbol public surface is unchanged.
   and an empty denominator reports `None` rather than 0.0. CLI: `python -m
   traceguard.sources --db URL drift [--source-uri] [--since] [--json]`.
 
+- `traceguard.audit.export_bundle()` / `verify_bundle()` and the
+  **`evidence-bundle/v1`** format (`docs/specs/evidence-bundle.md`, JSON Schema
+  `docs/specs/evidence-bundle-v1.schema.json`): a self-contained JSON document —
+  selected traces, the chain segment covering them, the chain head, anchors,
+  source snapshots, findings — that a recipient verifies with **no database, no
+  network and no signature verification**. CLI: `bundle --out PATH
+  [--since/--until/--trace-ids] [--hash-only] [--anchor-file PATH]` and
+  `verify-bundle PATH` (exit 1 on BREAK). A test asserts `verify-bundle` never
+  opens a database.
+  - **`hash_only` is honest about being weaker.** The algo v1 envelope covers
+    content fields; strip them and entry hashes cannot be recomputed at all. So
+    a `hash_only` verify checks chain LINKAGE and the head against an anchor
+    only, always emits a `content_not_recomputed` (INFO) finding, and its
+    summary reads "LINKAGE OK (hash_only) … content was NOT recomputed" where
+    `full` reads "VERIFIED (full)". The two modes never share a word — reading a
+    `hash_only` pass as "content verified" is this format's most consequential
+    misreading, and a test pins the wording apart. `content_not_recomputed` is a
+    bundle-level annotation, **not** an audit finding kind: it is not in
+    `FINDING_SEVERITY` and not bound by the §6.6 kind freeze.
+  - **Anchors are structure-checked, never verified.** An `rfc3161` anchor is
+    reported as a well-formed token that is present, not as valid — verification
+    needs a trust root the recipient chooses, and this package adds no
+    cryptographic runtime dependency. Verify with `openssl ts` and a CA you
+    fetched yourself. A `pending` OpenTimestamps proof warns that a calendar
+    server's promise is not evidence.
+  - `approvals` is present and always empty: `traceguard.approval` is registered
+    in SPEC v1.2 as planned but not implemented, and reserving the field now
+    means adding it later is not a schema break.
+  - `jsonschema` is a **dev-only** dependency (schema conformance tests); the
+    runtime still validates nothing and depends on nothing new.
+
+### Fixed
+
 ### Fixed
 
 - The sources write path's failure branch no longer inspects the *engine* to

@@ -82,6 +82,16 @@ EXPECTED_AUDIT_API = {
     "parse_request_ledger",
     "load_request_ledger",
     "reconcile_requests",
+    # evidence bundle (SPEC v1.2) — ADDED deliberately (minor, §6.3).
+    "BUNDLE_SCHEMA",
+    "CONTENT_NOT_RECOMPUTED",
+    "VALID_ANCHOR_KINDS",
+    "BundleVerifyResult",
+    "anchor_record",
+    "export_bundle",
+    "verify_bundle",
+    "write_bundle",
+    "load_bundle",
     # hash algo (frozen v1)
     "ALGO_VERSION",
     "GENESIS_PREV_HASH",

@@ -92,6 +92,11 @@ packages = ["src/traceguard"]
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    # Schema-conformance check for docs/specs/evidence-bundle-v1.schema.json.
+    # DEV ONLY: the runtime never validates against the schema (this package
+    # adds no runtime dependencies) — the schema is the published contract and
+    # this is what keeps the emitter honest to it.
+    "jsonschema>=4.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.6.0,<0.8.0",
     "opentelemetry-sdk>=1.20",

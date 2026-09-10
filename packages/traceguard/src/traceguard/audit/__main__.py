@@ -16,7 +16,9 @@
 ``anchor`` exits 1 when a sink refused the anchor (an anchor that did not land
 protects nothing). ``reconcile`` exits 1 on any ``capture_mismatch`` (or, with
 ``--source requests-json:``, any ``capture_unmatched``).
-``--db`` falls back to ``TRACEGUARD_DB_URL`` then the make_engine default.
+``bundle`` writes an ``evidence-bundle/v1`` document; ``verify-bundle`` checks
+one offline (no DB, no network, no signature verification) and exits 1 on a
+BREAK. ``--db`` falls back to ``TRACEGUARD_DB_URL`` then the make_engine default.
 """
 
 from __future__ import annotations
@@ -33,6 +35,13 @@ from traceguard.audit.anchors import (
     anchor_to,
     parse_sink_spec,
 )
+from traceguard.audit.bundle import (
+    anchor_record,
+    export_bundle,
+    load_bundle,
+    verify_bundle,
+    write_bundle,
+)
 from traceguard.audit.chain import disable, enable
 from traceguard.audit.reconcile import (
     ADMIN_KEY_ENV,
@@ -46,6 +55,16 @@ from traceguard.audit.reconcile import (
 )
 from traceguard.audit.verify import ChainAnchor, export_anchor, verify_chain
 from traceguard.store.models import make_engine
+
+
+def _iso_or_none(text):
+    """Parse an ISO 8601 CLI value, defaulting a bare date to UTC."""
+    if not text:
+        return None
+    from datetime import datetime, timezone
+
+    value = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
 
 
 def _print_findings(findings) -> None:
@@ -180,7 +199,58 @@ def main(argv: list[str] | None = None) -> int:
         help=f"environment variable holding the Admin API key (default {ADMIN_KEY_ENV})",
     )
 
+    p_bundle = sub.add_parser(
+        "bundle",
+        help="export an evidence-bundle/v1 JSON document (traces + chain + anchors)",
+    )
+    p_bundle.add_argument("--out", required=True, metavar="PATH", help="where to write it")
+    p_bundle.add_argument("--since", default=None, metavar="ISO", help="invoked_at >= this")
+    p_bundle.add_argument("--until", default=None, metavar="ISO", help="invoked_at < this")
+    p_bundle.add_argument(
+        "--trace-ids",
+        default=None,
+        metavar="A,B,C",
+        help="explicit trace_id list (overrides --since/--until)",
+    )
+    p_bundle.add_argument(
+        "--hash-only",
+        action="store_true",
+        help="strip the hash-covered content fields. The bundle then proves chain "
+        "LINKAGE and the head-vs-anchor check ONLY — entry hashes cannot be "
+        "recomputed without the content",
+    )
+    p_bundle.add_argument(
+        "--no-sources",
+        action="store_true",
+        help="omit source_snapshots",
+    )
+    p_bundle.add_argument(
+        "--anchor-file",
+        default=None,
+        metavar="PATH",
+        help="a file sink written by `anchor --sink file:PATH`; its newest anchor "
+        "is recorded in the bundle",
+    )
+
+    p_vb = sub.add_parser(
+        "verify-bundle",
+        help="verify an evidence bundle offline; exit 1 on BREAK findings",
+    )
+    p_vb.add_argument("path", help="path to the bundle JSON")
+
     args = parser.parse_args(argv)
+    if args.command == "verify-bundle":
+        # Offline by construction: never opens the DB, so it works on a machine
+        # that has only the file (which is the whole point of the format).
+        try:
+            result = verify_bundle(load_bundle(args.path))
+        except (ValueError, OSError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(result.summary())
+        _print_findings(result.findings)
+        return 0 if result.ok else 1
+
     engine = make_engine(args.db)
 
     if args.command == "enable":
@@ -345,6 +415,52 @@ def main(argv: list[str] | None = None) -> int:
             )
         _print_findings(result.findings)
         return 0 if result.ok else 1
+
+    if args.command == "bundle":
+        trace_ids = None
+        if args.trace_ids:
+            try:
+                trace_ids = [int(x) for x in args.trace_ids.split(",") if x.strip()]
+            except ValueError:
+                print("--trace-ids must be a comma-separated list of integers", file=sys.stderr)
+                return 2
+        anchors = []
+        if args.anchor_file:
+            stored = FileAnchorSink(args.anchor_file).latest()
+            if stored is None:
+                print(f"no anchor found in {args.anchor_file}", file=sys.stderr)
+                return 2
+            anchors.append(anchor_record(stored, kind="file", location=args.anchor_file))
+        try:
+            since = _iso_or_none(args.since)
+            until = _iso_or_none(args.until)
+        except ValueError as exc:
+            print(f"--since/--until must be ISO 8601: {exc}", file=sys.stderr)
+            return 2
+        bundle = export_bundle(
+            engine,
+            since=since,
+            until=until,
+            trace_ids=trace_ids,
+            content_mode="hash_only" if args.hash_only else "full",
+            include_sources=not args.no_sources,
+            anchors=anchors,
+        )
+        path = write_bundle(bundle, args.out)
+        print(
+            f"wrote {path} ({bundle['content_mode']}): "
+            f"{len(bundle['traces'])} trace(s), "
+            f"{len(bundle['chain']['entries'])} chain entry/entries, "
+            f"{len(bundle['source_snapshots'])} source snapshot(s), "
+            f"{len(bundle['anchors'])} anchor(s)"
+        )
+        if args.hash_only:
+            print(
+                "  hash_only: content fields were stripped, so a later verify checks "
+                "chain linkage and anchors ONLY — not content",
+                file=sys.stderr,
+            )
+        return 0
 
     return 2  # pragma: no cover - argparse enforces the subcommand set
 

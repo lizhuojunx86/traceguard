@@ -46,6 +46,14 @@ the MUST set):
    ``direction``. It still cannot vouch for a matched call's CONTENT — that
    is L2, and L2 stays unbuilt.
 
+7. **Evidence bundle** (:mod:`traceguard.audit.bundle`, SPEC v1.2) —
+   ``export_bundle()`` emits an ``evidence-bundle/v1`` JSON document and
+   ``verify_bundle()`` checks it with no DB, no network and no signature
+   verification. ``content_mode='hash_only'`` strips the hash-covered
+   content, which makes entry hashes unrecomputable — so that mode
+   verifies chain LINKAGE and the head against an anchor only, and says
+   so in different words. Format: ``docs/specs/evidence-bundle.md``.
+
 Importing this module has no side effects; nothing activates until
 :func:`enable` / :func:`attach`. Chain failures are fail-open by default
 (SPEC §4.1) — strict mode via ``enable(strict=True)`` or
@@ -114,6 +122,17 @@ from traceguard.audit.anchors import (
     WebhookAnchorSink,
     anchor_to,
     parse_sink_spec,
+)
+from traceguard.audit.bundle import (
+    BUNDLE_SCHEMA,
+    CONTENT_NOT_RECOMPUTED,
+    VALID_ANCHOR_KINDS,
+    BundleVerifyResult,
+    anchor_record,
+    export_bundle,
+    load_bundle,
+    verify_bundle,
+    write_bundle,
 )
 from traceguard.audit.reconcile import (
     CAPTURE_MISMATCH,
@@ -196,6 +215,16 @@ __all__ = [
     "parse_request_ledger",
     "load_request_ledger",
     "reconcile_requests",
+    # evidence bundle export + offline verify (SPEC v1.2)
+    "BUNDLE_SCHEMA",
+    "CONTENT_NOT_RECOMPUTED",
+    "VALID_ANCHOR_KINDS",
+    "BundleVerifyResult",
+    "anchor_record",
+    "export_bundle",
+    "verify_bundle",
+    "write_bundle",
+    "load_bundle",
     # hash algo (frozen v1)
     "ALGO_VERSION",
     "GENESIS_PREV_HASH",
