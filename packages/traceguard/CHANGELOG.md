@@ -135,6 +135,22 @@ untouched, and the frozen 29-symbol public surface is unchanged.
     misreading, and a test pins the wording apart. `content_not_recomputed` is a
     bundle-level annotation, **not** an audit finding kind: it is not in
     `FINDING_SEVERITY` and not bound by the §6.6 kind freeze.
+  - **An anchor only counts when it covers an entry the bundle carries.** The
+    first cut compared every anchor against the bundle's own `chain.head` field
+    and reported a match as "N anchor(s) match the head". That comparison is
+    between two values the bundle's author wrote: an attacker who rewrote the
+    trace content and re-chained the segment left both untouched, so a bundle
+    carrying a fabricated answer verified clean with the genuine anchor quoted
+    beside it. Reproduced end to end before fixing. Now an anchor whose `seq`
+    names an entry in the bundle is compared against **that entry**
+    (`anchors_binding` counts those, mismatch is `anchor_mismatch` BREAK); an
+    anchor that binds nothing raises `anchor_unlinked` (WARN) and the verdict
+    reads `INTERNALLY CONSISTENT (full)` rather than `VERIFIED (full)` — a
+    re-chained rewrite is internally consistent too, which is the whole point.
+    A partial export whose window stops short of the anchored `seq` is the
+    common case: widen the window or anchor again while it is the chain tip.
+    Related: an entry at `seq` 1 must seed from `GENESIS_PREV_HASH`, else a
+    whole re-chained history verifies from an attacker-chosen starting point.
   - **Anchors are structure-checked, never verified.** An `rfc3161` anchor is
     reported as a well-formed token that is present, not as valid — verification
     needs a trust root the recipient chooses, and this package adds no

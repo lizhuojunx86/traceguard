@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session
 
 from traceguard.audit.canonical import (
     ALGO_VERSION,
+    GENESIS_PREV_HASH,
     TRACE_CONTENT_FIELDS,
     CanonicalizationError,
     canon_error_content,
@@ -61,6 +62,10 @@ INFO = "INFO"
 #: Emitted on every hash_only verification. Its presence is the mechanism that
 #: keeps "the linkage holds" from being read as "the content is verified".
 CONTENT_NOT_RECOMPUTED = "content_not_recomputed"
+#: Bundle-level (see docs/specs/evidence-bundle.md §3): an anchor is present
+#: but covers a chain position this bundle does not carry, so it corroborates
+#: nothing about the entries inside.
+ANCHOR_UNLINKED = "anchor_unlinked"
 
 #: traces columns carried in a bundle. The content subset is what hash_only
 #: strips; everything else is metadata a recipient needs to make sense of the
@@ -140,6 +145,10 @@ class BundleVerifyResult:
     traces_included: int = 0
     content_recomputed: int = 0
     anchors_checked: int = 0
+    #: anchors compared against an entry CARRIED IN THIS BUNDLE, not merely
+    #: against the bundle's own ``chain.head`` field. Only these tie the
+    #: included entries to something the bundle's author did not write.
+    anchors_binding: int = 0
     findings: list[ChainFinding] = field(default_factory=list)
 
     @property
@@ -151,7 +160,9 @@ class BundleVerifyResult:
 
         A ``hash_only`` pass has checked linkage and anchors and NOTHING about
         content; saying "verified" for both would be the format's worst
-        failure mode in one word.
+        failure mode in one word. The same applies to a `full` bundle whose
+        entries no anchor covers — it is self-consistent, which a rewrite is
+        too, so it says INTERNALLY CONSISTENT rather than VERIFIED.
         """
         if not self.ok:
             return (
@@ -161,14 +172,37 @@ class BundleVerifyResult:
         if self.content_mode == "hash_only":
             return (
                 f"bundle LINKAGE OK (hash_only): {self.entries_checked} entry/entries form "
-                f"an unbroken chain and {self.anchors_checked} anchor(s) match the head — "
+                f"an unbroken chain and {self._anchor_phrase()} — "
                 "content was NOT recomputed and is NOT covered by this result"
             )
+        # The same rule that separates `full` from `hash_only` separates an
+        # anchor-bound bundle from a merely self-consistent one: a rewrite that
+        # re-chains the segment reproduces every internal hash, so "VERIFIED"
+        # is a claim only an anchor covering these entries can support.
+        verdict = "VERIFIED" if self.anchors_binding else "INTERNALLY CONSISTENT"
         return (
-            f"bundle VERIFIED (full): {self.entries_checked} entry/entries recomputed, "
+            f"bundle {verdict} (full): {self.entries_checked} entry/entries recomputed, "
             f"{self.content_recomputed} against included trace content, "
-            f"{self.anchors_checked} anchor(s) match the head"
+            f"{self._anchor_phrase()}"
         )
+
+    def _anchor_phrase(self) -> str:
+        """Never let an anchor that binds nothing read as corroboration.
+
+        ``chain.head`` is a field of the bundle, so "the anchor matches the
+        head" says only that two numbers the author wrote agree. It becomes
+        evidence about the ENTRIES only when the anchor is compared against an
+        entry the bundle carries — otherwise a self-consistent rewrite of the
+        segment leaves both untouched.
+        """
+        if self.anchors_binding:
+            return f"{self.anchors_binding} anchor(s) bind these entries"
+        if self.anchors_checked:
+            return (
+                f"{self.anchors_checked} anchor(s) match the bundle's declared head, but NONE "
+                "covers the entries carried here — no external corroboration of this content"
+            )
+        return "no anchor covers these entries — internal consistency only"
 
 
 def export_bundle(
@@ -316,14 +350,25 @@ def _recompute(entry: dict, content: Any) -> str:
     return compute_row_hash(entry["prev_hash"], payload)
 
 
-def _check_anchors(bundle: dict, head_hash: str | None) -> tuple[int, list[ChainFinding]]:
-    """Structure-check every anchor; compare those that carry a head digest.
+def _check_anchors(
+    bundle: dict, head_hash: str | None, entries: list[dict]
+) -> tuple[int, int, list[ChainFinding]]:
+    """Structure-check every anchor and compare those that carry a digest.
+
+    Returns ``(checked, binding, findings)``. An anchor whose ``seq`` names an
+    entry CARRIED HERE is compared against that entry — that is the only
+    comparison that constrains the bundle's contents, and it is what ``binding``
+    counts. An anchor that only matches ``chain.head`` constrains nothing: the
+    head is a field of the bundle, so an attacker who rewrites the entries and
+    re-chains them leaves the head, and therefore that comparison, untouched.
 
     No signature is ever verified (spec §4): a structurally valid RFC 3161
     token is reported as present, not as valid.
     """
     findings: list[ChainFinding] = []
+    by_seq = {e.get("seq"): e.get("row_hash") for e in entries if e.get("seq") is not None}
     checked = 0
+    binding = 0
     for i, anchor in enumerate(bundle.get("anchors") or []):
         kind = anchor.get("kind")
         if kind not in VALID_ANCHOR_KINDS:
@@ -359,15 +404,46 @@ def _check_anchors(bundle: dict, head_hash: str | None) -> tuple[int, list[Chain
         if not row_hash:
             continue
         checked += 1
+        seq = anchor.get("seq")
+        if seq in by_seq:
+            # The one comparison that constrains the entries themselves.
+            if row_hash != by_seq[seq]:
+                findings.append(
+                    ChainFinding(
+                        "anchor_mismatch", BREAK, seq, None,
+                        f"anchors[{i}] attests row_hash {row_hash} at seq {seq}, but the entry "
+                        f"carried here at that seq hashes to {by_seq[seq]}; the content covered "
+                        "by that entry was changed after it was anchored",
+                    )
+                )
+            else:
+                binding += 1
+            continue
         if head_hash is not None and row_hash != head_hash:
             findings.append(
                 ChainFinding(
-                    "anchor_mismatch", BREAK, anchor.get("seq"), None,
+                    "anchor_mismatch", BREAK, seq, None,
                     f"anchors[{i}] row_hash {row_hash} != the bundle's chain head {head_hash}; "
                     "the chain was truncated or rewritten relative to this anchor",
                 )
             )
-    return checked, findings
+
+    if entries and checked and not binding:
+        seqs = [e.get("seq") for e in entries if e.get("seq") is not None]
+        span = f"seq {seqs[0]}..{seqs[-1]}" if seqs else "the entries carried here"
+        findings.append(
+            ChainFinding(
+                ANCHOR_UNLINKED, WARN, None, None,
+                f"{checked} anchor(s) were checked and none names a seq this bundle carries "
+                f"({span}); each was compared only against the bundle's own `chain.head` "
+                "field. That comparison is between two values the bundle's author wrote, so "
+                "it does NOT corroborate the entries here: rewriting their content and "
+                "re-chaining the segment leaves both the head and the anchor untouched. To "
+                "get corroboration, export a window that reaches the anchored seq, or anchor "
+                "again while this window is the chain tip",
+            )
+        )
+    return checked, binding, findings
 
 
 def verify_bundle(bundle: dict) -> BundleVerifyResult:
@@ -399,6 +475,18 @@ def verify_bundle(bundle: dict) -> BundleVerifyResult:
     )
 
     # ── linkage: checked in BOTH modes; it is all hash_only can offer ──
+    # A segment that claims to start at the beginning must actually seed from
+    # the genesis constant. Without this, `entries[0]["prev_hash"]` is a free
+    # value and a whole re-chained history verifies.
+    if entries and entries[0].get("seq") == 1 and entries[0].get("prev_hash") != GENESIS_PREV_HASH:
+        result.findings.append(
+            ChainFinding(
+                "link_broken", BREAK, 1, entries[0].get("trace_id"),
+                f"the first entry is seq 1 but its prev_hash is {entries[0].get('prev_hash')!r}, "
+                f"not the genesis {GENESIS_PREV_HASH}; this chain does not start where it says",
+            )
+        )
+
     prev: str | None = None
     for entry in entries:
         if prev is not None and entry["prev_hash"] != prev:
@@ -494,8 +582,9 @@ def verify_bundle(bundle: dict) -> BundleVerifyResult:
                     f"entry {last} at the same seq",
                 )
             )
-    checked, anchor_findings = _check_anchors(bundle, head_hash)
+    checked, binding, anchor_findings = _check_anchors(bundle, head_hash, entries)
     result.anchors_checked = checked
+    result.anchors_binding = binding
     result.findings.extend(anchor_findings)
 
     result.ok = not result.breaks

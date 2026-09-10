@@ -357,7 +357,7 @@ python -m traceguard.audit verify-bundle evidence.json      # BREAK 时退出码
 
 | 模式 | 验了什么 | summary 措辞 |
 |---|---|---|
-| `full` | 链衔接 + **逐条重算 `row_hash`**(内容被改则 `hash_mismatch` BREAK)+ 链头对锚 | `bundle VERIFIED (full)` |
+| `full` | 链衔接 + **逐条重算 `row_hash`**(内容被改则 `hash_mismatch` BREAK)+ 锚定比对 | 有锚覆盖:`bundle VERIFIED (full)`;无锚覆盖:`bundle INTERNALLY CONSISTENT (full)` |
 | `hash_only` | 链衔接 + 链头对锚。内容字段被剥掉,**条目哈希无法重算** | `bundle LINKAGE OK (hash_only) … content was NOT recomputed` |
 
 `hash_only` 通过意味着"这段链首尾相连、链头与锚一致",它**没有**对内容说过任何话。
@@ -370,6 +370,14 @@ python -m traceguard.audit verify-bundle evidence.json      # BREAK 时退出码
 imprint 是 X",**不会**被报成"这个 token 有效":验签需要收件人自己选的信任根,而本包
 零新增运行时依赖。要后者,把 `token_b64` 交给 `openssl ts` 和一份你自己取回的 CA 证书。
 `ots` 锚处于 **pending** 时会发 WARN —— 日历服务器的承诺不是证据。
+
+**锚要覆盖到 bundle 里的 entry 才算数。** 锚记的 `seq` 落在导出的那段 entry 里,
+才会和那条 entry 的 `row_hash` 比,也才构成佐证;否则只能和 bundle 自己声明的
+`chain.head` 比,而攻击者重写内容再重链整段时根本不动 `chain.head`。所以一个锚都
+没绑上时报 `anchor_unlinked`(WARN),结论词也从 VERIFIED 降为 INTERNALLY
+CONSISTENT ——"内部自洽"正是重链之后的样子。部分导出(窗口不含链尾)默认就是这
+种情形,要么把窗口扩到被锚的 `seq`,要么趁这个窗口还是链尾时再锚一次。
+细节见 `docs/specs/evidence-bundle.md` §2 与 §4。
 
 格式与字段:`docs/specs/evidence-bundle.md`;JSON Schema:
 `docs/specs/evidence-bundle-v1.schema.json`。tg-attest 按同一 schema 产出时间戳部分,

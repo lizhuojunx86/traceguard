@@ -72,7 +72,14 @@ def test_full_round_trip_verifies(chained):
     result = verify_bundle(bundle)
     assert result.ok
     assert result.content_recomputed == 3
-    assert "VERIFIED (full)" in result.summary()
+    # Unanchored, so it is self-consistent and says exactly that.
+    assert "INTERNALLY CONSISTENT (full)" in result.summary()
+
+    # With an anchor covering an entry it carries, it can say VERIFIED.
+    bundle["anchors"] = [anchor_record(audit.export_anchor(chained), location="/mnt/a.jsonl")]
+    anchored = verify_bundle(bundle)
+    assert anchored.ok and anchored.anchors_binding == 1
+    assert "VERIFIED (full)" in anchored.summary()
 
 
 def test_hash_only_round_trip_verifies_linkage_only(chained):
@@ -92,8 +99,11 @@ def test_hash_only_round_trip_verifies_linkage_only(chained):
 def test_the_two_modes_never_share_a_word(chained):
     """A hash_only pass says nothing about content; saying 'verified' for both
     would be this format's worst failure mode in one word."""
-    full = verify_bundle(export_bundle(chained)).summary()
-    hash_only = verify_bundle(export_bundle(chained, content_mode="hash_only")).summary()
+    anchor = [anchor_record(audit.export_anchor(chained), location="/mnt/a.jsonl")]
+    full = verify_bundle(export_bundle(chained, anchors=anchor)).summary()
+    hash_only = verify_bundle(
+        export_bundle(chained, content_mode="hash_only", anchors=anchor)
+    ).summary()
     assert "VERIFIED (full)" in full
     assert "VERIFIED" not in hash_only
     assert "LINKAGE OK (hash_only)" in hash_only
@@ -104,6 +114,114 @@ def test_hash_only_always_carries_the_scope_finding_even_when_clean(chained):
     result = verify_bundle(export_bundle(chained, content_mode="hash_only"))
     assert result.ok  # a clean result...
     assert any(f.kind == CONTENT_NOT_RECOMPUTED for f in result.findings)  # ...still annotated
+
+
+# ── the anchor must constrain the entries, not just the head field ──────────
+
+def _rechain(bundle):
+    """Rewrite every trace's content and re-chain the segment in place.
+
+    This is the attacker with write access to the exported file: they change
+    what the record says and recompute every hash the bundle contains, which
+    is exactly what internal consistency cannot survive.
+    """
+    from traceguard.audit import TRACE_CONTENT_FIELDS
+    from traceguard.audit.bundle import _parse_dt, _recompute
+
+    by_id = {tr["trace_id"]: tr for tr in bundle["traces"]}
+    for entry in bundle["chain"]["entries"]:
+        tr = by_id[entry["trace_id"]]
+        tr["output_parsed"] = json.dumps({"answer": "the model approved the trade"})
+    prev = bundle["chain"]["entries"][0]["prev_hash"]
+    for entry in bundle["chain"]["entries"]:
+        entry["prev_hash"] = prev
+        content = {
+            name: _parse_dt(by_id[entry["trace_id"]].get(name))
+            if name in ("feature_as_of", "invoked_at")
+            else by_id[entry["trace_id"]].get(name)
+            for name in TRACE_CONTENT_FIELDS
+        }
+        entry["row_hash"] = _recompute(entry, content)
+        prev = entry["row_hash"]
+    return bundle
+
+
+def test_an_anchor_covering_a_carried_entry_catches_a_rechained_rewrite(chained):
+    """The whole point of shipping an anchor: it is the one value in the file
+    the exporter cannot recompute."""
+    bundle = export_bundle(chained)
+    bundle["anchors"] = [anchor_record(audit.export_anchor(chained), location="/mnt/a.jsonl")]
+    assert verify_bundle(bundle).anchors_binding == 1
+
+    result = verify_bundle(_rechain(bundle))
+    assert not result.ok
+    kinds = [f.kind for f in result.findings]
+    assert "anchor_mismatch" in kinds
+    assert "FAILED" in result.summary()
+
+
+def test_an_anchor_outside_the_exported_window_is_reported_as_binding_nothing(chained):
+    """A partial export whose window stops short of the anchored seq.
+
+    The anchor still 'matches the head', because the head is a field of the
+    bundle — so a rewrite of the segment leaves that comparison intact. It must
+    not be reported as corroboration, and the verdict must not say VERIFIED.
+    """
+    tg = Tracer(engine=chained)
+    for i in range(3):  # push the chain head past the traces we export
+        with tg.span("p", "c", "llm_complete", feature_as_of=NOW) as span:
+            span.record_input({"q": f"later {i}"})
+
+    with Session(chained) as s:
+        early = list(s.execute(select(Trace.trace_id).order_by(Trace.trace_id)).scalars())[:3]
+    bundle = export_bundle(chained, trace_ids=early)
+    bundle["anchors"] = [anchor_record(audit.export_anchor(chained), location="/mnt/a.jsonl")]
+
+    clean = verify_bundle(bundle)
+    assert clean.ok
+    assert clean.anchors_checked == 1 and clean.anchors_binding == 0
+    unlinked = [f for f in clean.findings if f.kind == "anchor_unlinked"]
+    assert len(unlinked) == 1
+    assert "does NOT corroborate" in unlinked[0].detail
+    assert "VERIFIED" not in clean.summary()
+    assert "no external corroboration" in clean.summary()
+
+    # ...and the rewrite it cannot catch is not called verified either.
+    tampered = verify_bundle(_rechain(bundle))
+    assert "VERIFIED" not in tampered.summary()
+    assert any(f.kind == "anchor_unlinked" for f in tampered.findings)
+
+
+def test_a_rechained_full_history_is_caught_by_the_genesis_seed(chained):
+    """A segment starting at seq 1 must seed from the genesis constant, or the
+    attacker picks their own starting point and the whole history re-chains."""
+    from traceguard.audit import GENESIS_PREV_HASH
+
+    bundle = export_bundle(chained)
+    assert bundle["chain"]["entries"][0]["seq"] == 1
+    assert bundle["chain"]["entries"][0]["prev_hash"] == GENESIS_PREV_HASH
+
+    tampered = _rechain(bundle)
+    tampered["chain"]["entries"][0]["prev_hash"] = "f" * 64
+    prev = "f" * 64
+    from traceguard.audit import TRACE_CONTENT_FIELDS
+    from traceguard.audit.bundle import _parse_dt, _recompute
+
+    by_id = {tr["trace_id"]: tr for tr in tampered["traces"]}
+    for entry in tampered["chain"]["entries"]:
+        entry["prev_hash"] = prev
+        content = {
+            name: _parse_dt(by_id[entry["trace_id"]].get(name))
+            if name in ("feature_as_of", "invoked_at")
+            else by_id[entry["trace_id"]].get(name)
+            for name in TRACE_CONTENT_FIELDS
+        }
+        entry["row_hash"] = _recompute(entry, content)
+        prev = entry["row_hash"]
+
+    result = verify_bundle(tampered)
+    assert not result.ok
+    assert any(f.kind == "link_broken" and f.seq == 1 for f in result.findings)
 
 
 # ── tamper detection: what each mode catches ────────────────────────────────
@@ -340,7 +458,8 @@ def test_cli_bundle_then_verify_bundle(tmp_path, capsys):
     assert main(["--db", url, "bundle", "--out", str(out)]) == 0
     assert out.exists()
     assert main(["verify-bundle", str(out)]) == 0
-    assert "VERIFIED (full)" in capsys.readouterr().out
+    # No --sink was given, so the bundle carries no anchor and the verdict says so.
+    assert "INTERNALLY CONSISTENT (full)" in capsys.readouterr().out
 
 
 def test_cli_verify_bundle_exits_1_on_tamper(tmp_path, capsys):
