@@ -48,18 +48,23 @@ print(anchor.to_json())              # store this OUTSIDE the DB
 CLI:
 
 ```bash
-python -m traceguard.audit enable  --db sqlite:///traces.db   # [--chain-only] [--no-backfill] [--strict]
-python -m traceguard.audit verify  --db sqlite:///traces.db   # exit 1 on BREAK findings
-python -m traceguard.audit verify  --db ... --anchor '<json>' # full walk + anchor check(加测截断/重写)
-python -m traceguard.audit anchor  --db sqlite:///traces.db   # print the head digest
-python -m traceguard.audit anchor  --db ... --sink file:/mnt/other-host/anchors.jsonl \
-                                            --sink git-note:/path/repo --sink webhook:https://...   # v2: store it OUTSIDE the DB
-python -m traceguard.audit anchor  --db ... --sink file:... --every 300             # v2: keep anchoring (interval = exposure window)
-python -m traceguard.audit verify  --db ... --anchor-file /mnt/other-host/anchors.jsonl  # v2: verify against the newest stored anchor
-python -m traceguard.audit reconcile --db ... --source anthropic-usage --window 2026-08-01T00:00:00Z,2026-08-08T00:00:00Z \
-                                            --api-key-id apikey_...              # v2: self-reported vs provider totals (capture_mismatch)
-python -m traceguard.audit disable --db sqlite:///traces.db
+# --db 是顶层选项,必须放在子命令前面
+python -m traceguard.audit --db sqlite:///traces.db enable   # [--chain-only] [--no-backfill] [--strict]
+python -m traceguard.audit --db sqlite:///traces.db verify   # exit 1 on BREAK findings
+python -m traceguard.audit --db ... verify --anchor '<json>' # full walk + anchor check(加测截断/重写)
+python -m traceguard.audit --db sqlite:///traces.db anchor   # print the head digest
+python -m traceguard.audit --db ... anchor --sink file:/mnt/other-host/anchors.jsonl \
+                                           --sink git-note:/path/repo --sink webhook:https://...   # v2: store it OUTSIDE the DB
+python -m traceguard.audit --db ... anchor --sink file:... --every 300             # v2: keep anchoring (interval = exposure window)
+python -m traceguard.audit --db ... verify --anchor-file /mnt/other-host/anchors.jsonl  # v2: verify against the newest stored anchor
+python -m traceguard.audit --db ... reconcile --source anthropic-usage --window 2026-08-01T00:00:00Z,2026-08-08T00:00:00Z \
+                                           --api-key-id apikey_...              # v2: self-reported vs provider totals (capture_mismatch)
+python -m traceguard.audit --db sqlite:///traces.db disable
 ```
+
+**`--db` 放在子命令后面会被 argparse 拒掉**(`unrecognized arguments: --db ...`)。
+本节此前的示例全是那种写法,照抄一条都跑不起来。`verify-bundle` 是唯一不开库的
+子命令,它不接受 `--db`。
 
 ## What each layer honestly delivers
 
@@ -280,11 +285,11 @@ the provider's usage report, an out-of-band source the agent does not write to.
 
 ```bash
 export ANTHROPIC_ADMIN_KEY=sk-ant-admin...   # Admin API key; never a regular key, never in a tracked file
-python -m traceguard.audit reconcile --db sqlite:///traces.db --source anthropic-usage \
+python -m traceguard.audit --db sqlite:///traces.db reconcile --source anthropic-usage \
     --window 2026-08-01T00:00:00Z,2026-08-08T00:00:00Z --bucket-width 1d \
     --api-key-id apikey_01... --workspace-id wrkspc_01...   # narrow the org-wide report to THIS DB's traffic
 # or, from a saved report (a curl dump; also the deterministic test path):
-python -m traceguard.audit reconcile --db ... --source json:usage.json --window ...
+python -m traceguard.audit --db ... reconcile --source json:usage.json --window ...
 ```
 
 Conventions that MUST line up, or every finding is a false positive: `tokens_in`

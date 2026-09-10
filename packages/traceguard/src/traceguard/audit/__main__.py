@@ -2,16 +2,23 @@
 
 ::
 
-    python -m traceguard.audit enable    --db sqlite:///traces.db [--chain-only] [--no-backfill] [--strict]
-    python -m traceguard.audit disable   --db sqlite:///traces.db
-    python -m traceguard.audit verify    --db sqlite:///traces.db [--anchor '<json>' | --anchor-file PATH]
-                                         [--ots-proof PATH [--ots-upgrade]]
-    python -m traceguard.audit anchor    --db sqlite:///traces.db [--sink SPEC ...] [--every SECONDS [--rounds N]]
-    python -m traceguard.audit reconcile --db sqlite:///traces.db
-                                         --source anthropic-usage|json:PATH|requests-json:PATH
-                                         --window START,END [--bucket-width 1d] [--tolerance 0.05]
-                                         [--project P] [--api-key-id ID ...] [--workspace-id ID ...]
-                                         [--model-map TRACE=PROVIDER ...]
+    python -m traceguard.audit --db sqlite:///traces.db enable    [--chain-only] [--no-backfill] [--strict]
+    python -m traceguard.audit --db sqlite:///traces.db disable
+    python -m traceguard.audit --db sqlite:///traces.db verify    [--anchor '<json>' | --anchor-file PATH]
+                                                                 [--ots-proof PATH [--ots-upgrade]]
+    python -m traceguard.audit --db sqlite:///traces.db anchor    [--sink SPEC ...] [--every SECONDS [--rounds N]]
+    python -m traceguard.audit --db sqlite:///traces.db reconcile
+                                   --source anthropic-usage|json:PATH|requests-json:PATH
+                                   --window START,END [--bucket-width 1d] [--tolerance 0.05]
+                                   [--project P] [--api-key-id ID ...] [--workspace-id ID ...]
+                                   [--model-map TRACE=PROVIDER ...]
+    python -m traceguard.audit --db sqlite:///traces.db bundle --out PATH [--hash-only] ...
+    python -m traceguard.audit verify-bundle PATH        # offline: takes no --db
+
+**``--db`` is a top-level option: it goes BEFORE the subcommand**, as every
+line above now shows. Putting it after is rejected by argparse with
+``unrecognized arguments: --db ...``; this docstring and docs/audit.md both had
+it the wrong way round, so the documented invocations did not run.
 
 ``verify`` exits 1 on BREAK findings (tamper evidence), 0 otherwise.
 ``anchor`` exits 1 when a sink refused the anchor (an anchor that did not land
@@ -19,7 +26,8 @@ protects nothing). ``reconcile`` exits 1 on any ``capture_mismatch`` (or, with
 ``--source requests-json:``, any ``capture_unmatched``).
 ``bundle`` writes an ``evidence-bundle/v1`` document; ``verify-bundle`` checks
 one offline (no DB, no network, no signature verification) and exits 1 on a
-BREAK. ``--db`` falls back to ``TRACEGUARD_DB_URL`` then the make_engine default.
+BREAK. ``--db`` falls back to ``TRACEGUARD_DB_URL`` then the make_engine default;
+``verify-bundle`` opens no database at all.
 """
 
 from __future__ import annotations
