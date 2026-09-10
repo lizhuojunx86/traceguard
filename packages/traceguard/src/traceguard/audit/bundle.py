@@ -394,6 +394,28 @@ def _recompute(entry: dict, content: Any) -> str:
     return compute_row_hash(entry["prev_hash"], payload)
 
 
+def _shrank(anchor: dict, head: dict, anchor_count: Any, head_count: Any) -> bool:
+    """Did the chain lose entries between this anchor and this export?
+
+    Only when the anchor is known to be at least as old as the export: an
+    anchor taken AFTER it legitimately counts more. Missing counts mean no
+    signal, not a silent pass to a stricter verdict — unlike a missing
+    ``exported_at`` next to a seq that already went backwards, there is nothing
+    here to be conservative about.
+    """
+    if not isinstance(anchor_count, int) or isinstance(anchor_count, bool):
+        return False
+    if not isinstance(head_count, int) or isinstance(head_count, bool):
+        return False
+    if anchor_count <= head_count:
+        return False
+    anchor_at = _parse_dt(anchor.get("exported_at"))
+    head_at = _parse_dt(head.get("exported_at"))
+    if anchor_at is not None and head_at is not None and anchor_at > head_at:
+        return False  # the anchor is newer; counting more is expected
+    return True
+
+
 def _check_anchors(
     bundle: dict, head: dict, entries: list[dict]
 ) -> tuple[int, int, int, list[ChainFinding]]:
@@ -482,6 +504,32 @@ def _check_anchors(
             )
             continue
         checked += 1
+
+        # (0) the chain SHRANK. entry_count only grows on an append-only chain,
+        # so an anchor that counted more entries than this export found means
+        # rows were removed — and unlike seq, this survives a MID-chain
+        # deletion, which leaves both the tip seq and the head row_hash intact.
+        # Without it that deletion reads as a benign `chain_gap`: verify_chain
+        # fails on the database while verify_bundle passes on its export.
+        # Checked before placement because it is true wherever the anchor sits.
+        # When the seq ALSO went backwards, branch 4 names the position and
+        # gives the better diagnosis; this is the check that catches what seq
+        # cannot see.
+        anchor_count = anchor.get("entry_count")
+        head_count = head.get("entry_count")
+        seq_went_backwards = head_seq is not None and seq is not None and seq > head_seq
+        if not seq_went_backwards and _shrank(anchor, head, anchor_count, head_count):
+            findings.append(
+                ChainFinding(
+                    "anchor_mismatch", BREAK, seq, None,
+                    f"anchors[{i}] counted {anchor_count} chain entries, but this bundle's "
+                    f"head declares only {head_count}. Entry count only grows on an "
+                    "append-only chain, so entries present when the anchor was taken are "
+                    "gone — a deletion, which a mid-chain removal hides from both the tip "
+                    "seq and the head hash",
+                )
+            )
+            continue
 
         # (1) inside the window: the only comparison that constrains the entries.
         if seq in by_seq:

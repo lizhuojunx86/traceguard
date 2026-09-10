@@ -257,6 +257,81 @@ def test_an_anchor_later_than_the_head_says_to_re_export(chained):
     assert "Re-export" in outside[0].detail
 
 
+def test_a_mid_chain_deletion_is_caught_by_entry_count(chained):
+    """A deletion in the MIDDLE leaves the tip seq and the head row_hash intact.
+
+    Every seq-based check therefore passes, the anchor still binds the head
+    entry, and the missing row shows up only as a `chain_gap` WARN — while
+    `verify_chain` fails outright on the same database. `entry_count` only
+    grows on an append-only chain, so an anchor that counted more entries than
+    the export found is the one signal that survives this.
+    """
+    from sqlalchemy import delete
+
+    from traceguard.audit.models import AuditChainEntry
+
+    anchor = audit.export_anchor(chained)
+
+    audit.detach(chained)
+    with Session(chained) as s:
+        ids = list(s.execute(select(Trace.trace_id).order_by(Trace.trace_id)).scalars())
+        victim = ids[1]  # a middle row, not the tail
+        s.execute(delete(AuditChainEntry).where(AuditChainEntry.trace_id == victim))
+        s.execute(delete(Trace).where(Trace.trace_id == victim))
+        s.commit()
+    audit.attach(chained)
+
+    head = audit.export_anchor(chained)
+    assert head.seq == anchor.seq, "the tip seq must be untouched for this to be the case"
+    assert head.row_hash == anchor.row_hash, "and so must the head hash"
+    assert head.entry_count < anchor.entry_count  # the only thing that moved
+
+    assert not audit.verify_chain(chained).ok  # the database verifier's verdict
+
+    bundle = export_bundle(chained)
+    bundle["anchors"] = [anchor_record(anchor, location="/mnt/a")]
+    result = verify_bundle(bundle)
+
+    assert not result.ok, "the offline verifier must not pass what the DB verifier fails"
+    breaks = [f for f in result.findings if f.kind == "anchor_mismatch"]
+    assert len(breaks) == 1
+    assert "only grows on an" in breaks[0].detail
+
+
+def test_ordinary_chain_growth_is_not_a_shrink(chained):
+    """The count check must not fire on the normal case: an older anchor with
+    fewer entries than a later export."""
+    older = audit.export_anchor(chained)
+    tg = Tracer(engine=chained)
+    for i in range(3):
+        with tg.span("p", "c", "llm_complete", feature_as_of=NOW) as span:
+            span.record_input({"q": f"grow {i}"})
+
+    bundle = export_bundle(chained)
+    assert bundle["chain"]["head"]["entry_count"] > older.entry_count
+    bundle["anchors"] = [anchor_record(older, location="/mnt/a")]
+
+    result = verify_bundle(bundle)
+    assert result.ok, [f"{f.kind}: {f.detail}" for f in result.findings]
+    assert not [f for f in result.findings if f.kind == "anchor_mismatch"]
+
+
+def test_an_anchor_taken_after_the_export_may_count_more(chained):
+    """A newer anchor legitimately counts more entries; that is not a shrink."""
+    bundle = export_bundle(chained)
+    tg = Tracer(engine=chained)
+    for i in range(2):
+        with tg.span("p", "c", "llm_complete", feature_as_of=NOW) as span:
+            span.record_input({"q": f"after {i}"})
+    newer = audit.export_anchor(chained)
+    assert newer.entry_count > bundle["chain"]["head"]["entry_count"]
+    bundle["anchors"] = [anchor_record(newer, location="/mnt/a")]
+
+    result = verify_bundle(bundle)
+    assert result.ok
+    assert not [f for f in result.findings if f.kind == "anchor_mismatch"]
+
+
 def test_an_anchor_past_the_head_that_predates_the_export_is_truncation(chained):
     """seq going BACKWARDS is the thing the chain exists to catch.
 

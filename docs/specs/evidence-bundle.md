@@ -60,7 +60,7 @@
 | **锚定绑定** | 锚记的 `seq` 落在 bundle 携带的 entry 里,且哈希与那条 entry 相符,即**这批 entry 被外部锚覆盖** | 锚本身可信 —— 那取决于锚存在哪儿、谁能改它。`file:` 锚与库文件同主机时几乎不证明什么 |
 | **链头对锚**(**仅当**锚记的 `seq` 正好是 `chain.head.seq`,或旧锚没记 `seq`) | 锚等于 bundle 声明的 `chain.head` | **什么都不证明**:`chain.head` 是 bundle 自己的字段,重写内容再重链整段,head 与锚都原封不动。此时报 `anchor_unlinked`(WARN),结论词降为 INTERNALLY CONSISTENT |
 | **不比**(锚落在窗口外的其它位置) | —— | 什么都不比,也**不报 BREAK**。一个如实记录了别的链位置的锚,对这批 entry 本来就无话可说;拿它的摘要去跟 head 比,等于把一个诚实的锚报成「链被重写了」的证据。报 `anchor_outside_window`(WARN),见 §4 |
-| **链尾倒退** | 锚记的 `seq` 高于 head,且锚**不晚于**这次导出 | 这是**唯一**一种窗口外的锚仍然构成证据的情形:append-only 的链上 `seq` 只增不减,所以链尾比被锚位置更低 = 有条目被删。报 `anchor_mismatch`(BREAK),与 `verify_chain --anchor-file` 一致 |
+| **链尾倒退 / 条目变少** | 锚记的 `seq` 高于 head,**或**锚数到的 `entry_count` 多于 head,且锚**不晚于**这次导出 | 这是窗口外的锚仍然构成证据的情形:append-only 的链上两者都只增不减,所以变小 = 有条目被删。`entry_count` 还能抓住 `seq` 抓不到的**链中间删一条**。报 `anchor_mismatch`(BREAK),与 `verify_chain --anchor-file` 一致 |
 | **结构校验** | `schema` 标签是 `evidence-bundle/v1`、`content_mode` 合法、`anchors[]` 的 `kind` 在枚举内、`rfc3161` 锚该有的字段都在 | **不校验 JSON Schema**。`verify_bundle` 只手查上面这几项,从不拿文档去比 `evidence-bundle-v1.schema.json` —— 本包零新增运行时依赖,`jsonschema` 只在 dev 组里给一致性测试用。一份违反已发布契约的文档照样能验过。**也不做密码学验签**,见 §4 |
 
 **bundle 自身不是防篡改的**:它是一份可以被任意编辑的 JSON。它的价值在于
@@ -102,7 +102,8 @@ algo v1 的哈希信封**包含内容字段**(`input_summary` / `output_parsed` 
 **结论词有三档,不是两档。** `VERIFIED` 只在**链段连续**且**有锚覆盖了其中的
 entry** 时才给;缺任一条就降为 `INTERNALLY CONSISTENT` —— 重链一遍的 bundle 内部
 也是自洽的,这个词说的正是"只查到这一步"。按 `--trace-ids` 挑几条不相邻的 trace
-导出是**合法且常见**的用法,它产生的是 `chain_gap`(WARN),**不是** `link_broken`:
+导出是**合法且常见**的用法,它产生的是 `chain_gap`(WARN),**不是** `link_broken`
+(链中间真被删掉一条时,靠的是上面 §4 情形 0 的 `entry_count` 比对,不是这条):
 跨着断口比 `prev_hash` 会把工具自己的输出报成篡改,而那会训练收件人忽略真正要紧
 的那条 finding。断口两侧的 entry 彼此没有链接关系,覆盖其中一段的锚也说明不了另一段。
 
@@ -172,7 +173,18 @@ entry** 时才给;缺任一条就降为 `INTERNALLY CONSISTENT` —— 重链一
 
 **锚怎么被用来比对**(所有 kind 一致,与验不验签无关):
 
-先看锚记的 `seq` 落在哪儿,再决定它能跟什么比 —— **不能比的就不比**:
+**0. 先看 `entry_count`,再看 `seq` 落在哪儿。** append-only 的链上条目数只增不减,
+所以锚数到的条目数比这次导出多 = **有条目被删了**,与锚落在哪儿无关。这是唯一能
+抓住**链中间**被删一条的信号 —— 中间删一条时,链尾 `seq` 和链头 `row_hash` **都不变**,
+所有基于 `seq` 的检查都会通过,锚甚至照样"绑得上"链头那条 entry,而 `verify_chain`
+在同一个库上是失败的。报 `anchor_mismatch`(BREAK)。
+
+两个不报的前提:锚的 `exported_at` **晚于** head 的(那它数得多是应该的);或者
+两边的 `entry_count` 缺失/不是整数(那是**没有信号**,不是"从宽处理" —— 与情形 4
+里 `exported_at` 缺失不同,那里 `seq` 已经先说明出事了,这里没有任何东西需要从严)。
+`seq` 同时也倒退时交给情形 4,它的文案能指出具体位置。
+
+再看锚记的 `seq` 落在哪儿,决定它能跟什么比 —— **不能比的就不比**:
 
 1. **落在窗口内**(`seq` 是 bundle 携带的某条 entry)→ 和**那条 entry** 的
    `row_hash` 比。不符 = `anchor_mismatch`(BREAK);相符计入

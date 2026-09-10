@@ -191,7 +191,12 @@ untouched, and the frozen 29-symbol public surface is unchanged.
     removed — truncation, reported as `anchor_mismatch` (BREAK), the same
     verdict `verify_chain --anchor-file` gives on that database. A missing
     `exported_at` is treated as the dangerous case, so stripping a field cannot
-    downgrade a truncation. `anchor_unlinked` now fires only when an anchor
+    downgrade a truncation. Independently of seq, an anchor that counted MORE
+    chain entries than the export found is also a BREAK: entry count only grows
+    on an append-only chain, and this is the one signal that survives a
+    MID-chain deletion, which leaves both the tip seq and the head hash intact
+    and would otherwise read as a benign `chain_gap` while `verify_chain` fails
+    on the same database. `anchor_unlinked` now fires only when an anchor
     really was compared against the head, since "compared only against
     chain.head" was untrue for the others, and `summary()` never says an
     uncompared anchor "matches" anything.
