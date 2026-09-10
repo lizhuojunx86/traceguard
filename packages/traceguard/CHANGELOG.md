@@ -300,11 +300,18 @@ untouched, and the frozen 29-symbol public surface is unchanged.
   `list` and `drift`; the capability loss was the whole CLI). Escaped,
   plus `tests/test_cli_help.py`: every subcommand of both CLIs, discovered from
   the parser rather than a hardcoded list, must render `--help` and exit 0, and
-  a static guard rejects an unescaped `%` at authoring time on any version.
+  a static guard rejects an unescaped `%` at authoring time on any version. The
+  guard reads argument `help=`, `add_parser(help=)` (stored out of
+  `parser._actions`, and the one placement this bug has ever used) and
+  `description`/`epilog` where `%(prog)` makes argparse format them — not a
+  plain description, where a bare `%` is legal and `%%` would render literally.
 - CI runs the SDK suite on **3.12, 3.13 and 3.14** (`fail-fast: false`), not
   3.12 alone. `requires-python` is `>=3.11`, so every supported version but one
   went unexercised — which is exactly how the `%` above reached a release-shaped
-  branch. Both new legs are green. The matrix runs under its own job id with an
+  branch. Both new legs pass **locally**: 1029 passed / 3 skipped on 3.12, 3.13
+  and 3.14, each in a throwaway environment built with the same bare `uv sync`
+  the CI job uses. They have not run in CI — this branch has never been pushed,
+  so no such run exists to cite. The matrix runs under its own job id with an
   aggregate job named `traceguard-sdk` gating on it: `main`'s branch protection
   requires that status context verbatim, and GitHub reports a matrix job under
   its rendered name, so putting the matrix on that id directly would have meant

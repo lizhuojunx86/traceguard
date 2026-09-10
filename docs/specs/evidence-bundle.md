@@ -61,7 +61,7 @@
 | **链头对锚**(**仅当**锚记的 `seq` 正好是 `chain.head.seq`,或旧锚没记 `seq`) | 锚等于 bundle 声明的 `chain.head` | **什么都不证明**:`chain.head` 是 bundle 自己的字段,重写内容再重链整段,head 与锚都原封不动。此时报 `anchor_unlinked`(WARN),结论词降为 INTERNALLY CONSISTENT |
 | **不比**(锚落在窗口外的其它位置) | —— | 什么都不比,也**不报 BREAK**。一个如实记录了别的链位置的锚,对这批 entry 本来就无话可说;拿它的摘要去跟 head 比,等于把一个诚实的锚报成「链被重写了」的证据。报 `anchor_outside_window`(WARN),见 §4 |
 | **链尾倒退** | 锚记的 `seq` 高于 head,且锚**不晚于**这次导出 | 这是**唯一**一种窗口外的锚仍然构成证据的情形:append-only 的链上 `seq` 只增不减,所以链尾比被锚位置更低 = 有条目被删。报 `anchor_mismatch`(BREAK),与 `verify_chain --anchor-file` 一致 |
-| **结构校验** | bundle 符合 schema;`rfc3161` 锚的结构完整 | **不做密码学验签**,见 §4 |
+| **结构校验** | `schema` 标签是 `evidence-bundle/v1`、`content_mode` 合法、`anchors[]` 的 `kind` 在枚举内、`rfc3161` 锚该有的字段都在 | **不校验 JSON Schema**。`verify_bundle` 只手查上面这几项,从不拿文档去比 `evidence-bundle-v1.schema.json` —— 本包零新增运行时依赖,`jsonschema` 只在 dev 组里给一致性测试用。一份违反已发布契约的文档照样能验过。**也不做密码学验签**,见 §4 |
 
 **bundle 自身不是防篡改的**:它是一份可以被任意编辑的 JSON。它的价值在于
 *内部一致性可以被重算* —— 改了里面的 trace 内容,`full` 模式重算就对不上;改了
@@ -125,11 +125,12 @@ entry** 时才给;缺任一条就降为 `INTERNALLY CONSISTENT` —— 重链一
 "内容已验证"是本格式最容易犯、后果最大的误读,所以 `verify_bundle` 在
 `hash_only` 下永远至少带一条 INFO finding,`summary()` 也换一套措辞。
 
-`verify_bundle` 产出的 finding 分两类,读的时候必须分清:
+`verify_bundle` 产出的 finding 分两类,读的时候必须分清。下表**穷举**了它可能产出的
+全部 13 个 kind —— 收件人拿到一条 finding,一定能在这里查到它属于哪一类:
 
 | kind | 来源 | 冻结状态 |
 |---|---|---|
-| `hash_mismatch` / `link_broken` / `anchor_mismatch` | audit 的 finding kind,原样复用 | 进 `FINDING_SEVERITY`,受 §6.6 kind 冻结约束 |
+| `hash_mismatch` / `link_broken` / `anchor_mismatch` / `missing_trace` / `missing_cost_event` | audit 的 finding kind,原样复用。后两个出现在 `full` 模式下:entry 引用了一条 bundle 没带的 trace 或 cost event,于是那条 entry 的哈希**无法重算**(§1 `cost_events` 那一行说的就是这件事) | 进 `FINDING_SEVERITY`,受 §6.6 kind 冻结约束 |
 | `content_not_recomputed`(INFO) | bundle 层:声明这次验证没碰内容 | **不进** `FINDING_SEVERITY`,不受 §6.6 约束 |
 | `anchor_malformed`(BREAK) | bundle 层:`anchors[]` 条目结构不合法(见 §4) | 同上 |
 | `anchor_pending`(WARN) | bundle 层:OTS 证明仍是 pending(见 §4) | 同上 |
