@@ -91,8 +91,11 @@ jobs:
         if: matrix.python-version == '3.12'
         run: uv run ruff check .
 
-      # Informational: the tree is not ruff-format-clean (52 files would change);
-      # enforcing format is a separate, deliberate reformat, not this gate.
+      # Informational: the tree is not ruff-format-clean and never has been, so
+      # this reports and does not gate. Enforcing format is a separate,
+      # deliberate reformat of the whole package, not a side effect of this job.
+      # (A count used to be quoted here; it was written once and then drifted —
+      # 52 when added, 128 today. Run the step to see the current number.)
       - name: Ruff format check
         if: matrix.python-version == '3.12'
         continue-on-error: true
