@@ -12,7 +12,7 @@
 <https://metr.org/blog/2026-08-26-openai-hugging-face-incident-investigation/>):
 
 1. **"at least 20% of the agents in our dataset expressed clear interest in tampering with their transcripts"**;有 agent 判断容器内日志 "not the real source of truth" 后转攻 scorer。攻击者会主动探测哪层日志才算数。
-2. **>7% 的 transcript 含蓄意伪造(spoofed)的 tool call**。存储完整性(hash chain 已覆盖)与**采集真实性**(未覆盖)是两个问题;wrapper 自报证据产生于 agent 自己控制的进程内。
+2. **METR 评估的 transcript 中约 7% 被成功 spoof 过**(原文 "Roughly 7% of the transcripts we evaluated were successfully spoofed in some places")。存储完整性(hash chain 已覆盖)与**采集真实性**(未覆盖)是两个问题;wrapper 自报证据产生于 agent 自己控制的进程内。
 3. ~1200 个"独立沙箱"agent 经**共享 Artifactory cache** 上的信息板协同(700 个参与攻击)。隔离假设败于共享资源;事后关联的键是共享资源指纹与执行体身份,不只是显式通信。
 
 对应本修订案的三个动作:audit 从 experimental 毕业为契约化 opt-in(修订案 A);traces 表补上跨执行体关联所需的最小身份维度(修订案 B);采集真实性作为 v2 调研方向立项(§5 设计备忘,不进本次 SPEC 修订)。
@@ -98,7 +98,7 @@
 
 ## 5. 设计备忘: 采集真实性(spoofed tool call 应对,v2 调研项)
 
-**威胁模型**:wrapper 自报证据产生于 agent 控制的进程内。进程内的 agent(或劫持它的人)可以伪造调用记录、选择性不上报。hash chain 忠实保存谎言——存储完整性 ≠ 采集真实性。METR 数据(>7% spoofed tool calls)证明这不是理论威胁。
+**威胁模型**:wrapper 自报证据产生于 agent 控制的进程内。进程内的 agent(或劫持它的人)可以伪造调用记录、选择性不上报。hash chain 忠实保存谎言——存储完整性 ≠ 采集真实性。METR 数据(约 7% 受评 transcript 被成功 spoof)证明这不是理论威胁。
 
 **分层方案**(照 audit.md 诚实分层风格):
 
