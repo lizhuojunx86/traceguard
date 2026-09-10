@@ -5,12 +5,15 @@
     python -m traceguard.sources --db sqlite:///traces.db enable
     python -m traceguard.sources --db sqlite:///traces.db list [--source-uri PATTERN]
                                  [--since ISO] [--verdict V] [--limit N] [--json]
+    python -m traceguard.sources --db sqlite:///traces.db drift [--source-uri PATTERN]
+                                 [--since ISO] [--json]
 
 ``--db`` is a top-level option and MUST precede the subcommand (argparse hands
 everything after the subcommand to the subparser, which does not define it).
 It falls back to ``TRACEGUARD_DB_URL`` then the make_engine default.
 ``list`` exits 1 when any listed snapshot carries an actionable verdict
-(``anachronistic`` / ``unverifiable``), so it can gate a CI step.
+(``anachronistic`` / ``unverifiable``), so it can gate a CI step. ``drift``
+exits 1 when at least one source changed its content between retrievals.
 """
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ from datetime import datetime, timezone
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from traceguard.sources.drift import compute_drift, drift_to_dict
 from traceguard.sources.models import SourceSnapshotRow, ensure_source_tables
 from traceguard.sources.validate import SourceVerdict
 from traceguard.store.models import make_engine
@@ -91,6 +95,19 @@ def main(argv: list[str] | None = None) -> int:
     p_list.add_argument("--limit", type=int, default=50, help="max rows (default 50)")
     p_list.add_argument("--json", action="store_true", help="JSON lines instead of a table")
 
+    p_drift = sub.add_parser(
+        "drift",
+        help="which sources changed their content between retrievals (with a Wilson 95% CI)",
+    )
+    p_drift.add_argument(
+        "--source-uri",
+        default=None,
+        metavar="PATTERN",
+        help="SQL LIKE pattern against source_uri (use %% as the wildcard)",
+    )
+    p_drift.add_argument("--since", default=None, metavar="ISO", help="retrieved_at >= this time")
+    p_drift.add_argument("--json", action="store_true", help="one JSON object instead of a table")
+
     args = parser.parse_args(argv)
     engine = make_engine(args.db)
 
@@ -139,6 +156,50 @@ def main(argv: list[str] | None = None) -> int:
                 "(anachronistic / unverifiable)"
             )
         return 1 if actionable else 0
+
+    if args.command == "drift":
+        since = None
+        if args.since:
+            try:
+                since = _parse_iso(args.since)
+            except ValueError as exc:
+                print(f"--since must be ISO 8601: {exc}", file=sys.stderr)
+                return 2
+        report = compute_drift(engine, since=since, source_uri=args.source_uri)
+
+        if args.json:
+            print(json.dumps(drift_to_dict(report), sort_keys=False, indent=2))
+            return 1 if report.sources_drifted else 0
+
+        print(report.summary())
+        for src in report.sources:
+            if not src.comparable:
+                continue
+            marker = "CHANGED" if src.drifted else "stable "
+            print(
+                f"  [{marker}] {src.source_uri}  "
+                f"{src.observations} retrieval(s), {src.distinct_hashes} distinct "
+                f"digest(s), {src.changes} change(s)"
+            )
+            if src.drifted:
+                for r in src.retrievals:
+                    print(
+                        f"      {r.retrieved_at.isoformat()}  {r.content_hash[:16]}  "
+                        f"[{r.verdict}] trace={r.trace_id}"
+                    )
+        if report.sources_single_observation:
+            # Named, never silently folded away: a source seen once cannot have
+            # drifted and cannot be shown not to have.
+            print(
+                f"  ({report.sources_single_observation} source(s) retrieved only once "
+                "are excluded from the rate — one observation is not a comparison)"
+            )
+        if report.snapshots_unchecked:
+            print(
+                f"  ({report.snapshots_unchecked} snapshot(s) with verdict 'unchecked' "
+                "are not observations and were not counted)"
+            )
+        return 1 if report.sources_drifted else 0
 
     return 2  # pragma: no cover - argparse enforces the subcommand set
 

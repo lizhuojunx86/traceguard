@@ -53,6 +53,14 @@ from __future__ import annotations
 
 from sqlalchemy.engine import Engine
 
+from traceguard.sources.drift import (
+    OBSERVED_VERDICTS,
+    DriftReport,
+    Retrieval,
+    SourceDrift,
+    compute_drift,
+    drift_to_dict,
+)
 from traceguard.sources.models import (
     SOURCE_KINDS,
     SourceSnapshotRow,
@@ -66,6 +74,7 @@ from traceguard.sources.record import (
     from_http_response,
     from_mcp_result,
 )
+from traceguard.sources.stats import wilson_interval
 from traceguard.sources.validate import (
     REFERENCE_KIND,
     SourceVerdict,
@@ -101,6 +110,14 @@ __all__ = [
     "SourceVerdict",
     "validate_source_snapshot",
     "REFERENCE_KIND",
+    # drift (A5)
+    "compute_drift",
+    "drift_to_dict",
+    "DriftReport",
+    "SourceDrift",
+    "Retrieval",
+    "OBSERVED_VERDICTS",
+    "wilson_interval",
     # ORM
     "SourceSnapshotRow",
 ]
