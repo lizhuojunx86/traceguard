@@ -7,6 +7,80 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [Unreleased]
+
+SPEC v1.1 → **v1.2** (minor). Motivation and compatibility analysis:
+`docs/spec-changes/2026-09-10-source-snapshot-approval-binding.md`. No existing
+signature moves, the normalize algorithm and the audit algo v1 envelope are
+untouched, and the frozen 29-symbol public surface is unchanged.
+
+### Added
+
+- `traceguard.sources` — **experimental** opt-in extension (SPEC v1.2 §6.6):
+  point-in-time correctness for *retrieved data*, the one thing the four
+  invariants did not cover. A pipeline could use the right model, the right
+  prompt and the right `feature_as_of`, be fed a vendor value rewritten into
+  existence weeks later, and pass every invariant while being wrong. Published
+  measurement of exactly that: 41.4% of vendor `epsActual` values differ
+  between first sight and today, 15.3% flip a binary entry decision
+  (`analysis/eps_revision.py` recomputes both offline).
+  - New contract-external table `source_snapshots` (own `DeclarativeBase`;
+    created only by `sources.enable(engine)`, never by `make_engine`).
+    Indexed on `trace_id`, `source_uri`, `content_hash`, `retrieved_at` — the
+    last two are what answer "which traces depended on content the source
+    later rewrote?".
+  - `Span.record_source(snapshot, *, strict)` — a NEW method (SPEC §6.3
+    minor); no existing `Span` signature changes. `strict` is keyword-only
+    with no default, matching `select_model` discipline.
+  - `SourceVerdict`: `verified` / `anachronistic` / `unverifiable` /
+    `unchecked`, following the `routing_integrity` four-way precedent. When a
+    source states no `published_at`, strict mode refuses ("cannot establish
+    that the source existed at feature_as_of") and loose mode records
+    `unverifiable` — being unable to prove existence is not proof of absence,
+    and neither is it a pass. `unchecked` (no `feature_as_of` at the call
+    site) stays distinct from `unverifiable` (the source would not say).
+  - Builders: `content_digest` (raw bytes, no normalization — whitespace and
+    key order are part of what was served), `from_http_response` (duck-typed;
+    imports neither httpx nor requests), `from_mcp_result` (an MCP result is
+    already parsed, so the digest covers §4.4 canonical bytes and
+    `normalizer_id` says so). `normalized_hash` and `normalizer_id` are
+    required together, `<name>@<version>` — an unnamed normalizer's digest is
+    not comparable, and worse, it looks comparable.
+  - **No retrieved content is stored** — digests and metadata only. Contract
+    intent, not a mode; archiving the bytes is the consumer's business, joined
+    on `content_hash`.
+  - CLI: `python -m traceguard.sources --db URL enable|list` (`list` exits 1
+    on any actionable verdict, so it can gate CI).
+  - Honest layering, including what a snapshot cannot prove (that the host
+    actually fetched the bytes from `source_uri`; that `published_at` is
+    true): `docs/sources.md`.
+  - Its API surface is deliberately **not** in the contract-guard job while
+    experimental — the fields have to survive real use first (revision
+    decision D9; revisit after two minors).
+- SPEC §5 invariant 3 now names retrieved external data in its scope, with
+  `source_snapshots.published_at` as its `valid_from`. No new invariant: the
+  wording was already a general principle, and the addition is one instance
+  plus a behaviour rule for a missing input (§6.4 minor).
+- SPEC §6.6 registers `traceguard.approval` as **planned, not implemented**
+  (interface, single-use `approval_id`, float-free payloads). Implementation
+  is gated on a real consumer.
+
+### Fixed
+
+- The sources write path's failure branch no longer inspects the *engine* to
+  work out why a snapshot did not land — it inspects the session's own
+  connection. Opening a second connection mid-transaction returns it to the
+  pool, and the pool resets a returned connection with a ROLLBACK, so on a
+  shared-connection SQLite engine (`:memory:`) the diagnostic destroyed the
+  very trace it was reporting as preserved. Caught by the fail-open tests
+  before release.
+
+### Known gaps
+
+- The OTel exporter does not map `source_snapshots` — a trace exported to OTLP
+  carries no record of its sources. Deferred deliberately: the mapping should
+  follow the fields settling, not lead it.
+
 ## [1.5.0] - 2026-08-28
 
 SemVer **minor**, on two counts: SPEC v1.0 → v1.1 (two new
