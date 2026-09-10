@@ -66,17 +66,32 @@ CONTENT_NOT_RECOMPUTED = "content_not_recomputed"
 #: but covers a chain position this bundle does not carry, so it corroborates
 #: nothing about the entries inside.
 ANCHOR_UNLINKED = "anchor_unlinked"
+#: Bundle-level: the entries carried are not consecutive in the chain, so
+#: linkage cannot connect the runs on either side of the gap.
+CHAIN_GAP = "chain_gap"
+#: Bundle-level: an entry whose canonicalization failed at write time. The
+#: chain hashed an error placeholder, so recomputing it proves the placeholder
+#: is intact and says nothing about the trace content.
+CONTENT_UNATTESTED = "content_unattested"
+#: Bundle-level: fields and tables the bundle carries that no hash covers.
+CARRIED_UNATTESTED = "carried_unattested"
 
 #: traces columns carried in a bundle. The content subset is what hash_only
 #: strips; everything else is metadata a recipient needs to make sense of the
 #: rows (and cost_usd, which was never in the envelope anyway).
 _TRACE_CONTENT_ONLY: tuple[str, ...] = ("input_summary", "output_parsed", "error_message")
-_TRACE_EXPORT_FIELDS: tuple[str, ...] = TRACE_CONTENT_FIELDS + (
+#: Carried for the recipient's benefit but OUTSIDE the algo v1 hash envelope,
+#: so recomputation says nothing about them and they can be edited under a
+#: passing verify. Named in the `carried_unattested` finding rather than left
+#: for the reader to work out by diffing two tuples.
+_TRACE_FIELDS_OUTSIDE_ENVELOPE: tuple[str, ...] = (
     "agent_id",
     "session_id",
     "provider_response_id",
     "cost_usd",
 )
+
+_TRACE_EXPORT_FIELDS: tuple[str, ...] = TRACE_CONTENT_FIELDS + _TRACE_FIELDS_OUTSIDE_ENVELOPE
 
 _CHAIN_ENTRY_FIELDS: tuple[str, ...] = (
     "seq",
@@ -149,6 +164,12 @@ class BundleVerifyResult:
     #: against the bundle's own ``chain.head`` field. Only these tie the
     #: included entries to something the bundle's author did not write.
     anchors_binding: int = 0
+    #: entries whose seq run is unbroken. A sparse selection (``--trace-ids``
+    #: picking non-adjacent traces) is legitimate but cannot be linkage-checked
+    #: across its gaps.
+    contiguous: bool = True
+    #: entries chained over a canonicalization error rather than over content.
+    content_unattested: int = 0
     findings: list[ChainFinding] = field(default_factory=list)
 
     @property
@@ -179,7 +200,9 @@ class BundleVerifyResult:
         # anchor-bound bundle from a merely self-consistent one: a rewrite that
         # re-chains the segment reproduces every internal hash, so "VERIFIED"
         # is a claim only an anchor covering these entries can support.
-        verdict = "VERIFIED" if self.anchors_binding else "INTERNALLY CONSISTENT"
+        verdict = "VERIFIED" if (self.anchors_binding and self.contiguous) else (
+            "INTERNALLY CONSISTENT"
+        )
         return (
             f"bundle {verdict} (full): {self.entries_checked} entry/entries recomputed, "
             f"{self.content_recomputed} against included trace content, "
@@ -195,6 +218,11 @@ class BundleVerifyResult:
         entry the bundle carries — otherwise a self-consistent rewrite of the
         segment leaves both untouched.
         """
+        if self.anchors_binding and not self.contiguous:
+            return (
+                f"{self.anchors_binding} anchor(s) bind part of this selection, which has "
+                "gaps — an anchor covers only the unbroken run it sits in"
+            )
         if self.anchors_binding:
             return f"{self.anchors_binding} anchor(s) bind these entries"
         if self.anchors_checked:
@@ -487,16 +515,43 @@ def verify_bundle(bundle: dict) -> BundleVerifyResult:
             )
         )
 
-    prev: str | None = None
+    # Only CHAIN-ADJACENT entries can be linkage-checked. A bundle selected by
+    # trace_ids is routinely sparse, and comparing across a gap reported the
+    # export itself as tampering — the tool calling its own output evidence of
+    # a break. Gaps are named instead, because "these two entries are not
+    # linked to each other" is the true statement.
+    gaps: list[str] = []
+    prev_hash: str | None = None
+    prev_seq: int | None = None
     for entry in entries:
-        if prev is not None and entry["prev_hash"] != prev:
+        seq = entry.get("seq")
+        adjacent = prev_seq is not None and seq is not None and seq == prev_seq + 1
+        if prev_hash is not None and adjacent and entry["prev_hash"] != prev_hash:
             result.findings.append(
                 ChainFinding(
-                    "link_broken", BREAK, entry.get("seq"), entry.get("trace_id"),
-                    f"prev_hash {entry['prev_hash']} != the previous entry's row_hash {prev}",
+                    "link_broken", BREAK, seq, entry.get("trace_id"),
+                    f"prev_hash {entry['prev_hash']} != the previous entry's row_hash "
+                    f"{prev_hash}",
                 )
             )
-        prev = entry["row_hash"]
+        elif prev_seq is not None and not adjacent:
+            gaps.append(f"{prev_seq}->{seq}")
+        prev_hash = entry["row_hash"]
+        prev_seq = seq
+
+    if gaps:
+        result.contiguous = False
+        result.findings.append(
+            ChainFinding(
+                CHAIN_GAP, WARN, None, None,
+                f"the entries carried here are not consecutive in the chain ({len(gaps)} "
+                f"gap(s): {', '.join(gaps)}), which is what selecting individual traces "
+                "produces. Linkage was checked only WITHIN each unbroken run: entries on "
+                "either side of a gap are not tied to each other, and an anchor covering "
+                "one run says nothing about another. Export a contiguous window if the "
+                "recipient needs the runs connected",
+            )
+        )
 
     if content_mode == "full":
         for entry in entries:
@@ -558,7 +613,14 @@ def verify_bundle(bundle: dict) -> BundleVerifyResult:
                     )
                 )
             elif entry["entry_type"] in ("write", "backfill"):
-                result.content_recomputed += 1
+                if entry["canon_status"] == "failed":
+                    # The chain hashed an error placeholder because the content
+                    # could not be canonicalized at write time. Recomputing it
+                    # proves the placeholder is intact; the trace content it
+                    # stands in for was never covered by any hash.
+                    result.content_unattested += 1
+                else:
+                    result.content_recomputed += 1
     else:
         result.findings.append(
             ChainFinding(
@@ -582,6 +644,37 @@ def verify_bundle(bundle: dict) -> BundleVerifyResult:
                     f"entry {last} at the same seq",
                 )
             )
+    unattested: list[str] = [
+        f"trace fields outside the algo v1 envelope ({', '.join(_TRACE_FIELDS_OUTSIDE_ENVELOPE)})"
+    ]
+    if bundle.get("source_snapshots"):
+        unattested.append(
+            f"{len(bundle['source_snapshots'])} source_snapshots row(s) — "
+            "traceguard.sources is not chained at all (SPEC v1.2 D9)"
+        )
+    if bundle.get("approvals"):
+        unattested.append(f"{len(bundle['approvals'])} approvals row(s)")
+    result.findings.append(
+        ChainFinding(
+            CARRIED_UNATTESTED, INFO, None, None,
+            "this bundle carries data that NO hash covers, and a passing verify says "
+            "nothing about it: " + "; ".join(unattested) + ". Editing any of it leaves "
+            "every check in this result green",
+        )
+    )
+
+    if result.content_unattested:
+        result.findings.append(
+            ChainFinding(
+                CONTENT_UNATTESTED, WARN, None, None,
+                f"{result.content_unattested} entry/entries were chained over a "
+                "canonicalization ERROR, not over trace content: at write time the content "
+                "could not be canonicalized, so the hash covers an error placeholder. Those "
+                "entries recompute correctly and still attest nothing about what the trace "
+                "said — they are excluded from the recomputed-against-content count",
+            )
+        )
+
     checked, binding, anchor_findings = _check_anchors(bundle, head_hash, entries)
     result.anchors_checked = checked
     result.anchors_binding = binding

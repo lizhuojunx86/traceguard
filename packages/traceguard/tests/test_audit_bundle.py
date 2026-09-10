@@ -224,6 +224,98 @@ def test_a_rechained_full_history_is_caught_by_the_genesis_seed(chained):
     assert any(f.kind == "link_broken" and f.seq == 1 for f in result.findings)
 
 
+def test_a_sparse_trace_id_selection_reports_gaps_not_breaks(chained):
+    """`--trace-ids` on non-adjacent traces is a documented, ordinary use.
+
+    It used to produce a bundle that failed its own verify with link_broken —
+    the tool reporting its own output as evidence of tampering, which trains a
+    recipient to ignore exactly the finding that matters.
+    """
+    tg = Tracer(engine=chained)
+    for i in range(3):
+        with tg.span("p", "c", "llm_complete", feature_as_of=NOW) as span:
+            span.record_input({"q": f"more {i}"})
+
+    with Session(chained) as s:
+        ids = list(s.execute(select(Trace.trace_id).order_by(Trace.trace_id)).scalars())
+    sparse = [ids[0], ids[2], ids[4]]
+
+    result = verify_bundle(export_bundle(chained, trace_ids=sparse))
+    assert result.ok, [f"{f.kind}: {f.detail}" for f in result.findings]
+    assert not result.contiguous
+    assert not [f for f in result.findings if f.kind == "link_broken"]
+    gap = [f for f in result.findings if f.kind == "chain_gap"]
+    assert len(gap) == 1 and "not consecutive" in gap[0].detail
+    # ...and a gapped selection is never VERIFIED, even with an anchor.
+    bundle = export_bundle(chained, trace_ids=sparse)
+    bundle["anchors"] = [anchor_record(audit.export_anchor(chained), location="/mnt/a")]
+    assert "VERIFIED" not in verify_bundle(bundle).summary()
+
+
+def test_a_contiguous_selection_still_linkage_checks(chained):
+    """The gap rule must not switch linkage off for an ordinary window."""
+    result = verify_bundle(export_bundle(chained))
+    assert result.contiguous
+    assert not [f for f in result.findings if f.kind == "chain_gap"]
+
+    bundle = export_bundle(chained)
+    bundle["chain"]["entries"][1]["prev_hash"] = "0" * 64
+    broken = verify_bundle(bundle)
+    assert not broken.ok
+    assert any(f.kind == "link_broken" for f in broken.findings)
+
+
+def test_the_bundle_names_what_it_carries_without_attesting(chained):
+    result = verify_bundle(export_bundle(chained))
+    carried = [f for f in result.findings if f.kind == "carried_unattested"]
+    assert len(carried) == 1 and carried[0].severity == INFO
+    detail = carried[0].detail
+    for outside in ("agent_id", "session_id", "provider_response_id", "cost_usd"):
+        assert outside in detail
+    assert "source_snapshots" in detail  # the fixture records one
+    assert "NO hash covers" in detail
+
+
+def test_a_canon_failed_entry_is_not_counted_as_content_evidence(chained):
+    """Its hash covers an error placeholder, so recomputing it proves the
+    placeholder is intact and nothing about what the trace said."""
+    bundle = export_bundle(chained)
+    entry = bundle["chain"]["entries"][0]
+    assert entry["canon_status"] != "failed"  # baseline
+
+    result = verify_bundle(bundle)
+    assert result.content_recomputed == 3 and result.content_unattested == 0
+
+    # Re-chain one entry over a canonicalization error, the way the writer does.
+    from traceguard.audit.bundle import _recompute
+    from traceguard.audit.canonical import canon_error_content
+
+    entry["canon_status"] = "failed"
+    entry["canon_error"] = "TypeError: not serializable"
+    entry["row_hash"] = _recompute(entry, canon_error_content(entry["canon_error"]))
+    prev = entry["row_hash"]
+    for nxt in bundle["chain"]["entries"][1:]:
+        nxt["prev_hash"] = prev
+        tr = {t["trace_id"]: t for t in bundle["traces"]}[nxt["trace_id"]]
+        from traceguard.audit import TRACE_CONTENT_FIELDS
+        from traceguard.audit.bundle import _parse_dt
+
+        nxt["row_hash"] = _recompute(
+            nxt,
+            {
+                n: _parse_dt(tr.get(n)) if n in ("feature_as_of", "invoked_at") else tr.get(n)
+                for n in TRACE_CONTENT_FIELDS
+            },
+        )
+        prev = nxt["row_hash"]
+
+    after = verify_bundle(bundle)
+    assert after.content_unattested == 1
+    assert after.content_recomputed == 2  # not 3
+    unattested = [f for f in after.findings if f.kind == "content_unattested"]
+    assert len(unattested) == 1 and "error placeholder" in unattested[0].detail
+
+
 # ── tamper detection: what each mode catches ────────────────────────────────
 
 def test_full_mode_detects_changed_trace_content(chained):

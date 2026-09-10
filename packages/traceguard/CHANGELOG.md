@@ -151,6 +151,24 @@ untouched, and the frozen 29-symbol public surface is unchanged.
     common case: widen the window or anchor again while it is the chain tip.
     Related: an entry at `seq` 1 must seed from `GENESIS_PREV_HASH`, else a
     whole re-chained history verifies from an attacker-chosen starting point.
+  - **A sparse selection is not tampering.** `--trace-ids` on non-adjacent
+    traces produced a bundle that failed its own verify with `link_broken`,
+    because linkage was compared across chain positions the bundle does not
+    carry. Linkage is now checked only between chain-ADJACENT entries and the
+    holes are reported as `chain_gap` (WARN), which is the true statement: the
+    runs either side of a gap are not tied to each other, and an anchor covering
+    one says nothing about another. A gapped selection is never `VERIFIED`.
+  - **What the bundle carries but nothing attests is now listed, every time**
+    (`carried_unattested`, INFO): the trace fields outside the algo v1 envelope
+    (`agent_id`, `session_id`, `provider_response_id`, `cost_usd`),
+    `source_snapshots` (`traceguard.sources` is not chained at all — SPEC v1.2
+    D9), and `approvals`. Editing any of it leaves every check green, and that
+    belonged in the output rather than in a reader's diff of two field tuples.
+  - An entry chained with `canon_status='failed'` covers an **error
+    placeholder**, not trace content, so recomputing it proves the placeholder
+    is intact and nothing more. Those entries were being counted in "N against
+    included trace content"; they are now counted separately and reported as
+    `content_unattested` (WARN).
   - **Anchors are structure-checked, never verified.** An `rfc3161` anchor is
     reported as a well-formed token that is present, not as valid — verification
     needs a trust root the recipient chooses, and this package adds no
