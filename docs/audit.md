@@ -229,7 +229,7 @@ audit.AnchorScheduler(engine, sinks, interval_s=300).start()   # daemon thread; 
 | `git-note:REPO` | 锚进了仓库对象库,与代码历史绑在一起 | 比仓库历史本身更强的东西。本地 note 可被删改;**要把信任根挪出主机必须 push 到一个 DB 写入者无法 force-push 的 remote** | git 仓库 + 那个 remote 的管理者 | `git notes append` 非零退出即 `AnchorSinkError` |
 | `webhook:URL` | 锚被投递给了那个接收方 | 接收方拿它做了什么。**投递不是保存**——真正的保证在接收端 | 你自己运维的那个接收方 | 非 2xx 或传输错误即 `AnchorSinkError` |
 | `rfc3161`(tg-attest 产出,本包只收录) | 一个 TSA 在某时刻见过这个 digest | 无——**本包不验签**。结构完整 ≠ token 有效 | 那个 TSA 与它的 CA 链;验签的信任根由收件人自己选 | 结构不全在 bundle 校验里是 BREAK |
-| **`ots:DIR`**(v1.2,extra `anchors`) | **complete 时**:digest 在某个比特币区块之前已存在。这是唯一一个不落在"你得信某一方"上的锚 | **pending 时:什么都不证明**——那只是日历服务器的承诺。complete 也**不给精确时刻**:区块时间有分钟到小时级的不确定性 | 比特币链;完整验证需要一个比特币节点,否则你是在信区块浏览器或日历服务器。**traceguard 两者都不做** | 所有日历都不可达即 `AnchorSinkError`,且**不写出任何文件**(半个锚比没有锚更糟) |
+| **`ots:DIR`**(v1.2,extra `anchors`) | 分得清 **pending** 与 **complete**。complete 时:证明文件**声称** digest 在某个比特币区块之前已存在——经比特币节点验过之后,这是唯一一个不落在"你得信某一方"上的锚 | **pending 时:什么都不证明**——那只是日历服务器的承诺。**complete 本身也不是本包证明的**:不走 merkle 路径、不取区块头,手写一个 `.ots` 同样判 complete。complete 也**不给精确时刻**:区块时间有分钟到小时级的不确定性 | 比特币链;完整验证需要一个比特币节点(`ots verify`),否则你是在信区块浏览器或日历服务器。**traceguard 两者都不做** | 所有日历都不可达即 `AnchorSinkError`,且**不写出任何文件**(半个锚比没有锚更糟) |
 | `rekor:`(**未实现**,设计见下) | — | — | — | — |
 
 **多一种锚不改变暴露窗口。** 边界声明 1 的措辞不因此放松:OTS 让"链头在 T 时刻已存在"

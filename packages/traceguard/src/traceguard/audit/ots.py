@@ -48,6 +48,11 @@ DEFAULT_CALENDARS: tuple[str, ...] = (
 
 _log = logging.getLogger("traceguard.audit.ots")
 
+#: Every calendar call is network I/O, and OtsAnchorSink runs inside
+#: AnchorScheduler's daemon thread — an untimed socket there stalls the
+#: cadence indefinitely with nothing in the logs.
+DEFAULT_TIMEOUT = 30.0
+
 PENDING = "pending"
 COMPLETE = "complete"
 
@@ -115,10 +120,13 @@ class OtsProof:
     def describe(self) -> str:
         if self.is_complete:
             return (
-                f"OTS proof COMPLETE: the digest existed before Bitcoin block(s) "
-                f"{list(self.bitcoin_heights)}. Block times carry minutes-to-hours of "
-                "uncertainty, and confirming the block hash needs a Bitcoin node or a "
-                "block explorer you choose to trust — traceguard checks neither."
+                f"OTS proof COMPLETE: the proof CLAIMS the digest existed before Bitcoin "
+                f"block(s) {list(self.bitcoin_heights)}. traceguard does NOT check that "
+                "claim — it reads the attestation and verifies neither the merkle path to "
+                "the block's merkle root nor the block header itself, so a hand-written "
+                ".ots file reads COMPLETE here exactly like a real one. Run `ots verify` "
+                "against a Bitcoin node before relying on it. Even once verified, block "
+                "times carry minutes-to-hours of uncertainty."
             )
         return (
             f"OTS proof PENDING: only calendar-server promises so far "
@@ -133,6 +141,14 @@ def parse_ots_proof(data: bytes | str | os.PathLike[str]) -> OtsProof:
 
     Accepts raw bytes or a path. Structure only: no network, no Bitcoin node,
     no block-hash confirmation.
+
+    **What COMPLETE proves: nothing, on its own.** It reports what the file
+    says, not whether the file is honest — the merkle path is not walked and no
+    block header is fetched, so a fabricated attestation classifies COMPLETE.
+    The classification is worth having because a PENDING proof is not evidence
+    even when genuine, and telling the two apart is the part that can be done
+    with no dependencies. Establishing that a COMPLETE proof is true is `ots
+    verify`'s job and needs a Bitcoin node you choose to trust.
     """
     path: str | None = None
     if isinstance(data, (str, os.PathLike)):
@@ -170,8 +186,10 @@ def verify_ots_proof(proof: OtsProof, anchor: ChainAnchor) -> tuple[bool, str]:
 
     This is a digest comparison, not a cryptographic verification of the
     Bitcoin attestation. A ``True`` here means "this proof is about this
-    anchor"; whether the proof's own claim holds is what a Bitcoin node would
-    answer.
+    anchor" and nothing more; whether the proof's own claim holds is what a
+    Bitcoin node would answer. In particular ``True`` on a COMPLETE proof is
+    not "the anchor existed at that time" — it is "a file claiming so is about
+    this anchor". See :func:`parse_ots_proof`.
     """
     expected = ots_digest(anchor)
     if proof.file_digest != expected:
@@ -203,7 +221,7 @@ class OtsAnchorSink:
 
     directory: str | os.PathLike[str]
     calendars: tuple[str, ...] = DEFAULT_CALENDARS
-    timeout: float = 30.0
+    timeout: float | None = DEFAULT_TIMEOUT
     #: Test seam: a callable(url) -> object with .submit(digest) / .get_timestamp(c).
     calendar_factory: Any = None
     name: str = field(init=False)
@@ -233,7 +251,7 @@ class OtsAnchorSink:
         for url in self.calendars:
             try:
                 remote = self._calendar(url)
-                calendar_ts = remote.submit(digest)
+                calendar_ts = _submit(remote, digest, self.timeout)
                 timestamp.merge(calendar_ts)
                 merged = True
             except Exception as exc:  # noqa: BLE001 - collect, decide after the loop
@@ -252,8 +270,12 @@ class OtsAnchorSink:
         directory.mkdir(parents=True, exist_ok=True)
         stem = self._stem(anchor, digest)
         proof_path = directory / f"{stem}.ots"
-        proof_path.write_bytes(ctx.getbytes())
-        (directory / f"{stem}.json").write_text(anchor.to_json() + "\n", encoding="ascii")
+        # Sidecar first: a digest with no anchor beside it is unreadable, so if
+        # only one of the pair survives a crash it must be the .json. The .ots
+        # is what `proofs()` lists, so writing it last also keeps a half-stored
+        # anchor from being listed as stored.
+        _write_atomic(directory / f"{stem}.json", (anchor.to_json() + "\n").encode("ascii"))
+        _write_atomic(proof_path, ctx.getbytes())
         return proof_path
 
     def proofs(self) -> list[Path]:
@@ -272,11 +294,79 @@ class OtsAnchorSink:
         return ChainAnchor.from_json(sidecar.read_text(encoding="ascii").strip())
 
 
+def _submit(remote: Any, digest: bytes, timeout: float | None) -> Any:
+    """``submit`` with a timeout when the calendar accepts one (see _get_timestamp)."""
+    if timeout is None:
+        return remote.submit(digest)
+    try:
+        return remote.submit(digest, timeout=timeout)
+    except TypeError:
+        return remote.submit(digest)
+
+
+def _write_atomic(path: Path, data: bytes) -> None:
+    """Replace ``path`` in one step.
+
+    upgrade_proof rewrites the only copy of a proof; a partial write there
+    destroys evidence rather than merely failing.
+    """
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
+
+
+def _uri_allowed(uri: str, allowlist: tuple[str, ...]) -> bool:
+    """Match on a path boundary, not a bare prefix.
+
+    ``startswith("https://cal.example")`` also admits
+    ``https://cal.example.attacker.test`` — an allowlist that admits hosts it
+    does not name is not an allowlist.
+    """
+    for allowed in allowlist:
+        if uri == allowed:
+            return True
+        base = allowed if allowed.endswith("/") else allowed + "/"
+        if uri.startswith(base):
+            return True
+    return False
+
+
+def _node_for(timestamp: Any, msg: bytes) -> Any:
+    """The sub-timestamp committing to ``msg``, or None.
+
+    ``Timestamp.merge`` refuses timestamps for a different message, so the
+    calendar's answer has to be merged at the node it answers about.
+    """
+    if timestamp.msg == msg:
+        return timestamp
+    for sub_stamp in timestamp.ops.values():
+        found = _node_for(sub_stamp, msg)
+        if found is not None:
+            return found
+    return None
+
+
+def _get_timestamp(remote: Any, commitment: bytes, timeout: float | None) -> Any:
+    """``get_timestamp`` with a timeout when the calendar accepts one.
+
+    An injected fake (and older releases) may not take the keyword; a network
+    call with no timeout inside the anchor scheduler's daemon thread is the
+    thing worth avoiding, so try with it and fall back.
+    """
+    if timeout is None:
+        return remote.get_timestamp(commitment)
+    try:
+        return remote.get_timestamp(commitment, timeout=timeout)
+    except TypeError:
+        return remote.get_timestamp(commitment)
+
+
 def upgrade_proof(
     path: str | os.PathLike[str],
     *,
     calendars: Iterable[str] | None = None,
     calendar_factory: Any = None,
+    timeout: float | None = DEFAULT_TIMEOUT,
 ) -> OtsProof:
     """Fetch the completed proof from a calendar and rewrite the ``.ots`` file.
 
@@ -308,22 +398,25 @@ def upgrade_proof(
     allowlist = tuple(calendars) if calendars is not None else None
     upgraded = False
     skipped: list[str] = []
-    for _msg, attestation in list(timestamp.all_attestations()):
+    # (msg, attestation): msg is the commitment AT THAT NODE, which is what the
+    # calendar knows the stamp by — not the file digest at the root.
+    for msg, attestation in list(timestamp.all_attestations()):
         if not isinstance(attestation, mod["PendingAttestation"]):
             continue
         uri = attestation.uri
         uri = uri.decode() if isinstance(uri, bytes) else str(uri)
-        if allowlist is not None and not any(
-            uri == allowed or uri.startswith(allowed) for allowed in allowlist
-        ):
+        if allowlist is not None and not _uri_allowed(uri, allowlist):
             skipped.append(uri)
+            continue
+        node = _node_for(timestamp, msg)
+        if node is None:  # cannot happen: msg came from this tree
             continue
         try:
             remote = (
                 calendar_factory(uri) if calendar_factory is not None
                 else mod["RemoteCalendar"](uri)
             )
-            timestamp.merge(remote.get_timestamp(timestamp.msg))
+            node.merge(_get_timestamp(remote, msg, timeout))
             upgraded = True
         except Exception:  # noqa: BLE001 - a calendar that has nothing yet is normal
             continue
@@ -344,7 +437,7 @@ def upgrade_proof(
         detached = mod["DetachedTimestampFile"](detached.file_hash_op, timestamp)
         ctx = mod["BytesSerializationContext"]()
         detached.serialize(ctx)
-        target.write_bytes(ctx.getbytes())
+        _write_atomic(target, ctx.getbytes())
     return parse_ots_proof(target)
 
 

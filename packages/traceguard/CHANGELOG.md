@@ -192,7 +192,28 @@ untouched, and the frozen 29-symbol public surface is unchanged.
     different host, so treating the submit address as the address to ask would
     make the upgrade a permanent no-op that looks like "not ready yet".
     `upgrade_proof(calendars=...)` is therefore an allowlist of hosts that may
-    be contacted, and it logs at WARNING when it excludes every attestation.
+    be contacted (matched on a path boundary, so it does not also admit
+    `cal.example.attacker.test`), and it logs at WARNING when it excludes every
+    attestation. Upgrading also asks about the **commitment the attestation
+    hangs off**, not the file digest: a calendar appends a nonce and hashes
+    before attesting, and answers 404 for anything else — asking with the root
+    digest raised, the error was swallowed as "nothing yet", and that was a
+    second, independent cause of the same permanent no-op. The fakes in the
+    suite hid both; there is now one shaped like a real calendar.
+  - **`COMPLETE` is the proof's claim, not traceguard's finding.** Nothing here
+    walks the merkle path or fetches a block header, so a hand-written `.ots`
+    classifies COMPLETE exactly like a genuine one, and a test pins that.
+    `describe()` says so in those words. The classification still earns its
+    keep — a PENDING proof is not evidence even when genuine, and separating
+    the two needs no dependencies — but establishing that a COMPLETE proof is
+    TRUE is `ots verify`'s job against a Bitcoin node you choose to trust.
+  - Calendar calls now carry a timeout (`DEFAULT_TIMEOUT`, 30s; `OtsAnchorSink`
+    declared one and never passed it). These run in `AnchorScheduler`'s daemon
+    thread, where an untimed socket stalls the anchoring cadence with nothing
+    in the logs — the exposure window quietly stops closing.
+  - Proof and sidecar are written via a temp file and `os.replace`, sidecar
+    first: `upgrade_proof` rewrites the only copy of a proof, and a partial
+    write there destroys evidence rather than merely failing.
   - A complete proof bounds the digest to "existed before block N" — block times
     carry minutes-to-hours of uncertainty, and confirming the block needs a
     Bitcoin node or an explorer you choose to trust. traceguard does neither; it

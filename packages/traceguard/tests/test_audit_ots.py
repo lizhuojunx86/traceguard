@@ -79,6 +79,68 @@ class _FakeCalendar:
         return _timestamp(commitment, height=self.height)
 
 
+class _RealisticCalendar:
+    """A calendar that behaves the way the protocol actually does.
+
+    Two properties the permissive fake above does not have, and both of them
+    were hiding a permanent no-op in `upgrade_proof`:
+
+    1. ``submit`` does not attest the digest you send. It appends a nonce and
+       hashes, and the pending attestation hangs off THAT commitment — so the
+       commitment to ask about later is not the file digest.
+    2. ``get_timestamp`` raises for a commitment it does not know, exactly as
+       the real one raises CommitmentNotFoundError on the calendar's 404.
+    """
+
+    def __init__(self, url, *, height=None, forwarded_uri=None):
+        from opentimestamps.core.op import OpAppend, OpSHA256
+
+        self.url = url
+        self.height = height
+        self.forwarded_uri = forwarded_uri or url
+        self._OpAppend, self._OpSHA256 = OpAppend, OpSHA256
+        self.known = {}
+        self.asked = []
+
+    def submit(self, digest, timeout=None):
+        from opentimestamps.core.notary import PendingAttestation
+        from opentimestamps.core.timestamp import Timestamp
+
+        ts = Timestamp(digest)
+        nonced = ts.ops.add(self._OpAppend(b"\x2a" * 16))
+        leaf = nonced.ops.add(self._OpSHA256())
+        leaf.attestations.add(PendingAttestation(self.forwarded_uri))
+        self.known[leaf.msg] = leaf.msg
+        return ts
+
+    def get_timestamp(self, commitment, timeout=None):
+        from opentimestamps.core.notary import BitcoinBlockHeaderAttestation
+        from opentimestamps.core.timestamp import Timestamp
+
+        self.asked.append(commitment)
+        if commitment not in self.known:
+            raise KeyError("calendar has no such commitment")  # the real 404
+        ts = Timestamp(commitment)
+        if self.height is not None:
+            ts.attestations.add(BitcoinBlockHeaderAttestation(self.height))
+        return ts
+
+
+def _realistic_pair(*, height, forwarded_uri=None):
+    """One calendar object shared by the submit and the upgrade factories."""
+    holder = {}
+
+    def submit_factory(url):
+        cal = holder.get("cal") or _RealisticCalendar(
+            url, height=height, forwarded_uri=forwarded_uri
+        )
+        holder["cal"] = cal
+        return cal
+
+    submit_factory.holder = holder
+    return submit_factory
+
+
 def _factory(**kw):
     made = {}
 
@@ -147,7 +209,34 @@ def test_a_bitcoin_attested_proof_is_complete_and_hedges_the_time(tmp_path):
     assert "COMPLETE" in text
     # Never claims a wall-clock instant.
     assert "uncertainty" in text
-    assert "needs a Bitcoin node" in text
+    assert "Bitcoin node" in text
+    # And never states the proof's claim as a fact of its own: nothing here
+    # verified the merkle path or the block header, so a fabricated .ots
+    # classifies COMPLETE too.
+    assert "CLAIMS" in text
+    assert "does NOT check that claim" in text
+
+
+def test_a_fabricated_proof_classifies_complete_and_the_wording_admits_it(tmp_path):
+    """The honesty pair for this capability: what COMPLETE proves is *nothing*
+    on its own, and the text has to say so or it is an overclaim."""
+    from opentimestamps.core.notary import BitcoinBlockHeaderAttestation
+    from opentimestamps.core.serialize import BytesSerializationContext
+    from opentimestamps.core.timestamp import DetachedTimestampFile, Timestamp
+    from opentimestamps.core.op import OpSHA256
+
+    forged = Timestamp(ots_digest(ANCHOR))
+    forged.attestations.add(BitcoinBlockHeaderAttestation(1))  # a height, invented
+    ctx = BytesSerializationContext()
+    DetachedTimestampFile(OpSHA256(), forged).serialize(ctx)
+    path = tmp_path / "forged.ots"
+    path.write_bytes(ctx.getbytes())
+
+    proof = parse_ots_proof(path)
+    assert proof.status == COMPLETE  # traceguard cannot tell, and must not pretend to
+    matched, explanation = verify_ots_proof(proof, ANCHOR)
+    assert matched  # it IS about this anchor; that is all matched means
+    assert "CLAIMS" in explanation and "hand-written" in explanation
 
 
 def test_every_calendar_failing_raises_rather_than_writing_nothing(tmp_path):
@@ -274,6 +363,100 @@ def test_upgrade_allowlist_still_admits_the_host_it_names(tmp_path):
     )
     assert upgraded.status == COMPLETE
     assert upgraded.bitcoin_heights == (840000,)
+
+
+def test_upgrade_against_a_calendar_that_behaves_like_a_real_one(tmp_path):
+    """The blocker the permissive fakes hid.
+
+    A real calendar attests a NONCED commitment, not the file digest, and 404s
+    on anything else. Asking it about the root digest therefore raised, the
+    error was swallowed as "nothing yet", and every upgrade was a permanent
+    silent no-op — indistinguishable from a proof that simply is not ready.
+    """
+    factory = _realistic_pair(height=850000)
+    sink = OtsAnchorSink(tmp_path, calendars=("https://cal.example",), calendar_factory=factory)
+    path = sink.store(ANCHOR)
+    assert parse_ots_proof(path).status == PENDING
+
+    upgraded = upgrade_proof(path, calendar_factory=factory)
+
+    assert upgraded.status == COMPLETE
+    assert upgraded.bitcoin_heights == (850000,)
+    assert parse_ots_proof(path).status == COMPLETE
+
+    cal = factory.holder["cal"]
+    assert cal.asked, "no calendar call was made at all"
+    root = ots_digest(ANCHOR)
+    assert all(c != root for c in cal.asked), (
+        "asked about the file digest; the calendar only knows the nonced commitment"
+    )
+
+
+def test_upgrade_through_a_pool_that_forwards_and_nonces(tmp_path):
+    """Both failure causes at once: the pool answers under a different host AND
+    the commitment is nonced."""
+    factory = _realistic_pair(
+        height=860000, forwarded_uri="https://bob.btc.calendar.opentimestamps.org"
+    )
+    sink = OtsAnchorSink(
+        tmp_path,
+        calendars=("https://a.pool.opentimestamps.org",),
+        calendar_factory=factory,
+    )
+    path = sink.store(ANCHOR)
+    assert upgrade_proof(path, calendar_factory=factory).status == COMPLETE
+
+
+def test_allowlist_does_not_admit_a_lookalike_host(tmp_path):
+    """`startswith` alone would admit cal.example.attacker.test."""
+    factory = _realistic_pair(
+        height=870000, forwarded_uri="https://cal.example.attacker.test/ots"
+    )
+    sink = OtsAnchorSink(tmp_path, calendars=("https://cal.example",), calendar_factory=factory)
+    path = sink.store(ANCHOR)
+
+    still = upgrade_proof(
+        path, calendars=("https://cal.example",), calendar_factory=factory
+    )
+    assert still.status == PENDING
+    assert not factory.holder["cal"].asked, "contacted a host the allowlist does not name"
+
+
+def test_the_sink_passes_its_timeout_to_the_calendar(tmp_path):
+    """An untimed socket in AnchorScheduler's daemon thread stalls the cadence."""
+    seen = {}
+
+    def factory(url):
+        class _C:
+            def submit(self, digest, timeout=None):
+                seen["submit"] = timeout
+                return _timestamp(digest, pending_uri=url)
+
+            def get_timestamp(self, commitment, timeout=None):
+                seen["get"] = timeout
+                raise KeyError("nothing yet")
+
+        return _C()
+
+    sink = OtsAnchorSink(
+        tmp_path, calendars=("https://c.example",), calendar_factory=factory, timeout=3.5
+    )
+    path = sink.store(ANCHOR)
+    upgrade_proof(path, timeout=2.5, calendar_factory=factory)
+    assert seen["submit"] == 3.5
+    assert seen["get"] == 2.5
+
+
+def test_a_failed_upgrade_leaves_the_existing_proof_intact(tmp_path):
+    """upgrade_proof rewrites the only copy; a partial write destroys evidence."""
+    sink = OtsAnchorSink(tmp_path, calendars=("https://c.example",), calendar_factory=_factory())
+    path = sink.store(ANCHOR)
+    before = path.read_bytes()
+
+    still = upgrade_proof(path, calendar_factory=_factory(fail=True))
+    assert still.status == PENDING
+    assert path.read_bytes() == before
+    assert not list(tmp_path.glob("*.tmp"))
 
 
 def test_proofs_and_latest_read_the_directory_back(tmp_path):
