@@ -134,6 +134,17 @@ from traceguard.audit.bundle import (
     verify_bundle,
     write_bundle,
 )
+from traceguard.audit.ots import (
+    COMPLETE as OTS_COMPLETE,
+    DEFAULT_CALENDARS as OTS_DEFAULT_CALENDARS,
+    PENDING as OTS_PENDING,
+    OtsAnchorSink,
+    OtsProof,
+    ots_digest,
+    parse_ots_proof,
+    upgrade_proof,
+    verify_ots_proof,
+)
 from traceguard.audit.reconcile import (
     CAPTURE_MISMATCH,
     CAPTURE_UNMATCHED,
@@ -191,6 +202,16 @@ __all__ = [
     "anchor_to",
     "AnchorScheduler",
     "parse_sink_spec",
+    # second independent anchor: OpenTimestamps (extra: anchors)
+    "OtsAnchorSink",
+    "OtsProof",
+    "ots_digest",
+    "parse_ots_proof",
+    "verify_ots_proof",
+    "upgrade_proof",
+    "OTS_DEFAULT_CALENDARS",
+    "OTS_PENDING",
+    "OTS_COMPLETE",
     # out-of-band reconciliation (v2, L1)
     "reconcile",
     "ReconcileResult",

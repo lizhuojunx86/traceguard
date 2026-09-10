@@ -57,6 +57,16 @@ EXPECTED_AUDIT_API = {
     "anchor_to",
     "AnchorScheduler",
     "parse_sink_spec",
+    # OpenTimestamps anchor (SPEC v1.2) — ADDED deliberately (minor, §6.3).
+    "OtsAnchorSink",
+    "OtsProof",
+    "ots_digest",
+    "parse_ots_proof",
+    "verify_ots_proof",
+    "upgrade_proof",
+    "OTS_DEFAULT_CALENDARS",
+    "OTS_PENDING",
+    "OTS_COMPLETE",
     # out-of-band reconciliation (v2, L1)
     "reconcile",
     "ReconcileResult",

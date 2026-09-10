@@ -5,6 +5,7 @@
     python -m traceguard.audit enable    --db sqlite:///traces.db [--chain-only] [--no-backfill] [--strict]
     python -m traceguard.audit disable   --db sqlite:///traces.db
     python -m traceguard.audit verify    --db sqlite:///traces.db [--anchor '<json>' | --anchor-file PATH]
+                                         [--ots-proof PATH [--ots-upgrade]]
     python -m traceguard.audit anchor    --db sqlite:///traces.db [--sink SPEC ...] [--every SECONDS [--rounds N]]
     python -m traceguard.audit reconcile --db sqlite:///traces.db
                                          --source anthropic-usage|json:PATH|requests-json:PATH
@@ -121,6 +122,17 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         help="a file sink written by `anchor --sink file:PATH`; its newest anchor is used",
     )
+    p_verify.add_argument(
+        "--ots-proof",
+        default=None,
+        metavar="PATH",
+        help="an .ots proof written by `anchor --sink ots:DIR`: reports whether it commits to the anchor being used, and whether it is pending or complete",
+    )
+    p_verify.add_argument(
+        "--ots-upgrade",
+        action="store_true",
+        help="with --ots-proof: first ask the calendars for the completed proof (a pending proof is not evidence)",
+    )
 
     p_anchor = sub.add_parser(
         "anchor",
@@ -131,7 +143,8 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         metavar="SPEC",
-        help="where to store the anchor: file:PATH | git-note[:REPO] | webhook:URL (repeatable)",
+        help="where to store the anchor: file:PATH | git-note[:REPO] | webhook:URL | "
+        "ots:DIR (OpenTimestamps, needs the anchors extra) (repeatable)",
     )
     p_anchor.add_argument(
         "--every",
@@ -283,10 +296,52 @@ def main(argv: list[str] | None = None) -> int:
             if anchor is None:
                 print(f"no anchor found in {args.anchor_file}", file=sys.stderr)
                 return 2
+        ots_ok = True
+        if args.ots_proof:
+            # Lazy import: only an --ots-proof run needs the anchors extra.
+            try:
+                from traceguard.audit.ots import (
+                    load_anchor_beside,
+                    parse_ots_proof,
+                    upgrade_proof,
+                    verify_ots_proof,
+                )
+            except ImportError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            try:
+                proof = (
+                    upgrade_proof(args.ots_proof)
+                    if args.ots_upgrade
+                    else parse_ots_proof(args.ots_proof)
+                )
+            except Exception as exc:  # noqa: BLE001 - a malformed proof is a usage error
+                print(f"could not read the OTS proof {args.ots_proof}: {exc}", file=sys.stderr)
+                return 2
+            # The anchor the proof commits to: the sidecar beside it, else the
+            # one already selected. A proof without its anchor cannot be tied
+            # to anything, and saying otherwise would be the overclaim.
+            subject = load_anchor_beside(args.ots_proof) or anchor
+            if subject is None:
+                print(
+                    "  [INFO] ots: " + proof.describe(),
+                )
+                print(
+                    "  [WARN] the OTS proof has no anchor beside it and none was "
+                    "given, so it cannot be tied to this chain",
+                    file=sys.stderr,
+                )
+            else:
+                matched, explanation = verify_ots_proof(proof, subject)
+                print(f"  [{'INFO' if matched else 'BREAK'}] ots: {explanation}")
+                if not matched:
+                    ots_ok = False
+                elif anchor is None:
+                    anchor = subject  # verify against what the proof attests
         result = verify_chain(engine, from_anchor=anchor)
         print(result.summary())
         _print_findings(result.findings)
-        return 0 if result.ok else 1
+        return 0 if (result.ok and ots_ok) else 1
 
     if args.command == "anchor":
         try:

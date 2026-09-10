@@ -147,6 +147,45 @@ untouched, and the frozen 29-symbol public surface is unchanged.
   - `jsonschema` is a **dev-only** dependency (schema conformance tests); the
     runtime still validates nothing and depends on nothing new.
 
+- **`ots:DIR` anchor sink** (`traceguard.audit.ots`, new extra
+  `traceguard[anchors]`) — an OpenTimestamps proof over the anchor digest.
+  Every pre-existing sink rests on one party you have to trust (a file the DB
+  writer can usually also edit, a git remote, a webhook receiver); this one ends
+  at the Bitcoin chain. CLI: `anchor --sink ots:DIR`, and
+  `verify --ots-proof PATH [--ots-upgrade]`.
+  - Each anchor writes **two** files: the `.ots` proof and a same-named `.json`
+    sidecar holding the anchor itself. A digest is meaningless without the exact
+    JSON it was computed from, and the pair stays verifiable with no database.
+  - The digest is `sha256(anchor.to_json())` — the **whole** anchor statement,
+    not just `row_hash`. Stamping the head hash alone would leave `seq` and
+    `entry_count` unattested, so a proof would still match a head re-pointed
+    inside a rewritten chain.
+  - **A pending proof is not evidence** and the code says so in those terms: a
+    fresh stamp carries only a calendar server's promise. `parse_ots_proof`
+    reports `pending` and `complete` separately and never conflates them;
+    `--ots-upgrade` fetches the completed proof (getting nothing back shortly
+    after stamping is normal, not an error).
+  - A complete proof bounds the digest to "existed before block N" — block times
+    carry minutes-to-hours of uncertainty, and confirming the block needs a
+    Bitcoin node or an explorer you choose to trust. traceguard does neither; it
+    parses and classifies, and stops.
+  - **It does not shrink the exposure window.** Boundary statement 1 is
+    unchanged: entries appended since the last anchoring can still be truncated
+    silently. A second witness makes an anchor harder to repudiate; it does not
+    make un-anchored entries safe.
+  - All calendars unreachable raises `AnchorSinkError` and writes **nothing** —
+    half an anchor is worse than none (SPEC B3.4).
+  - `docs/audit.md` now carries a four-column table for every sink (proves what
+    / proves nothing / depends on whom / what happens on failure), including the
+    pre-existing `file:` / `git-note:` / `webhook:` ones.
+- `rekor:` is **designed but not implemented**, and `docs/audit.md` says why
+  rather than leaving it as a gap: it needs an ECDSA signing key that only
+  proves "same uploader" (identity needs OIDC, a separate system), and key
+  management is its own design surface that should be pulled by a real need.
+  OTS already supplies the "not dependent on one party" property.
+
+### Fixed
+
 ### Fixed
 
 ### Fixed

@@ -19,6 +19,12 @@ What each sink honestly gives you:
 - :class:`WebhookAnchorSink` — HTTP POST of the anchor JSON to a URL you run
   (ticketing, log pipeline, timestamping service). What the receiver does with
   it is the actual guarantee; the sink only delivers.
+- ``OtsAnchorSink`` (:mod:`traceguard.audit.ots`, extra ``anchors``) — an
+  OpenTimestamps proof over the anchor digest. The only sink here that does
+  not rest on a single party you must trust: it ends at the Bitcoin chain.
+  Its caveats are real and documented there — a freshly stamped proof is
+  *pending* and proves nothing until upgraded, and it does NOT shrink the
+  exposure window.
 
 Failure semantics: :func:`anchor_to` tries EVERY sink and then raises
 :class:`AnchorSinkError` if any failed — an anchor that silently never landed
@@ -291,7 +297,8 @@ class AnchorScheduler:
 def parse_sink_spec(spec: str) -> AnchorSink:
     """Turn a CLI ``--sink`` value into a sink.
 
-    ``file:PATH`` | ``git-note[:REPO]`` (default ``.``) | ``webhook:URL``.
+    ``file:PATH`` | ``git-note[:REPO]`` (default ``.``) | ``webhook:URL`` |
+    ``ots:DIR`` (OpenTimestamps; needs the ``anchors`` extra).
     Webhook headers cannot be given on the command line on purpose (they hold
     tokens); set them in code or put the token in the receiver's allowlist.
     """
@@ -307,7 +314,17 @@ def parse_sink_spec(spec: str) -> AnchorSink:
         if not rest:
             raise ValueError("webhook sink needs a URL: webhook:https://...")
         return WebhookAnchorSink(rest)
-    raise ValueError(f"unknown sink {spec!r}; expected file:PATH | git-note[:REPO] | webhook:URL")
+    if kind == "ots":
+        if not rest:
+            raise ValueError("ots sink needs a directory for the .ots proofs: ots:DIR")
+        # Lazy: keeps this module dependency-free unless an OTS sink is asked for.
+        from traceguard.audit.ots import OtsAnchorSink
+
+        return OtsAnchorSink(rest)
+    raise ValueError(
+        f"unknown sink {spec!r}; expected file:PATH | git-note[:REPO] | "
+        "webhook:URL | ots:DIR"
+    )
 
 
 __all__ = [

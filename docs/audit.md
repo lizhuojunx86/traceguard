@@ -216,17 +216,51 @@ audit.anchor_to(engine, sinks)                     # once; raises AnchorSinkErro
 audit.AnchorScheduler(engine, sinks, interval_s=300).start()   # daemon thread; logs ERROR and keeps going
 ```
 
-What each sink honestly gives you: a **file** sink is out of the DB, not out of
-the host — whoever can edit the DB file can usually edit a sibling file, so put
-it on another host / filesystem / append-only medium. A **git note** is as
-tamper-evident as the repository's history, which is only as good as a remote
-the DB writer cannot force-push (`git push origin refs/notes/traceguard-audit`).
-A **webhook** delivers; what the receiver does with the anchor is the actual
-guarantee. `anchor_to` tries every sink and then raises if any failed — an
-anchor that silently never landed is a false sense of coverage (SPEC B3.4).
-The scheduler interval IS the exposure window: entries appended since the last
-tick can still be truncated without trace. `verify --anchor-file PATH` closes
-the loop against the newest anchor a file sink wrote.
+`anchor_to` 逐个尝试每个 sink,只要有失败就在最后汇总抛出——一个静默没落地的锚
+是虚假的覆盖感(SPEC 附录 B3.4)。scheduler 的间隔**就是**暴露窗口:上一次 tick
+之后新增的条目仍可被无痕截断。`verify --anchor-file PATH` 用 file sink 写下的最新
+锚闭环。
+
+### 每种 sink:证明什么 / 证明不了什么 / 依赖谁 / 失败时怎样
+
+| sink | 证明什么 | 证明不了什么 | 依赖谁 | 失败时怎样 |
+|---|---|---|---|---|
+| `file:PATH` | 锚在这个文件被写入的那一刻存在过 | 文件本身没被改。**出了库,没出主机**——能改库文件的人通常也能改旁边的文件 | 文件系统;放在另一台主机 / 只追加介质上才真正有意义 | `AnchorSinkError`(路径不可写);`anchor_to` 汇总抛出,scheduler 记 ERROR 并继续 |
+| `git-note:REPO` | 锚进了仓库对象库,与代码历史绑在一起 | 比仓库历史本身更强的东西。本地 note 可被删改;**要把信任根挪出主机必须 push 到一个 DB 写入者无法 force-push 的 remote** | git 仓库 + 那个 remote 的管理者 | `git notes append` 非零退出即 `AnchorSinkError` |
+| `webhook:URL` | 锚被投递给了那个接收方 | 接收方拿它做了什么。**投递不是保存**——真正的保证在接收端 | 你自己运维的那个接收方 | 非 2xx 或传输错误即 `AnchorSinkError` |
+| `rfc3161`(tg-attest 产出,本包只收录) | 一个 TSA 在某时刻见过这个 digest | 无——**本包不验签**。结构完整 ≠ token 有效 | 那个 TSA 与它的 CA 链;验签的信任根由收件人自己选 | 结构不全在 bundle 校验里是 BREAK |
+| **`ots:DIR`**(v1.2,extra `anchors`) | **complete 时**:digest 在某个比特币区块之前已存在。这是唯一一个不落在"你得信某一方"上的锚 | **pending 时:什么都不证明**——那只是日历服务器的承诺。complete 也**不给精确时刻**:区块时间有分钟到小时级的不确定性 | 比特币链;完整验证需要一个比特币节点,否则你是在信区块浏览器或日历服务器。**traceguard 两者都不做** | 所有日历都不可达即 `AnchorSinkError`,且**不写出任何文件**(半个锚比没有锚更糟) |
+| `rekor:`(**未实现**,设计见下) | — | — | — | — |
+
+**多一种锚不改变暴露窗口。** 边界声明 1 的措辞不因此放松:OTS 让"链头在 T 时刻已存在"
+不再依赖单一方,但**两次锚定之间新增的条目仍然可以被静默截断**。这两件事是独立的,
+把它们混起来是这一节最容易犯的错。
+
+```bash
+# 需要 anchors extra:pip install 'traceguard[anchors]'
+python -m traceguard.audit --db sqlite:///traces.db anchor --sink ots:/mnt/anchors/ots
+python -m traceguard.audit --db sqlite:///traces.db verify \
+    --ots-proof /mnt/anchors/ots/anchor-00000042-<digest>.ots [--ots-upgrade]
+```
+
+每个锚写**两个**文件:`.ots` 证明 + 同名 `.json` 侧车(锚本体)。digest 是
+`sha256(anchor.to_json())` —— 覆盖**整份锚声明**而不只是 `row_hash`:只盖头哈希会让
+`seq` 与 `entry_count` 不被 attest,于是把链头重新指到一条被重写的链里的另一个位置,
+证明照样对得上。两个文件放一起,日后**不需要数据库**就能自证。
+
+刚 stamp 出来的证明是 **pending**;`--ots-upgrade` 向日历服务器要升级后的证明。
+拿不到不是错误——刚 stamp 完拿不到是常态。
+
+### `rekor:` — 设计节,**本次未实现**
+
+Sigstore 透明日志的 `hashedrekord` 条目,与 OTS 并用可给出第二种独立见证。未实现的
+理由照实写,不是"没时间":它需要一把 ECDSA P-256 签名密钥,而**那把钥匙只证明
+"上传者是同一个"**,不证明身份——除非接上 OIDC 身份流程,而那是另一整套东西。
+密钥管理(生成、权限、轮换、丢失后怎么办)是一个独立的设计面,应当由一个真实需求
+拉动,而不是因为"顺手也加上"。OTS 已经给了"不依赖单一方"这个属性;rekor 的增量
+主要是可查询的透明日志,今天没有消费者要求它。
+
+重开条件与 §8.4 其余项相同:一个**外部**组织在生产里用,并主动提出。
 
 **Reconcile (v2, capture-fidelity layer L1).** The chain answers "was what the
 SDK stored changed afterwards?"; it cannot answer "was what the SDK stored
