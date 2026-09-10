@@ -7,6 +7,427 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 Versioning policy for the interface contract is defined in
 [`docs/SPEC.md`](../../docs/SPEC.md) §6.
 
+## [1.6.0] - 2026-09-10
+
+SemVer **minor**, on four counts: SPEC v1.1 → v1.2 (a new nullable `traces`
+column and a new `Span` method — §6.2 / §6.3), a new **experimental** opt-in
+extension (`traceguard.sources`), a new audit finding kind
+(`capture_unmatched`), and a new extra (`traceguard[anchors]`). No existing
+signature moves, the normalize algorithm and the audit algo v1 envelope are
+untouched, and the frozen 29-symbol public surface is unchanged.
+
+**SPEC v1.2 — where a number came from, and whether anyone else can check it.**
+Motivation and compatibility analysis:
+`docs/spec-changes/2026-09-10-source-snapshot-approval-binding.md`. The four
+invariants cover the model, the prompt and the feature cutoff, and stop at the
+edge of the process: a pipeline can use the right model on the right prompt with
+the right `feature_as_of`, be handed a vendor value that was rewritten into
+existence weeks later, and pass every check while being wrong. v1.2 adds the
+three pieces that were missing — a record of what was retrieved and when
+(`traceguard.sources`), a per-request join key for reconciling self-reported
+calls against an out-of-band ledger (`provider_response_id`), and an export a
+recipient can verify without the database, the network, or this package
+(`evidence-bundle/v1`).
+
+### Added
+
+- `traceguard.sources` — **experimental** opt-in extension (SPEC v1.2 §6.6):
+  point-in-time correctness for *retrieved data*, the one thing the four
+  invariants did not cover. A pipeline could use the right model, the right
+  prompt and the right `feature_as_of`, be fed a vendor value rewritten into
+  existence weeks later, and pass every invariant while being wrong. Published
+  measurement of exactly that: 41.4% of vendor `epsActual` values differ
+  between first sight and today, 15.3% flip a binary entry decision
+  (`analysis/eps_revision.py` recomputes both offline).
+  - New contract-external table `source_snapshots` (own `DeclarativeBase`;
+    created only by `sources.enable(engine)`, never by `make_engine`).
+    Indexed on `trace_id`, `source_uri`, `content_hash`, `retrieved_at` — the
+    last two are what answer "which traces depended on content the source
+    later rewrote?".
+  - `Span.record_source(snapshot, *, strict)` — a NEW method (SPEC §6.3
+    minor); no existing `Span` signature changes. `strict` is keyword-only
+    with no default, matching `select_model` discipline.
+  - `SourceVerdict`: `verified` / `anachronistic` / `unverifiable` /
+    `unchecked`, following the `routing_integrity` four-way precedent. When a
+    source states no `published_at`, strict mode refuses ("cannot establish
+    that the source existed at feature_as_of") and loose mode records
+    `unverifiable` — being unable to prove existence is not proof of absence,
+    and neither is it a pass. `unchecked` (no `feature_as_of` at the call
+    site) stays distinct from `unverifiable` (the source would not say).
+  - Builders: `content_digest` (raw bytes, no normalization — whitespace and
+    key order are part of what was served), `from_http_response` (duck-typed;
+    imports neither httpx nor requests), `from_mcp_result` (an MCP result is
+    already parsed, so the digest covers §4.4 canonical bytes and
+    `normalizer_id` says so). `normalized_hash` and `normalizer_id` are
+    required together, `<name>@<version>` — an unnamed normalizer's digest is
+    not comparable, and worse, it looks comparable.
+  - **No retrieved content is stored** — digests and metadata only. Contract
+    intent, not a mode; archiving the bytes is the consumer's business, joined
+    on `content_hash`.
+  - CLI: `python -m traceguard.sources --db URL enable|list` (`list` exits 1
+    on any actionable verdict, so it can gate CI).
+  - Honest layering, including what a snapshot cannot prove (that the host
+    actually fetched the bytes from `source_uri`; that `published_at` is
+    true): `docs/sources.md`.
+  - Its API surface is deliberately **not** in the contract-guard job while
+    experimental — the fields have to survive real use first (revision
+    decision D9; revisit after two minors).
+
+- SPEC §5 invariant 3 now names retrieved external data in its scope, with
+  `source_snapshots.published_at` as its `valid_from`. No fifth invariant is
+  added — that wording was already a general principle. It does add one new
+  refusal condition under invariant 3 (strict mode refuses a source stating
+  no `valid_from`), scoped to `traceguard.sources`; existing instances are
+  untouched, since `validate_reference_timing` takes a definite `valid_from`
+  and has no "unknown" state. Classified minor under §6.4, with that
+  clause's warn-first ramp carried by `strict` being keyword-only with no
+  default: no existing call site can be silently converted into an error,
+  because there are none and there is no default to decide for them.
+
+- SPEC §6.6 registers `traceguard.approval` as **planned, not implemented**
+  (interface, single-use `approval_id`, float-free payloads). Implementation
+  is gated on a real consumer.
+
+- `traces.provider_response_id` (SPEC §3.1 v1.2): nullable, **indexed** — the
+  join key for per-request reconciliation. `wrap_anthropic` records
+  `message.id`, `wrap_openai` records `response.id` (chat and responses).
+  Streaming calls leave it NULL: the wrappers do not drain the stream, so there
+  is no final message to take an id from, and a synthesized id would reconcile
+  as a real call. `routing_audit.ingest_claude_code` fills it from the
+  transcript's API message id; lines that fell back to `uuid:<line uuid>` for
+  identity leave it NULL rather than store a locally-minted value that would
+  look like a provider's. Rows ingested earlier are **not** backfilled — same
+  posture as `agent_id`/`session_id` in 1.5.0; the id stays in `output_parsed`.
+  Legacy databases get the column and its index on open
+  (`ensure_trace_columns`), and its failure message now names the SPEC revision
+  that introduced the specific missing column.
+
+- `traceguard.audit.reconcile_requests()` + the `request-ledger/v1` format —
+  capture-fidelity layer **L1.5**. L1 compares totals, which can cancel: an
+  under-reported call and an over-reported one net out, and the provider usage
+  API supplies token volume but no call counts. L1.5 asks what totals cannot —
+  is *this* call present on both sides — by joining `provider_response_id`
+  against an out-of-band request ledger. CLI: `reconcile --source
+  requests-json:PATH`. Any out-of-band source that can export the documented
+  shape works; no specific gateway interface is promised.
+
+- New finding kind `capture_unmatched` (WARN) carrying a `direction` of
+  `out_of_band_only` ("a call the capture layer did not see — bypass or wrapper
+  coverage gap") or `self_reported_only` ("a record the provider side does not
+  vouch for — fabrication, duplication, or an incomplete ledger"). **A new kind
+  is a SemVer minor** under the 2026-08-27 revision's rule A; `FINDING_SEVERITY`
+  and the frozen table in `tests/test_audit_api_surface.py` were updated
+  deliberately, and `ChainFinding` gained a defaulted `direction` field (§6.3,
+  additive). The aggregate `capture_mismatch` path is unchanged — the two kinds
+  prove different things, and one kind for both would give them one threshold
+  and one response.
+  - Three disciplines, each because a false positive teaches people to ignore
+    the check (SPEC B3.4): a ledger whose declared `window` does not cover the
+    requested one is **refused** rather than reporting the uncovered stretch as
+    missing; traces with a NULL `provider_response_id` are counted and excluded,
+    never reported as fabricated; and a `response_id` appearing twice on one
+    side is reported as a duplicate, not as something missing.
+
+- `traceguard.sources` gained `drift` (A5): the retrieval-to-retrieval
+  `content_hash` sequence per `source_uri`, summarised as a rate with its n and
+  a Wilson 95% interval. The counting discipline follows
+  `analysis/eps_revision.py` and is enforced by tests: `unchecked` snapshots are
+  not observations, a source retrieved only once is in neither side of the rate,
+  and an empty denominator reports `None` rather than 0.0. CLI: `python -m
+  traceguard.sources --db URL drift [--source-uri] [--since] [--json]`.
+  - A source whose digests changed without two observations is reported as
+    `sources_changed_uncomparable` rather than vanishing: it cannot enter the
+    numerator without a denominator it has not earned, and silence there
+    re-opens the same hole by another door.
+
+- `traceguard.audit.export_bundle()` / `verify_bundle()` and the
+  **`evidence-bundle/v1`** format (`docs/specs/evidence-bundle.md`, JSON Schema
+  `docs/specs/evidence-bundle-v1.schema.json`): a self-contained JSON document —
+  selected traces, the chain segment covering them, the chain head, anchors,
+  source snapshots, findings — that a recipient verifies with **no database, no
+  network and no signature verification**. CLI: `bundle --out PATH
+  [--since/--until/--trace-ids] [--hash-only] [--anchor-file PATH]` and
+  `verify-bundle PATH` (exit 1 on BREAK). A test asserts `verify-bundle` never
+  opens a database.
+  - **`hash_only` is honest about being weaker.** The algo v1 envelope covers
+    content fields; strip them and entry hashes cannot be recomputed at all. So
+    a `hash_only` verify checks chain LINKAGE and the head against an anchor
+    only, always emits a `content_not_recomputed` (INFO) finding, and its
+    summary reads "LINKAGE OK (hash_only) … content was NOT recomputed" where
+    `full` reads "VERIFIED (full)". The two modes never share a word — reading a
+    `hash_only` pass as "content verified" is this format's most consequential
+    misreading, and a test pins the wording apart. `content_not_recomputed` is a
+    bundle-level annotation, **not** an audit finding kind: it is not in
+    `FINDING_SEVERITY` and not bound by the §6.6 kind freeze.
+  - **Anchors are structure-checked, never verified.** An `rfc3161` anchor is
+    reported as a well-formed token that is present, not as valid — verification
+    needs a trust root the recipient chooses, and this package adds no
+    cryptographic runtime dependency. Verify with `openssl ts` and a CA you
+    fetched yourself. A `pending` OpenTimestamps proof warns that a calendar
+    server's promise is not evidence.
+  - `approvals` is present and always empty: `traceguard.approval` is registered
+    in SPEC v1.2 as planned but not implemented, and reserving the field now
+    means adding it later is not a schema break.
+  - `jsonschema` is a **dev-only** dependency (schema conformance tests); the
+    runtime still validates nothing and depends on nothing new.
+
+- **`ots:DIR` anchor sink** (`traceguard.audit.ots`, new extra
+  `traceguard[anchors]`) — an OpenTimestamps proof over the anchor digest.
+  Every pre-existing sink rests on one party you have to trust (a file the DB
+  writer can usually also edit, a git remote, a webhook receiver); this one ends
+  at the Bitcoin chain. CLI: `anchor --sink ots:DIR`, and
+  `verify --ots-proof PATH [--ots-upgrade]`.
+  - Each anchor writes **two** files: the `.ots` proof and a same-named `.json`
+    sidecar holding the anchor itself. A digest is meaningless without the exact
+    JSON it was computed from, and the pair stays verifiable with no database.
+  - The digest is `sha256(anchor.to_json())` — the **whole** anchor statement,
+    not just `row_hash`. Stamping the head hash alone would leave `seq` and
+    `entry_count` unattested, so a proof would still match a head re-pointed
+    inside a rewritten chain.
+  - **`COMPLETE` is the proof's claim, not traceguard's finding.** Nothing here
+    walks the merkle path or fetches a block header, so a hand-written `.ots`
+    classifies COMPLETE exactly like a genuine one, and a test pins that.
+    `describe()` says so in those words. The classification still earns its
+    keep — a PENDING proof is not evidence even when genuine, and separating
+    the two needs no dependencies — but establishing that a COMPLETE proof is
+    TRUE is `ots verify`'s job against a Bitcoin node you choose to trust.
+  - `rekor:` is registered in SPEC v1.2 as a DESIGN only. Both SPECs listed it
+    beside `ots:` as an added sink with no marker; it appears in the bundle's
+    `anchors[].kind` enum so the format can settle, and `parse_sink_spec` does
+    not accept it.
+  - A complete proof bounds the digest to "existed before block N" — block times
+    carry minutes-to-hours of uncertainty, and confirming the block needs a
+    Bitcoin node or an explorer you choose to trust. traceguard does neither; it
+    parses and classifies, and stops.
+  - **It does not shrink the exposure window.** Boundary statement 1 is
+    unchanged: entries appended since the last anchoring can still be truncated
+    silently. A second witness makes an anchor harder to repudiate; it does not
+    make un-anchored entries safe.
+  - All calendars unreachable raises `AnchorSinkError` and writes **nothing** —
+    half an anchor is worse than none (SPEC B3.4).
+  - `docs/audit.md` now carries a four-column table for every sink (proves what
+    / proves nothing / depends on whom / what happens on failure), including the
+    pre-existing `file:` / `git-note:` / `webhook:` ones.
+
+- SPEC appendix **B3.6** (non-normative, no SemVer impact) and
+  `tests/test_audit_differential.py`: on the same chain data, the export's
+  conclusion must not be STRONGER than the database's. Weaker is legitimate —
+  damage outside the exported window is invisible, and a bundle whose anchor
+  binds nothing can only be INTERNALLY CONSISTENT — but "the DB FAILs and the
+  bundle says VERIFIED" is a bug, and it is how both audit false negatives below
+  were found. The guard is 6 mutations x 3 export shapes x 4 anchor choices = 72
+  deterministic combinations, every mutation applied through raw SQL, and it
+  enumerates the five cells where a window legitimately cannot see the damage
+  rather than tolerating them by rule — a sixth is a failure.
+
+- `rekor:` is **designed but not implemented**, and `docs/audit.md` says why
+  rather than leaving it as a gap: it needs an ECDSA signing key that only
+  proves "same uploader" (identity needs OIDC, a separate system), and key
+  management is its own design surface that should be pulled by a real need.
+  OTS already supplies the "not dependent on one party" property.
+
+### Changed
+
+- CI runs the SDK suite on **3.12, 3.13 and 3.14** (`fail-fast: false`), not
+  3.12 alone. `requires-python` is `>=3.11`, so every supported version but one
+  went unexercised — which is exactly how the `%` fixed below reached a
+  release-shaped branch. All three legs pass **locally**: 1053 passed / 3
+  skipped on each, the two new ones in throwaway environments
+  (`UV_PROJECT_ENVIRONMENT=/tmp/tg-venv-31x`) so that syncing them cannot prune
+  an extra out of the working checkout. The matrix runs under its own job id
+  with an
+  aggregate job named `traceguard-sdk` gating on it: `main`'s branch protection
+  requires that status context verbatim, and GitHub reports a matrix job under
+  its rendered name, so putting the matrix on that id directly would have meant
+  the required check was never reported again and every PR to `main` sat
+  unmergeable.
+
+- The append-only guard called every blocked column "hash-covered". `agent_id`,
+  `session_id` and `provider_response_id` are outside the algo v1 envelope and
+  still blocked — append-only is a policy about the row, not a consequence of
+  the hash. The message now separates the two and says plainly that
+  `verify_chain` would not detect an edit to the second group.
+
+- `source_snapshots.source_version` is `String(256)` rather than unbounded
+  `Text`, and a test enforces the "digests and metadata only" claim
+  mechanically: no column may be named for content, and no new column may be
+  unbounded text (the shape a retrieved body would arrive in). That claim is
+  bolded in three places and had nothing checking it.
+
+### Fixed
+
+Nothing in this list ever shipped: every item is a defect this release's
+own two adversarial review rounds found in code written for it. They are
+itemised rather than folded into the feature notes above because anyone
+deciding whether to trust an evidence layer should be able to see what two
+passes over it actually turned up.
+
+- **An anchor only counts when it covers an entry the bundle carries.** The
+  first cut compared every anchor against the bundle's own `chain.head` field
+  and reported a match as "N anchor(s) match the head". That comparison is
+  between two values the bundle's author wrote: an attacker who rewrote the
+  trace content and re-chained the segment left both untouched, so a bundle
+  carrying a fabricated answer verified clean with the genuine anchor quoted
+  beside it. Reproduced end to end before fixing. Now an anchor whose `seq`
+  names an entry in the bundle is compared against **that entry**
+  (`anchors_binding` counts those, mismatch is `anchor_mismatch` BREAK); an
+  anchor that binds nothing raises `anchor_unlinked` (WARN) and the verdict
+  reads `INTERNALLY CONSISTENT (full)` rather than `VERIFIED (full)` — a
+  re-chained rewrite is internally consistent too, which is the whole point.
+  A partial export whose window stops short of the anchored `seq` is the
+  common case: widen the window or anchor again while it is the chain tip.
+  Related: an entry at `seq` 1 must seed from `GENESIS_PREV_HASH`, else a
+  whole re-chained history verifies from an attacker-chosen starting point.
+
+- **An anchor from outside the exported window is not evidence of a
+  rewrite.** Any anchor whose `seq` was not carried in the bundle fell
+  through to the `chain.head` comparison, so the ordinary case — anchored on
+  Monday, exporting Tuesday's traces on Wednesday — produced
+  `anchor_mismatch` (BREAK) "the chain was truncated or rewritten relative to
+  this anchor" and a bundle that read `FAILED`. A truthful anchor, reported
+  as proof of tampering. Placement now decides what an anchor is compared to:
+  inside the window it binds an entry; at `chain.head.seq` (or with no `seq`,
+  for older anchors) it is compared to the head as before; anywhere else —
+  before the window, after the head, inside a sparse selection's gap, between
+  the last entry and the head, or with no head declared — it is compared to
+  NOTHING and reported as `anchor_outside_window` (WARN) saying which side it
+  falls on and what window would corroborate. An anchor PAST the head is split
+  on `exported_at`, which both sides already carry: taken after the export,
+  the chain merely advanced and the remedy is to re-export (WARN); taken at
+  or before it, the chain reached a higher seq than this export found, and on
+  an append-only chain that means entries below an anchored position were
+  removed — truncation, reported as `anchor_mismatch` (BREAK), the same
+  verdict `verify_chain --anchor-file` gives on that database. A missing
+  `exported_at` is treated as the dangerous case, so stripping a field cannot
+  downgrade a truncation. Independently of seq, an anchor that counted MORE
+  chain entries than the export found is also a BREAK: entry count only grows
+  on an append-only chain, and this is the one signal that survives a
+  MID-chain deletion, which leaves both the tip seq and the head hash intact
+  and would otherwise read as a benign `chain_gap` while `verify_chain` fails
+  on the same database. `anchor_unlinked` now fires only when an anchor
+  really was compared against the head, since "compared only against
+  chain.head" was untrue for the others, and `summary()` never says an
+  uncompared anchor "matches" anything.
+
+- **A sparse selection is not tampering.** `--trace-ids` on non-adjacent
+  traces produced a bundle that failed its own verify with `link_broken`,
+  because linkage was compared across chain positions the bundle does not
+  carry. Linkage is now checked only between chain-ADJACENT entries and the
+  holes are reported as `chain_gap` (WARN), which is the true statement: the
+  runs either side of a gap are not tied to each other, and an anchor covering
+  one says nothing about another. A gapped selection is never `VERIFIED`.
+
+- **What the bundle carries but nothing attests is now listed, every time**
+  (`carried_unattested`, INFO): the trace fields outside the algo v1 envelope
+  (`agent_id`, `session_id`, `provider_response_id`, `cost_usd`),
+  `source_snapshots` (`traceguard.sources` is not chained at all — SPEC v1.2
+  D9), and `approvals`. Editing any of it leaves every check green, and that
+  belonged in the output rather than in a reader's diff of two field tuples.
+
+- An entry chained with `canon_status='failed'` covers an **error
+  placeholder**, not trace content, so recomputing it proves the placeholder
+  is intact and nothing more. Those entries were being counted in "N against
+  included trace content"; they are now counted separately and reported as
+  `content_unattested` (WARN).
+
+- `cost_events` is a declared, first-class field: a `cost_event` chain entry
+  hashes the event row, so `full` verification cannot recompute those entries
+  without it. It was briefly emitted as a private `_cost_events` key that the
+  published schema rejected — and the conformance test stripped underscore
+  keys before validating, so it passed anyway. The test now validates the RAW
+  document, which is the only version of that test worth having.
+
+- **A pending proof is not evidence** and the code says so in those terms: a
+  fresh stamp carries only a calendar server's promise. `parse_ots_proof`
+  reports `pending` and `complete` separately and never conflates them;
+  `--ots-upgrade` fetches the completed proof (getting nothing back shortly
+  after stamping is normal, not an error). Upgrading asks the calendar URI
+  **inside the pending attestation**, which is the one holding the proof —
+  the default `a.pool.opentimestamps.org` is a pool that forwards to a
+  different host, so treating the submit address as the address to ask would
+  make the upgrade a permanent no-op that looks like "not ready yet".
+  `upgrade_proof(calendars=...)` is therefore an allowlist of hosts that may
+  be contacted (matched on a path boundary, so it does not also admit
+  `cal.example.attacker.test`), and it logs at WARNING when it excludes every
+  attestation. Upgrading also asks about the **commitment the attestation
+  hangs off**, not the file digest: a calendar appends a nonce and hashes
+  before attesting, and answers 404 for anything else — asking with the root
+  digest raised, the error was swallowed as "nothing yet", and that was a
+  second, independent cause of the same permanent no-op. The fakes in the
+  suite hid both; there is now one shaped like a real calendar.
+
+- Calendar calls now carry a timeout (`DEFAULT_TIMEOUT`, 30s; `OtsAnchorSink`
+  declared one and never passed it). These run in `AnchorScheduler`'s daemon
+  thread, where an untimed socket stalls the anchoring cadence with nothing
+  in the logs — the exposure window quietly stops closing.
+
+- Proof and sidecar are written via a temp file and `os.replace`, sidecar
+  first: `upgrade_proof` rewrites the only copy of a proof, and a partial
+  write there destroys evidence rather than merely failing.
+
+- `record_source(strict=False)` raised on the HOST's stack when the span's
+  `feature_as_of` was tz-naive — a §4.1 break, and caused by span state the
+  tracer accepts without complaint. `published_at` is guaranteed tz-aware, the
+  comparison inside `validate_reference_timing` is a bare `<=`, and
+  `validate_source_snapshot` caught only `InvariantViolation`, so the resulting
+  `TypeError` escaped. The identical span WITHOUT `record_source` survives, so
+  adding a snapshot turned a silent fail-open trace loss into a broken call.
+  Handled as `resolve_feature_as_of` already handles the same input for the same
+  reason: loose warns and records `unchecked` (nothing WAS compared), strict
+  raises `ValueError` — degrading strict would let it silently pass a source it
+  could not check, which is worse than refusing.
+
+- **"Not an observation" is not "did not happen".** `unchecked` rows were
+  dropped from the digest SEQUENCE as well as the denominator, and deleting
+  an element can only ever lower an adjacent-pair change count — so
+  `a -> b(unchecked) -> a` reported ZERO changes for a source that
+  demonstrably served two byte-sets and changed back. The bias ran in exactly
+  the direction the exclusion exists to prevent. Unchecked rows now stay in
+  the sequence (they carry real digests) and stay out of the rate.
+
+- `summary()` now declares the `--since` / `--source-uri` it was computed
+  under. The same sentence otherwise describes "nothing drifted" and "nothing
+  drifted in this six-hour slice", and only one of those is reassuring.
+
+- `list` said "50 snapshot(s), 50 actionable" when `--limit` had truncated
+  120 matching rows — a page presented as a total, in the line a CI gate
+  reads. It now says THIS PAGE ONLY and names the limit.
+
+- `list` and `drift` against a database where the extension was never enabled
+  print one sentence and exit 2, instead of a `no such table` traceback that
+  reads like a bug in traceguard.
+
+- The `sources` CLI could not print its own help: `--help` raised
+  `ValueError: unsupported format character 'C'` from an unescaped `%` in
+  "with a Wilson 95% CI" (argparse runs help through %-formatting). On Python
+  3.14 it is worse than a help failure — `add_parser` validates help strings
+  eagerly, so the parser could not be built and **no** `sources` subcommand ran
+  at all, `enable` included (the suite showed four failures, which touched only
+  `list` and `drift`; the capability loss was the whole CLI). Escaped,
+  plus `tests/test_cli_help.py`: every subcommand of both CLIs, discovered from
+  the parser rather than a hardcoded list, must render `--help` and exit 0, and
+  a static guard rejects an unescaped `%` at authoring time on any version. The
+  guard reads argument `help=`, `add_parser(help=)` (stored out of
+  `parser._actions`, and the one placement this bug has ever used) and
+  `description`/`epilog` where `%(prog)` makes argparse format them — not a
+  plain description, where a bare `%` is legal and `%%` would render literally.
+
+- The sources write path's failure branch no longer inspects the *engine* to
+  work out why a snapshot did not land — it inspects the session's own
+  connection. Opening a second connection mid-transaction returns it to the
+  pool, and the pool resets a returned connection with a ROLLBACK, so on a
+  shared-connection SQLite engine (`:memory:`) the diagnostic destroyed the
+  very trace it was reporting as preserved. Caught by the fail-open tests
+  before release.
+
+### Known gaps
+
+- The OTel exporter does not map `source_snapshots` — a trace exported to OTLP
+  carries no record of its sources. Deferred deliberately: the mapping should
+  follow the fields settling, not lead it.
+
+---
+
 ## [1.5.0] - 2026-08-28
 
 SemVer **minor**, on two counts: SPEC v1.0 → v1.1 (two new

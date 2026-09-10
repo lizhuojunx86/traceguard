@@ -1,0 +1,186 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/lizhuojunx86/traceguard/blob/main/docs/specs/evidence-bundle-v1.schema.json",
+  "title": "evidence-bundle/v1",
+  "description": "Self-contained evidence export: selected traces, the chain segment covering them, the chain head, external anchors, source snapshots, and findings. Verifiable offline. See docs/specs/evidence-bundle.md for what verification does and does not prove.",
+  "type": "object",
+  "required": ["schema", "generated_at", "generator", "content_mode", "chain", "traces"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": {"const": "evidence-bundle/v1"},
+    "generated_at": {"type": "string", "description": "ISO 8601, tz-aware. Provenance only; not part of the evidence."},
+    "generator": {"type": "string", "description": "e.g. 'traceguard 1.5.0'"},
+    "content_mode": {
+      "enum": ["full", "hash_only"],
+      "description": "full: traces carry every hash-covered field, so entry hashes can be recomputed. hash_only: content fields are stripped, so ONLY chain linkage and the head-vs-anchor check are possible; a hash_only pass says nothing about content."
+    },
+    "chain": {
+      "type": "object",
+      "required": ["algo_version", "entries"],
+      "additionalProperties": false,
+      "properties": {
+        "algo_version": {"type": "integer", "minimum": 1},
+        "head": {"$ref": "#/$defs/anchorRecord"},
+        "entries": {"type": "array", "items": {"$ref": "#/$defs/chainEntry"}}
+      }
+    },
+    "traces": {"type": "array", "items": {"$ref": "#/$defs/trace"}},
+    "source_snapshots": {"type": "array", "items": {"$ref": "#/$defs/sourceSnapshot"}},
+    "anchors": {"type": "array", "items": {"$ref": "#/$defs/anchor"}},
+    "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "cost_events": {
+      "type": "array",
+      "description": "Rows from audit_cost_events referenced by cost_event chain entries. Required for full-mode verification of those entries: the entry hash covers the event row, so it cannot be recomputed without them.",
+      "items": {"$ref": "#/$defs/costEvent"}
+    },
+    "approvals": {
+      "type": "array",
+      "description": "Reserved. traceguard.approval is registered in SPEC v1.2 as planned but is NOT implemented, so this is always empty today. The field exists now so adding it later is not a schema break.",
+      "items": {"type": "object"}
+    }
+  },
+  "$defs": {
+    "anchorRecord": {
+      "type": "object",
+      "required": ["seq", "row_hash", "algo_version"],
+      "properties": {
+        "seq": {"type": "integer", "minimum": 0},
+        "row_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "algo_version": {"type": "integer", "minimum": 1},
+        "entry_count": {"type": "integer", "minimum": 0},
+        "exported_at": {"type": "string"}
+      }
+    },
+    "chainEntry": {
+      "type": "object",
+      "required": ["seq", "entry_type", "prev_hash", "row_hash", "algo_version", "created_at", "canon_status"],
+      "additionalProperties": false,
+      "properties": {
+        "seq": {"type": "integer", "minimum": 1},
+        "entry_type": {"enum": ["write", "backfill", "cost_event", "deletion"]},
+        "trace_id": {"type": ["integer", "null"]},
+        "event_id": {"type": ["integer", "null"]},
+        "cost_at_event": {"type": ["string", "null"]},
+        "note": {"type": ["string", "null"]},
+        "canon_status": {"enum": ["ok", "failed"]},
+        "canon_error": {"type": ["string", "null"]},
+        "prev_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "row_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "algo_version": {"type": "integer", "minimum": 1},
+        "created_at": {"type": "string"}
+      }
+    },
+    "trace": {
+      "type": "object",
+      "required": ["trace_id"],
+      "description": "A traces row. In hash_only mode the content fields (input_summary, output_parsed, error_message) are ABSENT, which is why entry hashes cannot be recomputed in that mode.",
+      "properties": {
+        "trace_id": {"type": "integer"},
+        "project": {"type": ["string", "null"]},
+        "component": {"type": ["string", "null"]},
+        "operation": {"type": ["string", "null"]},
+        "parent_trace_id": {"type": ["integer", "null"]},
+        "correlation_id": {"type": ["string", "null"]},
+        "agent_id": {"type": ["string", "null"]},
+        "session_id": {"type": ["string", "null"]},
+        "provider_response_id": {"type": ["string", "null"]},
+        "input_hash": {"type": ["string", "null"]},
+        "input_summary": {"type": ["string", "null"]},
+        "model_id": {"type": ["string", "null"]},
+        "prompt_template_id": {"type": ["string", "null"]},
+        "prompt_template_hash": {"type": ["string", "null"]},
+        "output_parsed": {},
+        "parse_status": {"type": ["string", "null"]},
+        "latency_ms": {"type": ["integer", "null"]},
+        "tokens_in": {"type": ["integer", "null"]},
+        "tokens_out": {"type": ["integer", "null"]},
+        "cost_usd": {"type": ["string", "null"], "description": "Stringified Decimal. Outside the algo v1 hash envelope (SPEC §3.1 legal in-place reprice path)."},
+        "feature_as_of": {"type": ["string", "null"]},
+        "invoked_at": {"type": ["string", "null"]},
+        "error_class": {"type": ["string", "null"]},
+        "error_message": {"type": ["string", "null"]}
+      }
+    },
+    "sourceSnapshot": {
+      "type": "object",
+      "required": ["snapshot_id", "trace_id", "source_uri", "source_kind", "content_hash", "retrieved_at", "verdict"],
+      "description": "Digests and metadata only — the retrieved content itself is never stored (SPEC v1.2 §6.6).",
+      "properties": {
+        "snapshot_id": {"type": "integer"},
+        "trace_id": {"type": "integer"},
+        "source_uri": {"type": "string"},
+        "source_kind": {"enum": ["http", "mcp", "file", "db", "vendor_api", "other"]},
+        "content_hash": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "content_encoding": {"type": ["string", "null"]},
+        "normalized_hash": {"type": ["string", "null"]},
+        "normalizer_id": {"type": ["string", "null"], "description": "'<name>@<version>'. Required whenever normalized_hash is present."},
+        "retrieved_at": {"type": "string"},
+        "published_at": {"type": ["string", "null"]},
+        "effective_at": {"type": ["string", "null"]},
+        "source_version": {"type": ["string", "null"]},
+        "mcp_server_id": {"type": ["string", "null"]},
+        "tool_name": {"type": ["string", "null"]},
+        "cache_status": {"type": ["string", "null"]},
+        "verdict": {"enum": ["verified", "anachronistic", "unverifiable", "unchecked"]},
+        "strict": {"type": "boolean"}
+      }
+    },
+    "anchor": {
+      "type": "object",
+      "required": ["kind"],
+      "description": "An external witness that the chain head existed at some time. traceguard validates STRUCTURE only and never verifies a signature — see docs/specs/evidence-bundle.md §4.",
+      "properties": {
+        "kind": {"enum": ["file", "git-note", "webhook", "rfc3161", "ots", "rekor"]},
+        "seq": {"type": ["integer", "null"]},
+        "row_hash": {"type": ["string", "null"], "pattern": "^[0-9a-f]{64}$"},
+        "algo_version": {"type": ["integer", "null"]},
+        "entry_count": {"type": ["integer", "null"]},
+        "exported_at": {"type": ["string", "null"]},
+        "location": {"type": ["string", "null"], "description": "Where it was stored (path, git ref, URL)."},
+        "tsa_url": {"type": ["string", "null"]},
+        "digest_alg": {"type": ["string", "null"]},
+        "message_imprint": {"type": ["string", "null"]},
+        "token_b64": {"type": ["string", "null"], "description": "Base64 DER RFC 3161 token. Structure-checked only; verify with `openssl ts -verify` and a CA you fetched yourself."},
+        "epoch_root": {"type": ["string", "null"]},
+        "ots_status": {"enum": ["pending", "complete", null], "description": "pending = only a calendar server's promise, which is NOT evidence. complete = attested by a bitcoin block."},
+        "ots_proof_path": {"type": ["string", "null"]},
+        "rekor_uuid": {"type": ["string", "null"]},
+        "rekor_log_index": {"type": ["integer", "null"]}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "rfc3161"}}, "required": ["kind"]},
+          "then": {"required": ["tsa_url", "digest_alg", "message_imprint", "token_b64"]}
+        }
+      ]
+    },
+    "costEvent": {
+      "type": "object",
+      "required": ["event_id", "trace_id", "event_type", "occurred_at"],
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {"type": "integer"},
+        "trace_id": {"type": "integer"},
+        "event_type": {"enum": ["deferred_first_write", "rollback", "correction"]},
+        "old_value": {"type": ["string", "null"]},
+        "new_value": {"type": ["string", "null"]},
+        "reason": {"type": ["string", "null"]},
+        "batch_id": {"type": ["string", "null"]},
+        "occurred_at": {"type": "string"}
+      }
+    },
+    "finding": {
+      "type": "object",
+      "required": ["kind", "severity", "detail"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {"type": "string"},
+        "severity": {"enum": ["BREAK", "WARN", "GAP", "INFO"]},
+        "seq": {"type": ["integer", "null"]},
+        "trace_id": {"type": ["integer", "null"]},
+        "detail": {"type": "string"},
+        "direction": {"type": ["string", "null"]}
+      }
+    }
+  }
+}

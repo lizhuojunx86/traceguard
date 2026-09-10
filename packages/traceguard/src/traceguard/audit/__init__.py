@@ -35,7 +35,24 @@ the MUST set):
    ``reconcile()`` compares self-reported token volume per model and window
    with the provider's usage report; disagreement is a ``capture_mismatch``
    finding. Storage integrity (the chain) and capture fidelity (this) are
-   different questions; only totals are cross-checked, never single calls.
+   different questions.
+
+6. **Per-request existence reconciliation** (SPEC v1.2, layer L1.5) —
+   ``reconcile_requests()`` joins ``traces.provider_response_id`` against a
+   ``request-ledger/v1`` document from an out-of-band source, one call at a
+   time. Totals can cancel (an under-report and an over-report net out, and
+   the Usage API gives no call counts at all); existence cannot. A call
+   present on one side only is ``capture_unmatched`` (WARN) carrying a
+   ``direction``. It still cannot vouch for a matched call's CONTENT — that
+   is L2, and L2 stays unbuilt.
+
+7. **Evidence bundle** (:mod:`traceguard.audit.bundle`, SPEC v1.2) —
+   ``export_bundle()`` emits an ``evidence-bundle/v1`` JSON document and
+   ``verify_bundle()`` checks it with no DB, no network and no signature
+   verification. ``content_mode='hash_only'`` strips the hash-covered
+   content, which makes entry hashes unrecomputable — so that mode
+   verifies chain LINKAGE and the head against an anchor only, and says
+   so in different words. Format: ``docs/specs/evidence-bundle.md``.
 
 Importing this module has no side effects; nothing activates until
 :func:`enable` / :func:`attach`. Chain failures are fail-open by default
@@ -106,8 +123,41 @@ from traceguard.audit.anchors import (
     anchor_to,
     parse_sink_spec,
 )
+from traceguard.audit.bundle import (
+    BUNDLE_SCHEMA,
+    CONTENT_NOT_RECOMPUTED,
+    VALID_ANCHOR_KINDS,
+    BundleVerifyResult,
+    anchor_record,
+    export_bundle,
+    load_bundle,
+    verify_bundle,
+    write_bundle,
+)
+from traceguard.audit.ots import (
+    COMPLETE as OTS_COMPLETE,
+    DEFAULT_CALENDARS as OTS_DEFAULT_CALENDARS,
+    PENDING as OTS_PENDING,
+    OtsAnchorSink,
+    OtsProof,
+    ots_digest,
+    parse_ots_proof,
+    upgrade_proof,
+    verify_ots_proof,
+)
 from traceguard.audit.reconcile import (
     CAPTURE_MISMATCH,
+    CAPTURE_UNMATCHED,
+    DIRECTION_OUT_OF_BAND_ONLY,
+    DIRECTION_SELF_REPORTED_ONLY,
+    DIRECTION_TEXT,
+    REQUEST_LEDGER_SCHEMA,
+    LedgerRequest,
+    RequestLedger,
+    RequestReconcileResult,
+    load_request_ledger,
+    parse_request_ledger,
+    reconcile_requests,
     ModelComparison,
     ReconcileResult,
     SideTotals,
@@ -152,6 +202,16 @@ __all__ = [
     "anchor_to",
     "AnchorScheduler",
     "parse_sink_spec",
+    # second independent anchor: OpenTimestamps (extra: anchors)
+    "OtsAnchorSink",
+    "OtsProof",
+    "ots_digest",
+    "parse_ots_proof",
+    "verify_ots_proof",
+    "upgrade_proof",
+    "OTS_DEFAULT_CALENDARS",
+    "OTS_PENDING",
+    "OTS_COMPLETE",
     # out-of-band reconciliation (v2, L1)
     "reconcile",
     "ReconcileResult",
@@ -164,6 +224,28 @@ __all__ = [
     "load_usage_report",
     "fetch_anthropic_usage",
     "traces_usage",
+    # per-request existence reconciliation (SPEC v1.2, L1.5)
+    "CAPTURE_UNMATCHED",
+    "REQUEST_LEDGER_SCHEMA",
+    "DIRECTION_OUT_OF_BAND_ONLY",
+    "DIRECTION_SELF_REPORTED_ONLY",
+    "DIRECTION_TEXT",
+    "LedgerRequest",
+    "RequestLedger",
+    "RequestReconcileResult",
+    "parse_request_ledger",
+    "load_request_ledger",
+    "reconcile_requests",
+    # evidence bundle export + offline verify (SPEC v1.2)
+    "BUNDLE_SCHEMA",
+    "CONTENT_NOT_RECOMPUTED",
+    "VALID_ANCHOR_KINDS",
+    "BundleVerifyResult",
+    "anchor_record",
+    "export_bundle",
+    "verify_bundle",
+    "write_bundle",
+    "load_bundle",
     # hash algo (frozen v1)
     "ALGO_VERSION",
     "GENESIS_PREV_HASH",

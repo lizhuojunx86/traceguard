@@ -39,6 +39,12 @@ from traceguard.sdk.wrappers._base import (
 # text and zero tokens, which would corrupt the trace dataset.
 _STREAM_NOTE = "streaming response body not captured by wrap_openai"
 
+# Streaming also leaves traces.provider_response_id NULL. The wrapper does
+# not drain the stream, so there is no final message to take an id from, and
+# SPEC §3.1 (v1.2) is explicit that an unavailable id MUST stay NULL rather
+# than be guessed or synthesized: a fabricated id would produce a
+# reconciliation match for a call nobody can vouch for.
+
 
 def _chat_text(response: Any) -> str | None:
     """Best-effort extraction of the assistant text from a Chat Completions response."""
@@ -157,6 +163,11 @@ class _WrappedCompletions(_DelegatingWrapper):
                 "content_text": _chat_text(response),
                 "finish_reason": _first_finish_reason(response),
             }
+            # Also to the indexed column (SPEC §3.1 v1.2), where a
+            # per-request reconciliation can equi-join it. Kept in
+            # output_parsed too, so rows written before 1.6.0 stay joinable
+            # on the JSON (the column is not backfilled).
+            span.record_provider_response_id(parsed["id"])
 
             routing = routing_detail(model, response)
             if routing is not None:
@@ -251,6 +262,7 @@ class _WrappedResponses(_DelegatingWrapper):
                 "content_text": _responses_text(response),
                 "status": getattr(response, "status", None),
             }
+            span.record_provider_response_id(parsed["id"])
 
             routing = routing_detail(model, response)
             if routing is not None:

@@ -13,7 +13,8 @@ promises from docs/spec-changes/2026-08-27, made mechanical:
    their load-bearing sentences must still be there, verbatim.
 
 Plus the algo v1 envelope, which the golden tests pin byte-for-byte — here it is
-stated as a contract fact: the SPEC v1.1 columns are OUTSIDE it.
+stated as a contract fact: the columns added after SPEC v1.0 (``agent_id``,
+``session_id`` in v1.1, ``provider_response_id`` in v1.2) are OUTSIDE it.
 """
 
 from __future__ import annotations
@@ -57,6 +58,16 @@ EXPECTED_AUDIT_API = {
     "anchor_to",
     "AnchorScheduler",
     "parse_sink_spec",
+    # OpenTimestamps anchor (SPEC v1.2) — ADDED deliberately (minor, §6.3).
+    "OtsAnchorSink",
+    "OtsProof",
+    "ots_digest",
+    "parse_ots_proof",
+    "verify_ots_proof",
+    "upgrade_proof",
+    "OTS_DEFAULT_CALENDARS",
+    "OTS_PENDING",
+    "OTS_COMPLETE",
     # out-of-band reconciliation (v2, L1)
     "reconcile",
     "ReconcileResult",
@@ -69,6 +80,29 @@ EXPECTED_AUDIT_API = {
     "load_usage_report",
     "fetch_anthropic_usage",
     "traces_usage",
+    # per-request existence reconciliation (SPEC v1.2, L1.5) — ADDED
+    # deliberately; new symbols on this surface are a SemVer minor (§6.3).
+    "CAPTURE_UNMATCHED",
+    "REQUEST_LEDGER_SCHEMA",
+    "DIRECTION_OUT_OF_BAND_ONLY",
+    "DIRECTION_SELF_REPORTED_ONLY",
+    "DIRECTION_TEXT",
+    "LedgerRequest",
+    "RequestLedger",
+    "RequestReconcileResult",
+    "parse_request_ledger",
+    "load_request_ledger",
+    "reconcile_requests",
+    # evidence bundle (SPEC v1.2) — ADDED deliberately (minor, §6.3).
+    "BUNDLE_SCHEMA",
+    "CONTENT_NOT_RECOMPUTED",
+    "VALID_ANCHOR_KINDS",
+    "BundleVerifyResult",
+    "anchor_record",
+    "export_bundle",
+    "verify_bundle",
+    "write_bundle",
+    "load_bundle",
     # hash algo (frozen v1)
     "ALGO_VERSION",
     "GENESIS_PREV_HASH",
@@ -87,7 +121,10 @@ EXPECTED_AUDIT_API = {
     "CanonicalizationError",
 }
 
-# kind -> severity, frozen since SPEC v1.1 (8 v1 kinds + capture_mismatch).
+# kind -> severity, frozen since SPEC v1.1 (8 v1 kinds + capture_mismatch),
+# plus capture_unmatched from SPEC v1.2. A new kind is a MINOR and updating
+# this table is the deliberate act that records it (2026-08-27 revision A);
+# changing or removing an existing one is a major and this test must fight it.
 FROZEN_FINDING_SEVERITY = {
     "anchor_mismatch": "BREAK",
     "link_broken": "BREAK",
@@ -98,6 +135,7 @@ FROZEN_FINDING_SEVERITY = {
     "deleted_with_record": "WARN",
     "coverage_gap": "GAP",
     "capture_mismatch": "WARN",
+    "capture_unmatched": "WARN",
 }
 
 # Parameter names of the public functions as of SPEC v1.1. The test allows the
@@ -158,7 +196,58 @@ FROZEN_PARAMETERS = {
     "traces_usage": ("engine", "starting_at", "ending_at", "project", "operation"),
     "canonical_json_bytes": ("payload",),
     "compute_row_hash": ("prev_hash", "payload"),
+    # SPEC v1.2 additions. Frozen from the moment they entered __all__ — the
+    # 08-27 precedent is that every public function on this surface is
+    # parameter-frozen, and a function that is exported but unlisted here is
+    # contract-bound with nothing enforcing §6.3 on it.
+    "reconcile_requests": (
+        "engine",
+        "ledger",
+        "starting_at",
+        "ending_at",
+        "project",
+        "operation",
+    ),
+    "parse_request_ledger": ("payload",),
+    "load_request_ledger": ("path",),
+    "export_bundle": (
+        "engine",
+        "since",
+        "until",
+        "trace_ids",
+        "content_mode",
+        "include_sources",
+        "anchors",
+    ),
+    "verify_bundle": ("bundle",),
+    "write_bundle": ("bundle", "path"),
+    "load_bundle": ("path",),
+    "anchor_record": ("anchor", "kind", "location"),
+    "ots_digest": ("anchor",),
+    "parse_ots_proof": ("data",),
+    "verify_ots_proof": ("proof", "anchor"),
+    "upgrade_proof": ("path", "calendars", "calendar_factory"),
 }
+
+
+def test_every_public_callable_is_parameter_frozen():
+    """No public function may sit on this surface unfrozen.
+
+    Without this, adding a symbol to ``EXPECTED_AUDIT_API`` and forgetting
+    ``FROZEN_PARAMETERS`` silently exempts it from §6.3 — it looks covered
+    because the surface test passes.
+    """
+    unfrozen = sorted(
+        name
+        for name in audit.__all__
+        if callable(getattr(audit, name))
+        and not isinstance(getattr(audit, name), type)
+        and name not in FROZEN_PARAMETERS
+    )
+    assert not unfrozen, (
+        f"public function(s) {unfrozen} are exported but not in FROZEN_PARAMETERS — "
+        "add them (with their current parameters) so §6.3 is enforced on them too"
+    )
 
 BOUNDARY_SENTENCES = (
     "哈希链不是 MAC,v1 无密钥。",
@@ -203,9 +292,9 @@ def test_public_function_parameters_only_grow_with_defaults(name: str):
         )
 
 
-def test_algo_v1_envelope_excludes_the_v1_1_columns_and_cost_usd():
+def test_algo_v1_envelope_excludes_the_post_1_0_columns_and_cost_usd():
     assert audit.ALGO_VERSION == 1
-    for outside in ("agent_id", "session_id", "cost_usd"):
+    for outside in ("agent_id", "session_id", "provider_response_id", "cost_usd"):
         assert outside not in audit.TRACE_CONTENT_FIELDS
 
 

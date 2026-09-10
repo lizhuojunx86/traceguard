@@ -2,19 +2,32 @@
 
 ::
 
-    python -m traceguard.audit enable    --db sqlite:///traces.db [--chain-only] [--no-backfill] [--strict]
-    python -m traceguard.audit disable   --db sqlite:///traces.db
-    python -m traceguard.audit verify    --db sqlite:///traces.db [--anchor '<json>' | --anchor-file PATH]
-    python -m traceguard.audit anchor    --db sqlite:///traces.db [--sink SPEC ...] [--every SECONDS [--rounds N]]
-    python -m traceguard.audit reconcile --db sqlite:///traces.db --source anthropic-usage|json:PATH
-                                         --window START,END [--bucket-width 1d] [--tolerance 0.05]
-                                         [--project P] [--api-key-id ID ...] [--workspace-id ID ...]
-                                         [--model-map TRACE=PROVIDER ...]
+    python -m traceguard.audit --db sqlite:///traces.db enable    [--chain-only] [--no-backfill] [--strict]
+    python -m traceguard.audit --db sqlite:///traces.db disable
+    python -m traceguard.audit --db sqlite:///traces.db verify    [--anchor '<json>' | --anchor-file PATH]
+                                                                 [--ots-proof PATH [--ots-upgrade]]
+    python -m traceguard.audit --db sqlite:///traces.db anchor    [--sink SPEC ...] [--every SECONDS [--rounds N]]
+    python -m traceguard.audit --db sqlite:///traces.db reconcile
+                                   --source anthropic-usage|json:PATH|requests-json:PATH
+                                   --window START,END [--bucket-width 1d] [--tolerance 0.05]
+                                   [--project P] [--api-key-id ID ...] [--workspace-id ID ...]
+                                   [--model-map TRACE=PROVIDER ...]
+    python -m traceguard.audit --db sqlite:///traces.db bundle --out PATH [--hash-only] ...
+    python -m traceguard.audit verify-bundle PATH        # offline: takes no --db
+
+**``--db`` is a top-level option: it goes BEFORE the subcommand**, as every
+line above now shows. Putting it after is rejected by argparse with
+``unrecognized arguments: --db ...``; this docstring and docs/audit.md both had
+it the wrong way round, so the documented invocations did not run.
 
 ``verify`` exits 1 on BREAK findings (tamper evidence), 0 otherwise.
 ``anchor`` exits 1 when a sink refused the anchor (an anchor that did not land
-protects nothing). ``reconcile`` exits 1 on any ``capture_mismatch``.
-``--db`` falls back to ``TRACEGUARD_DB_URL`` then the make_engine default.
+protects nothing). ``reconcile`` exits 1 on any ``capture_mismatch`` (or, with
+``--source requests-json:``, any ``capture_unmatched``).
+``bundle`` writes an ``evidence-bundle/v1`` document; ``verify-bundle`` checks
+one offline (no DB, no network, no signature verification) and exits 1 on a
+BREAK. ``--db`` falls back to ``TRACEGUARD_DB_URL`` then the make_engine default;
+``verify-bundle`` opens no database at all.
 """
 
 from __future__ import annotations
@@ -31,9 +44,18 @@ from traceguard.audit.anchors import (
     anchor_to,
     parse_sink_spec,
 )
+from traceguard.audit.bundle import (
+    anchor_record,
+    export_bundle,
+    load_bundle,
+    verify_bundle,
+    write_bundle,
+)
 from traceguard.audit.chain import disable, enable
 from traceguard.audit.reconcile import (
     ADMIN_KEY_ENV,
+    load_request_ledger,
+    reconcile_requests,
     align_window,
     fetch_anthropic_usage,
     load_usage_report,
@@ -44,11 +66,23 @@ from traceguard.audit.verify import ChainAnchor, export_anchor, verify_chain
 from traceguard.store.models import make_engine
 
 
+def _iso_or_none(text):
+    """Parse an ISO 8601 CLI value, defaulting a bare date to UTC."""
+    if not text:
+        return None
+    from datetime import datetime, timezone
+
+    value = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
 def _print_findings(findings) -> None:
     for finding in findings:
         loc = f"seq={finding.seq}" if finding.seq is not None else ""
         tid = f"trace_id={finding.trace_id}" if finding.trace_id is not None else ""
-        where = " ".join(x for x in (loc, tid) if x)
+        direction = getattr(finding, "direction", None)
+        dirn = f"direction={direction}" if direction else ""
+        where = " ".join(x for x in (loc, tid, dirn) if x)
         print(f"  [{finding.severity}] {finding.kind} {where}: {finding.detail}")
 
 
@@ -96,6 +130,17 @@ def main(argv: list[str] | None = None) -> int:
         metavar="PATH",
         help="a file sink written by `anchor --sink file:PATH`; its newest anchor is used",
     )
+    p_verify.add_argument(
+        "--ots-proof",
+        default=None,
+        metavar="PATH",
+        help="an .ots proof written by `anchor --sink ots:DIR`: reports whether it commits to the anchor being used, and whether it is pending or complete",
+    )
+    p_verify.add_argument(
+        "--ots-upgrade",
+        action="store_true",
+        help="with --ots-proof: first ask the calendars for the completed proof (a pending proof is not evidence)",
+    )
 
     p_anchor = sub.add_parser(
         "anchor",
@@ -106,7 +151,8 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         default=[],
         metavar="SPEC",
-        help="where to store the anchor: file:PATH | git-note[:REPO] | webhook:URL (repeatable)",
+        help="where to store the anchor: file:PATH | git-note[:REPO] | webhook:URL | "
+        "ots:DIR (OpenTimestamps, needs the anchors extra) (repeatable)",
     )
     p_anchor.add_argument(
         "--every",
@@ -129,7 +175,9 @@ def main(argv: list[str] | None = None) -> int:
     p_rec.add_argument(
         "--source",
         required=True,
-        help="anthropic-usage (Usage Admin API; needs $ANTHROPIC_ADMIN_KEY) | json:PATH (saved report)",
+        help="anthropic-usage (Usage Admin API; needs $ANTHROPIC_ADMIN_KEY) | "
+        "json:PATH (saved usage report, aggregate) | requests-json:PATH "
+        "(a request-ledger/v1 document — per-request existence check, L1.5)",
     )
     p_rec.add_argument(
         "--window",
@@ -172,7 +220,58 @@ def main(argv: list[str] | None = None) -> int:
         help=f"environment variable holding the Admin API key (default {ADMIN_KEY_ENV})",
     )
 
+    p_bundle = sub.add_parser(
+        "bundle",
+        help="export an evidence-bundle/v1 JSON document (traces + chain + anchors)",
+    )
+    p_bundle.add_argument("--out", required=True, metavar="PATH", help="where to write it")
+    p_bundle.add_argument("--since", default=None, metavar="ISO", help="invoked_at >= this")
+    p_bundle.add_argument("--until", default=None, metavar="ISO", help="invoked_at < this")
+    p_bundle.add_argument(
+        "--trace-ids",
+        default=None,
+        metavar="A,B,C",
+        help="explicit trace_id list (overrides --since/--until)",
+    )
+    p_bundle.add_argument(
+        "--hash-only",
+        action="store_true",
+        help="strip the hash-covered content fields. The bundle then proves chain "
+        "LINKAGE and the head-vs-anchor check ONLY — entry hashes cannot be "
+        "recomputed without the content",
+    )
+    p_bundle.add_argument(
+        "--no-sources",
+        action="store_true",
+        help="omit source_snapshots",
+    )
+    p_bundle.add_argument(
+        "--anchor-file",
+        default=None,
+        metavar="PATH",
+        help="a file sink written by `anchor --sink file:PATH`; its newest anchor "
+        "is recorded in the bundle",
+    )
+
+    p_vb = sub.add_parser(
+        "verify-bundle",
+        help="verify an evidence bundle offline; exit 1 on BREAK findings",
+    )
+    p_vb.add_argument("path", help="path to the bundle JSON")
+
     args = parser.parse_args(argv)
+    if args.command == "verify-bundle":
+        # Offline by construction: never opens the DB, so it works on a machine
+        # that has only the file (which is the whole point of the format).
+        try:
+            result = verify_bundle(load_bundle(args.path))
+        except (ValueError, OSError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 2
+        print(result.summary())
+        _print_findings(result.findings)
+        return 0 if result.ok else 1
+
     engine = make_engine(args.db)
 
     if args.command == "enable":
@@ -205,10 +304,52 @@ def main(argv: list[str] | None = None) -> int:
             if anchor is None:
                 print(f"no anchor found in {args.anchor_file}", file=sys.stderr)
                 return 2
+        ots_ok = True
+        if args.ots_proof:
+            # Lazy import: only an --ots-proof run needs the anchors extra.
+            try:
+                from traceguard.audit.ots import (
+                    load_anchor_beside,
+                    parse_ots_proof,
+                    upgrade_proof,
+                    verify_ots_proof,
+                )
+            except ImportError as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            try:
+                proof = (
+                    upgrade_proof(args.ots_proof)
+                    if args.ots_upgrade
+                    else parse_ots_proof(args.ots_proof)
+                )
+            except Exception as exc:  # noqa: BLE001 - a malformed proof is a usage error
+                print(f"could not read the OTS proof {args.ots_proof}: {exc}", file=sys.stderr)
+                return 2
+            # The anchor the proof commits to: the sidecar beside it, else the
+            # one already selected. A proof without its anchor cannot be tied
+            # to anything, and saying otherwise would be the overclaim.
+            subject = load_anchor_beside(args.ots_proof) or anchor
+            if subject is None:
+                print(
+                    "  [INFO] ots: " + proof.describe(),
+                )
+                print(
+                    "  [WARN] the OTS proof has no anchor beside it and none was "
+                    "given, so it cannot be tied to this chain",
+                    file=sys.stderr,
+                )
+            else:
+                matched, explanation = verify_ots_proof(proof, subject)
+                print(f"  [{'INFO' if matched else 'BREAK'}] ots: {explanation}")
+                if not matched:
+                    ots_ok = False
+                elif anchor is None:
+                    anchor = subject  # verify against what the proof attests
         result = verify_chain(engine, from_anchor=anchor)
         print(result.summary())
         _print_findings(result.findings)
-        return 0 if result.ok else 1
+        return 0 if (result.ok and ots_ok) else 1
 
     if args.command == "anchor":
         try:
@@ -256,7 +397,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "reconcile":
         try:
             start, end = parse_window(args.window)
-            start, end = align_window(start, end, args.bucket_width)
+            # Bucket alignment is a Usage-API concern: that API snaps every
+            # bucket to a UTC minute/hour/day edge, so the totals path has to
+            # ask for whole buckets. A request ledger has no buckets, and
+            # widening its window to the --bucket-width default of 1d both
+            # refused windows the ledger does cover and pulled in traces the
+            # ledger never claimed to vouch for — reporting them as fabricated.
+            if not args.source.startswith("requests-json:"):
+                start, end = align_window(start, end, args.bucket_width)
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 2
@@ -268,6 +416,25 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             model_map[key] = value
         source = args.source
+        if source.startswith("requests-json:"):
+            # L1.5: per-request existence, not totals. Different question,
+            # different finding kind (capture_unmatched), different output.
+            try:
+                ledger = load_request_ledger(source[len("requests-json:") :])
+                per_request = reconcile_requests(
+                    engine,
+                    ledger=ledger,
+                    starting_at=start,
+                    ending_at=end,
+                    project=args.project,
+                    operation=args.operation,
+                )
+            except (ValueError, OSError) as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            print(per_request.summary())
+            _print_findings(per_request.findings)
+            return 0 if per_request.ok else 1
         if source == "anthropic-usage":
             admin_key = os.environ.get(args.admin_key_env, "")
             if not admin_key:
@@ -288,7 +455,8 @@ def main(argv: list[str] | None = None) -> int:
             provider = load_usage_report(source[len("json:") :])
         else:
             print(
-                f"unknown --source {source!r}; expected anthropic-usage | json:PATH",
+                f"unknown --source {source!r}; expected anthropic-usage | json:PATH "
+                "| requests-json:PATH",
                 file=sys.stderr,
             )
             return 2
@@ -317,6 +485,52 @@ def main(argv: list[str] | None = None) -> int:
             )
         _print_findings(result.findings)
         return 0 if result.ok else 1
+
+    if args.command == "bundle":
+        trace_ids = None
+        if args.trace_ids:
+            try:
+                trace_ids = [int(x) for x in args.trace_ids.split(",") if x.strip()]
+            except ValueError:
+                print("--trace-ids must be a comma-separated list of integers", file=sys.stderr)
+                return 2
+        anchors = []
+        if args.anchor_file:
+            stored = FileAnchorSink(args.anchor_file).latest()
+            if stored is None:
+                print(f"no anchor found in {args.anchor_file}", file=sys.stderr)
+                return 2
+            anchors.append(anchor_record(stored, kind="file", location=args.anchor_file))
+        try:
+            since = _iso_or_none(args.since)
+            until = _iso_or_none(args.until)
+        except ValueError as exc:
+            print(f"--since/--until must be ISO 8601: {exc}", file=sys.stderr)
+            return 2
+        bundle = export_bundle(
+            engine,
+            since=since,
+            until=until,
+            trace_ids=trace_ids,
+            content_mode="hash_only" if args.hash_only else "full",
+            include_sources=not args.no_sources,
+            anchors=anchors,
+        )
+        path = write_bundle(bundle, args.out)
+        print(
+            f"wrote {path} ({bundle['content_mode']}): "
+            f"{len(bundle['traces'])} trace(s), "
+            f"{len(bundle['chain']['entries'])} chain entry/entries, "
+            f"{len(bundle['source_snapshots'])} source snapshot(s), "
+            f"{len(bundle['anchors'])} anchor(s)"
+        )
+        if args.hash_only:
+            print(
+                "  hash_only: content fields were stripped, so a later verify checks "
+                "chain linkage and anchors ONLY — not content",
+                file=sys.stderr,
+            )
+        return 0
 
     return 2  # pragma: no cover - argparse enforces the subcommand set
 

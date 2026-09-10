@@ -364,7 +364,9 @@ def main(argv: list[str] | None = None) -> int:
         if not is_enabled(audit_engine):
             print(
                 "--audit requires the audit layer to be enabled on this DB first: "
-                f"python -m traceguard.audit enable --db {args.db}"
+                # --db is a TOP-LEVEL option; after the subcommand argparse
+                # rejects it, and this hint is copy-pasted by definition.
+                f"python -m traceguard.audit --db {args.db} enable"
             )
             return 2
 

@@ -1,6 +1,6 @@
 [project]
 name = "traceguard"
-version = "1.5.0"
+version = "1.6.0"
 description = "Point-in-time correct LLM instrumentation: tracing, version pinning, and look-ahead-bias protection for research pipelines"
 readme = "README.md"
 license = "Apache-2.0"
@@ -62,6 +62,12 @@ contamination-hf = [
     "torch>=2.0",
     "transformers>=4.40",
 ]
+# Network anchor sinks: OpenTimestamps (ots:DIR). Isolated in an extra
+# because the core package and traceguard.audit stay dependency-free — an
+# `ots:` sink is the only thing that pulls this in, and only when asked for.
+anchors = [
+    "opentimestamps>=0.4,<0.5",
+]
 
 [project.scripts]
 # Contract-external tools. Console scripts rather than `python -m ...` because
@@ -92,6 +98,13 @@ packages = ["src/traceguard"]
 [dependency-groups]
 dev = [
     "pytest>=8.0",
+    # Schema-conformance check for docs/specs/evidence-bundle-v1.schema.json.
+    # DEV ONLY: the runtime never validates against the schema (this package
+    # adds no runtime dependencies) — the schema is the published contract and
+    # this is what keeps the emitter honest to it.
+    "jsonschema>=4.0",
+    # Exercises the ots: sink for real rather than perpetually skipping it.
+    "opentimestamps>=0.4,<0.5",
     "pytest-asyncio>=0.23",
     "ruff>=0.6.0,<0.8.0",
     "opentelemetry-sdk>=1.20",

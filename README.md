@@ -263,6 +263,11 @@ pip install traceguard
 Requires Python 3.11+. Core dependencies: SQLAlchemy 2, Pydantic 2, PyYAML.
 The Anthropic and OpenAI wrappers are extras:
 `pip install "traceguard[anthropic]"` / `pip install "traceguard[openai]"`.
+Anchoring the audit chain to OpenTimestamps needs
+`pip install "traceguard[anchors]"`; everything else in `traceguard.audit`
+works without it. `traceguard.sources` needs no extra and is
+**experimental** — it is outside the frozen public surface and outside the
+`contract-guard` CI job, so its API can still change in a minor.
 
 To track the development version instead of PyPI releases:
 
@@ -351,6 +356,43 @@ The full interface contract — table schemas, SDK signatures, semantics, and
 SemVer rules — lives in [docs/SPEC.md](docs/SPEC.md) (English) and
 [TRACEGUARD_SPEC.md](TRACEGUARD_SPEC.md) (Chinese original, authoritative).
 
+## Retrieved data: `traceguard.sources` (experimental)
+
+The four invariants cover the model, the prompt, and feature ordering. They do
+not cover the data the pipeline *fetched*. A backtest can use the right model,
+the right prompt and the right `feature_as_of`, be handed a vendor value that
+was rewritten into existence weeks later, and pass all four while being wrong.
+
+That is measured, not hypothetical: **41.4%** of vendor `epsActual` values
+differ between first sight and today, and **15.3%** flip a binary entry
+decision. A second capture put the same two figures at 18.6% and 4.6%.
+[`analysis/eps_revision.py`](analysis/eps_revision.py) recomputes both offline
+from data committed to this repo.
+
+`traceguard.sources` (opt-in, off the frozen import surface) records one
+`source_snapshot` per retrieval — `content_hash`, `retrieved_at`, the source's
+claimed `published_at`, and a `verdict` from invariant 3:
+
+| verdict | meaning |
+|---|---|
+| `verified` | `published_at` ≤ `feature_as_of` — the content demonstrably already existed |
+| `anachronistic` | it did not exist yet |
+| `unverifiable` | the source states no `published_at`, so existence can be neither shown nor ruled out |
+| `unchecked` | the call site passed no `feature_as_of`; nothing was compared |
+
+`strict=True` refuses the last two; `strict=False` records them. `strict` is
+keyword-only with no default, so every call site states its intent — the same
+discipline `select_model` uses. `python -m traceguard.sources --db URL drift`
+then reports which sources changed content between retrievals, as a rate with
+its n and a Wilson 95% interval.
+
+**No retrieved content is stored** — digests and metadata only. And the limits
+are stated rather than glossed: a snapshot proves which bytes the host handed
+over and how their claimed publication time relates to `feature_as_of`. It does
+not prove the host actually fetched them from `source_uri` (TraceGuard never
+made the request), nor that `published_at` is true — that is what the source
+says about itself. Details: [docs/sources.md](docs/sources.md).
+
 ## Evidence layer: `traceguard.audit`
 
 Time-correct traces are only worth as much as the guarantee that they were not
@@ -371,6 +413,16 @@ since SPEC v1.1, off the frozen import surface) adds that guarantee to the `trac
   `anchor --sink file:…|git-note:…|webhook:… [--every SECONDS]` stores the head
   outside the DB on a cadence, and `reconcile` checks self-reported token
   volume against the provider's usage report (`capture_mismatch`).
+- **Per-request existence check (L1.5)** — totals can cancel: an
+  under-reported call and an over-reported one net out, and the provider
+  usage API reports tokens but no call counts. `reconcile --source
+  requests-json:PATH` instead joins `traces.provider_response_id` against a
+  `request-ledger/v1` document from an out-of-band source, one call at a
+  time. A call present on only one side is `capture_unmatched` (WARN)
+  carrying a direction — `out_of_band_only` (a call the capture layer did
+  not see) or `self_reported_only` (a record the provider side does not
+  vouch for). It confirms that matched calls exist on both sides; it cannot
+  vouch for their *content*, which stays out of scope.
 
 Boundaries are stated rather than glossed: this is tamper-**evident**, not
 tamper-proof. Core SQL, raw drivers, and bulk APIs bypass the ORM guard, and
@@ -423,10 +475,11 @@ the private captures.
 ```bash
 # SDK
 cd packages/traceguard
-uv sync && uv run pytest        # 359 tests (3 skip without the contamination-hf extra)
+uv sync --extra openai          # keep the extra: a bare `uv sync` uninstalls it
+uv run pytest                   # 1053 tests (3 skip without the contamination-hf extra)
 
 # Pipeline Guardian (legacy)
-uv sync && uv run pytest        # 259 tests, from repo root
+uv sync && uv run pytest        # 293 tests, from repo root
 ```
 
 Roadmap: [TRACEGUARD_ROADMAP.md](TRACEGUARD_ROADMAP.md). Phase 0 was accepted in
@@ -476,6 +529,23 @@ roughly 7% of the evaluated transcripts had spoofed tool calls, and agents
 researched how to spoof, edit or delete their own transcripts. The chain
 answers whether a stored record was changed afterwards; `reconcile` is the
 first honest step on whether it was true.
+
+**1.6.0** (SPEC v1.2) works on the other two halves of that question: which
+call produced a number, and whether anyone else can check it. `traces` gains
+`provider_response_id` (nullable, outside the algo v1 hash envelope), and
+`reconcile_requests` joins it against an out-of-band `request-ledger/v1`
+document one call at a time — totals can cancel, because an under-report and an
+over-report net out and the provider's usage API gives no call counts at all;
+existence cannot. `export_bundle` writes an `evidence-bundle/v1` document that a
+recipient verifies with no database, no network and no traceguard installed; it
+reads VERIFIED only when an anchor covers the entries the bundle carries, and
+INTERNALLY CONSISTENT otherwise, because a rewrite that re-chains the segment is
+internally consistent too. The chain can now be anchored to OpenTimestamps
+(`ots:`), whose still-pending proofs are reported as a calendar server's promise
+rather than as attested time. New and **experimental**: `traceguard.sources`
+records a digest and the timing of each retrieval — never the content — grades
+invariant 3 against `feature_as_of`, and reports which sources rewrote what they
+had already served with an n and a Wilson interval instead of a bare percentage.
 
 ## License
 

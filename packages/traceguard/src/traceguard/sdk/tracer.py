@@ -27,6 +27,7 @@ _INPUT_SUMMARY_MAX = 500
 
 _otel_log = logging.getLogger("traceguard.otel")
 _persist_log = logging.getLogger("traceguard.tracer")
+_sources_log = logging.getLogger("traceguard.sources")
 
 
 def _env_truthy(name: str) -> bool:
@@ -146,6 +147,11 @@ class Span:
         self._cost_usd: Decimal | None = None
         self._error_class: str | None = None
         self._error_message: str | None = None
+        self._provider_response_id: str | None = None
+        # Buffered (snapshot, verdict, strict) triples from record_source.
+        # Validation already happened at record time; only the WRITE is
+        # deferred to _flush, where it is fail-open (see _write_sources_safe).
+        self._source_records: list[tuple[Any, str, bool]] = []
 
         self.trace_id: int | None = None
 
@@ -203,6 +209,62 @@ class Span:
         if self._parse_status is None:
             self._parse_status = "failed"
 
+    def record_provider_response_id(self, response_id: Any) -> None:
+        """Record the provider's own identifier for this call (SPEC §3.1, v1.2).
+
+        The join key for per-request out-of-band reconciliation: OpenAI
+        ``response.id``, Anthropic ``message.id``. A new method rather than a
+        parameter on ``record_output`` — SPEC §6.3 counts a new method as a
+        minor and leaves every existing signature untouched.
+
+        A non-string, or an empty string, records NOTHING and leaves the
+        column NULL. "The provider did not give us one" and "here is an id"
+        are different facts, and a reconciliation that treats a placeholder
+        as an id manufactures a match that never happened.
+        """
+        if isinstance(response_id, str) and response_id:
+            self._provider_response_id = response_id
+
+    def record_source(self, snapshot: Any, *, strict: bool) -> Any:
+        """Attach one retrieved-source snapshot to this trace (SPEC v1.2 §6.6).
+
+        ``snapshot`` is a :class:`traceguard.sources.SourceSnapshot` or a
+        mapping of its fields. ``strict`` is keyword-only with no default,
+        matching ``select_model`` discipline: whether an unprovable source
+        should stop the run is a decision, and every call site states it.
+        Returns the :class:`~traceguard.sources.SourceVerdict`.
+
+        Validation and the invariant-3 judgement run HERE, synchronously, on
+        the caller's stack — not at flush. That placement is load-bearing:
+        the row write is deferred to ``_flush`` and is fail-open there
+        (SPEC §4.1), so a strict refusal raised at flush time would be
+        swallowed by ``_flush_safe`` and strict mode would be silently
+        defeated. In strict mode an anachronistic or unprovable source raises
+        ``InvariantViolation`` right here, where the host can see it.
+
+        Requires the snapshot's table (``traceguard.sources.enable(engine)``).
+        Without it the verdict is still computed and returned — a strict call
+        site still refuses — but the row write fails open with a warning.
+        """
+        # Lazy import, mirroring enable_otel: keeps this module independent of
+        # the sources extension, which stays off the frozen public surface.
+        from traceguard.sources.record import SourceSnapshot
+        from traceguard.sources.validate import validate_source_snapshot
+
+        if not isinstance(snapshot, SourceSnapshot):
+            if isinstance(snapshot, Mapping):
+                snapshot = SourceSnapshot(**dict(snapshot))
+            else:
+                raise TypeError(
+                    "record_source expects a SourceSnapshot or a mapping of its "
+                    f"fields, got {type(snapshot).__name__!r}"
+                )
+        verdict = validate_source_snapshot(
+            snapshot, self.feature_as_of, strict=strict
+        )
+        self._source_records.append((snapshot, verdict.value, bool(strict)))
+        return verdict
+
     def _flush(self) -> Trace | None:
         """Commit one row to ``traces`` and return a detached snapshot for OTel.
 
@@ -230,6 +292,7 @@ class Span:
             correlation_id=self.correlation_id,
             agent_id=self.agent_id,
             session_id=self.session_id,
+            provider_response_id=self._provider_response_id,
             input_hash=self._input_hash,
             input_summary=self._input_summary,
             model_id=self._model_id,
@@ -248,6 +311,15 @@ class Span:
         )
         with Session(self._engine) as sess:
             sess.add(row)
+            if self._source_records:
+                # Assign the PK before the snapshot rows need it. This also
+                # fires the audit chain's after_insert hook, exactly as the
+                # implicit flush inside commit() would have — same order,
+                # same transaction. Skipped entirely when nothing was
+                # recorded, so the default path stays byte-for-byte the
+                # pre-1.6.0 commit.
+                sess.flush()
+                self._write_sources_safe(sess, row.trace_id)
             sess.commit()
             if self._otel_sink is not None:
                 # Reload the DB-round-tripped values (UTC normalization, Numeric
@@ -260,6 +332,103 @@ class Span:
             self.trace_id = row.trace_id
         self._committed = True
         return self._snapshot
+
+    def _write_sources_safe(self, sess: Session, trace_id: int) -> None:
+        """Insert the buffered source snapshots inside a SAVEPOINT.
+
+        Two requirements pull in opposite directions and the savepoint is
+        what reconciles them:
+
+        - The rows belong to the SAME transaction as their trace, so
+          ``trace_id`` is the real, just-issued primary key and a snapshot
+          can never reference a trace that was rolled back.
+        - A snapshot failure must not cost the host its trace (SPEC §4.1
+          fail-open, the same isolation the OTel dual-write gets). Plain
+          same-transaction inserts would take the trace down with them.
+
+        So: the trace row is already flushed; the snapshot inserts run in a
+        nested SAVEPOINT; a failure rolls back only that savepoint and the
+        trace still commits. ``traceguard.audit.chain`` uses the same
+        mechanism on this SQLite setup, for the same reason.
+
+        Catches ``Exception`` only, letting ``KeyboardInterrupt`` /
+        ``SystemExit`` through. ``strict_persistence`` deliberately does NOT
+        make this fail closed: the invariant-3 decision already happened at
+        ``record_source`` time and raised there if it was going to. What is
+        left here is bookkeeping, and losing bookkeeping must not lose the
+        trace it describes.
+        """
+        from traceguard.sources.models import SourceSnapshotRow
+
+        try:
+            nested = sess.begin_nested()
+        except Exception:  # noqa: BLE001 - no savepoint support → skip, keep the trace
+            self._warn_sources_failed(len(self._source_records), sess)
+            return
+        try:
+            for snapshot, verdict, strict in self._source_records:
+                sess.add(
+                    SourceSnapshotRow(
+                        trace_id=trace_id,
+                        source_uri=snapshot.source_uri,
+                        source_kind=snapshot.source_kind,
+                        content_hash=snapshot.content_hash,
+                        content_encoding=snapshot.content_encoding,
+                        normalized_hash=snapshot.normalized_hash,
+                        normalizer_id=snapshot.normalizer_id,
+                        retrieved_at=snapshot.retrieved_at,
+                        published_at=snapshot.published_at,
+                        effective_at=snapshot.effective_at,
+                        source_version=snapshot.source_version,
+                        mcp_server_id=snapshot.mcp_server_id,
+                        tool_name=snapshot.tool_name,
+                        cache_status=snapshot.cache_status,
+                        verdict=verdict,
+                        strict=strict,
+                    )
+                )
+            nested.commit()
+        except Exception:  # noqa: BLE001 - a snapshot must never cost the trace
+            try:
+                nested.rollback()
+            except Exception:  # noqa: BLE001 - already unusable; the trace still commits
+                pass
+            self._warn_sources_failed(len(self._source_records), sess)
+
+    def _warn_sources_failed(self, count: int, sess: Session) -> None:
+        """Log why the snapshots did not land, naming the likely cause.
+
+        The missing-table case (``record_source`` without
+        ``traceguard.sources.enable(engine)``) is by far the most likely, and
+        a generic 'write failed' would send the reader hunting. The lookup is
+        paid only on the failure path.
+
+        It runs on the SESSION'S OWN connection, never on the engine. Opening a
+        second connection here would return it to the pool afterwards, and the
+        pool resets a returned connection with a ROLLBACK — on a
+        shared-connection SQLite engine (``:memory:``) that rolls back the
+        still-uncommitted trace, so the diagnostic would destroy the very row
+        this method exists to say was preserved.
+        """
+        try:
+            from traceguard.sources.models import source_tables_exist
+
+            if not source_tables_exist(sess.connection()):
+                _sources_log.warning(
+                    "%d source snapshot(s) not recorded: the source_snapshots "
+                    "table does not exist — call traceguard.sources.enable(engine) "
+                    "once for this DB. The trace itself was written normally.",
+                    count,
+                )
+                return
+            _sources_log.warning(
+                "%d source snapshot(s) failed to persist; the trace and the "
+                "business call are unaffected",
+                count,
+                exc_info=True,
+            )
+        except Exception:  # noqa: BLE001 - even the recovery log must not escape
+            pass
 
     def _flush_safe(self) -> Trace | None:
         """Persist the row fail-open by default (SPEC §4.1 failure-mode MUST).

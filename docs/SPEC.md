@@ -1,8 +1,8 @@
 # TraceGuard Integration Specification (English)
 
 > **Status**: translation of [`TRACEGUARD_SPEC.md`](../TRACEGUARD_SPEC.md)
-> v1.1 (2026-08-27) — the contract is in force (v1.0 was frozen with
-> `traceguard` v1.0.0 on 2026-07-12) and evolves under SemVer per §6; v1.1
+> v1.2 (2026-09-10) — the contract is in force (v1.0 was frozen with
+> `traceguard` v1.0.0 on 2026-07-12) and evolves under SemVer per §6; v1.2
 > is a **minor** revision (revision history: Appendix D of the Chinese
 > original). The Chinese original is authoritative; if the two disagree, the
 > original wins.
@@ -65,6 +65,7 @@ they MUST NOT rename, delete, or retype the fields below.
 | `parent_trace_id` | int | nullable | Nesting support |
 | `agent_id` | text | nullable | Stable identifier of the executing principal that made this call (agent instance / service / person). The identity dimension for correlating multiple executors after the fact |
 | `session_id` | text | nullable | Grouping key for one run / session / episode; traces sharing a session belong to the same execution context |
+| `provider_response_id` | text | nullable | The response identifier the provider returned for this call (OpenAI `response.id`, Anthropic `message.id`). The join key for per-request out-of-band reconciliation |
 | `input_hash` | text | ✔ | SHA-256 of canonicalized input; MUST be computed by the SDK normalizer (§4.4) |
 | `input_summary` | text | nullable | Human-readable, SHOULD be ≤ 500 chars |
 | `model_id` | text | nullable | If set, MUST be registered in `model_registry` |
@@ -86,6 +87,12 @@ they differ significantly (see §5).
 / credential fingerprints SHOULD be recorded under `output_parsed["correlation"]`
 (convention: `docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md`);
 plaintext credentials MUST NOT be recorded — only one-way hashed fingerprints.
+
+`provider_response_id` (v1.2) likewise takes no part in `input_hash` or in
+invariants 1–4, and sits outside the audit algo v1 hash envelope — protected
+by the append-only guard, but not attested by the chain. When a streaming
+call cannot yield a final response id, the column MUST be left NULL; it MUST
+NOT be guessed or synthesized.
 
 ### 3.2 `model_registry`
 
@@ -236,10 +243,37 @@ explicit discount on the strategy side.
 **Invariant 3 — time-versioned reference data (general principle).** Any
 time-sensitive reference data — prompt templates
 (`prompt_registry.introduced_at`), entity-alias tables, any lookup dictionary
-with a `valid_from` — MUST satisfy `valid_from <= feature_as_of`. Each
+with a `valid_from`, and (v1.2) **data the pipeline retrieved from an external
+source** (`source_snapshots.published_at` is its `valid_from`; see §6.1
+`traceguard.sources`) — MUST satisfy `valid_from <= feature_as_of`. Each
 project MUST enumerate its applicable reference-data kinds in its own
 integration document. (Invariant 2 is conceptually a special case with a
-strict/loose split; other reference data is strict-only.)
+strict/loose split; other reference data is strict-only **by default** —
+unless a §6.1 opt-in extension explicitly defines a loose mode for it; since
+v1.2, `traceguard.sources` does, see below.)
+
+*When `valid_from` is unknown (v1.2).* Scope first: §4.5's
+`validate_reference_timing` takes a **definite** `valid_from` and has no
+"unknown" state, so this rule does not change its behaviour and does not
+apply to prompt templates, alias tables, or any other instance whose call
+site must supply a `valid_from` itself. It binds only reference data that
+can express "the source stated no first-valid-at time" — today exactly one
+class: external data retrieved through §6.1 `traceguard.sources` (common for
+vendor endpoints that return no `Last-Modified`, and for MCP tool results).
+
+For that class, strict mode MUST refuse (one cannot establish that the
+content existed at `feature_as_of`), and loose mode MUST emit an
+`unverifiable` verdict and record the snapshot anyway; it MUST NOT collapse
+into a pass. Being unable to prove existence is not proof of absence, and
+the two modes must say different things.
+
+Classification: this is a **new refusal condition** under invariant 3, a
+minor under §6 ("new invariants: opt-in first, default-on a release later").
+That ramp is carried by `strict` being keyword-only **with no default** on
+`traceguard.sources.record_source`: the refusal fires only inside a new
+opt-in extension, and every call site there must state its mode explicitly,
+so no existing call site is silently converted into an error — which is what
+the ramp exists to prevent.
 
 **Invariant 4 — locked replay sets are immutable.** After
 `is_locked = TRUE`, the implementation MUST reject all writes to the set's
@@ -285,8 +319,45 @@ algorithm, so each is a SemVer **minor**:
   statements in `docs/audit.md` are normative and may only be made more
   conservative. The hash algorithm is versioned: algo v1 is frozen by golden
   tests and stays verifiable forever; an algorithm change is algo v2 and MUST
-  NOT invalidate existing chains. Honest layering and limits:
-  `docs/audit.md`.
+  NOT invalidate existing chains. Added in SPEC v1.2: the finding kind
+  `capture_unmatched` (WARN — per-request existence reconciliation, carrying
+  a `direction`); the anchor sink `ots:` (extra
+  `traceguard[anchors]`, network-dependent — boundary statement 1's exposure
+  window is NOT relaxed by it; `rekor:` is registered as a DESIGN only in this
+  version and is not implemented — it appears in the bundle's
+  `anchors[].kind` enum so the format can settle, and `parse_sink_spec` does
+  not accept it); and the evidence bundle export format
+  `evidence-bundle/v1`, defined in `docs/specs/evidence-bundle.md`. Honest
+  layering and limits: `docs/audit.md`.
+
+- `traceguard.sources` — **experimental** opt-in extension (v1.2):
+  point-in-time correctness for *retrieved data*. It records a
+  `source_snapshot` per retrieval (`source_uri`, `source_kind`,
+  `content_hash`, `retrieved_at` required; `published_at`, `effective_at`,
+  `normalized_hash` + `normalizer_id`, `source_version`, `mcp_server_id`,
+  `tool_name`, `cache_status` optional) and lands invariant 3's judgement in
+  a `verdict` (`verified` / `anachronistic` / `unverifiable` / `unchecked`).
+  It **stores no retrieved content** — digests and metadata only; archiving
+  the bytes is the consumer's own business. Importing has no side effects;
+  `sources.enable(engine)` is explicit, and a snapshot write that fails is
+  fail-open per §4.1 and never affects the trace write or the host call.
+  Field table and decision record:
+  `docs/spec-changes/2026-09-10-source-snapshot-approval-binding.md`; honest
+  layering: `docs/sources.md`. While experimental its API surface is **not**
+  in the contract-guard job; graduating it takes two minors of real use.
+
+- `traceguard.approval` — **planned, not implemented** (registered in
+  v1.2). Approval-parameter binding: `bind(action, *, approver, approved_at,
+  expires_at, forbid_floats=True)` derives a `params_hash` through the §4.4
+  canonical normalizer; before execution, `verify(action, approval, *,
+  strict)` recomputes it and returns a verdict of `match`, `mismatch` (with
+  the differing path), `expired`, or `consumed`. Each step writes one trace
+  (`operation` = `approval_bind` / `approval_verify`), so both enter the
+  chain when audit is on. It **does not block** by default; an `approval_id`
+  is single-use (a second `verify` returns `consumed`); `float` values are
+  rejected in the payload (pass amounts as strings) to avoid the
+  fixed-precision ambiguity of §4.4. Implementation is gated on one real
+  consumer.
 
 - `traceguard.routing_integrity` — audits whether invariant 2 meant anything
   under a gateway. The SDK wrappers attach `requested_model` / `served_model`
@@ -301,6 +372,24 @@ algorithm, so each is a SemVer **minor**:
 
 These are integrator-optional: a project may depend on the core contract above
 without installing any of them.
+
+### 6.2 Runtime design principles (non-normative)
+
+The full list is appendix B3 of `TRACEGUARD_SPEC.md` (Chinese, authoritative);
+each entry is distilled from a bug that actually occurred, not derived from a
+design. One of them constrains the audit extension directly, so it is repeated
+here:
+
+- **B3.6 — an export's verdict may never be stronger than the database's.** On
+  the same chain data, `verify_bundle` may not reach a stronger conclusion than
+  `verify_chain`. Weaker is allowed and expected (damage outside the exported
+  window is invisible; a bundle whose anchor binds nothing can only be
+  INTERNALLY CONSISTENT). Stronger is a bug: the database FAILs and the bundle
+  says VERIFIED. Both audit false negatives found in v1.2 review — tail
+  truncation, mid-chain row deletion — were this principle being violated. The
+  differential matrix in `tests/test_audit_differential.py` guards it.
+
+Appendices are not contract surface: they add no MUST and do not trigger SemVer.
 
 ## 7. Minimal obligations of an integrating project
 

@@ -98,6 +98,19 @@ class Trace(Base):
     agent_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
     session_id: Mapped[str | None] = mapped_column(String(256), nullable=True, index=True)
 
+    # The provider's own identifier for this call (SPEC §3.1, v1.2): OpenAI
+    # response.id, Anthropic message.id. Indexed because it is a JOIN KEY —
+    # per-request reconciliation equi-joins it against an out-of-band request
+    # ledger over tens of thousands of rows, which is what puts it in a column
+    # rather than in output_parsed. Like the two above it takes no part in
+    # input_hash or invariants 1-4 and sits OUTSIDE the audit algo v1 hash
+    # envelope: append-only under the guard, not attested by the chain.
+    # NULL whenever the provider did not give one (notably streaming calls,
+    # which the wrappers do not drain) — never guessed, never synthesized.
+    provider_response_id: Mapped[str | None] = mapped_column(
+        String(256), nullable=True, index=True
+    )
+
     # Input
     input_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     input_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -246,13 +259,26 @@ def _block_locked_set_delete(mapper, connection, target: ReplaySet) -> None:
 
 DEFAULT_DB_URL = "sqlite:///traceguard.db"
 
-# Columns added to the contract ``traces`` table after 1.0 (SPEC v1.1).
-# Databases created before then lack them, and ``create_all`` never ALTERs an
-# existing table — so :func:`ensure_trace_columns` adds them on open. Once a
-# column is mapped on :class:`Trace`, every ORM SELECT names it: a legacy DB
-# would fail on READ (including ``python -m traceguard.audit verify``), not
-# merely on write, which is why this runs on every :func:`make_engine`.
-TRACE_COLUMNS_ADDED_SINCE_1_0: tuple[str, ...] = ("agent_id", "session_id")
+# Columns added to the contract ``traces`` table after 1.0 (SPEC v1.1 and
+# later). Databases created before a given column was introduced lack it, and
+# ``create_all`` never ALTERs an existing table — so
+# :func:`ensure_trace_columns` adds them on open. Once a column is mapped on
+# :class:`Trace`, every ORM SELECT names it: a legacy DB would fail on READ
+# (including ``python -m traceguard.audit verify``), not merely on write,
+# which is why this runs on every :func:`make_engine`.
+#
+# Append here when a nullable contract column is added; everything else (the
+# ALTER, the index, the tests) is driven off this mapping. The SPEC version
+# is carried PER COLUMN rather than as one blanket sentence, so the
+# failure message below names the revision that actually introduced the
+# missing column — a reader looking it up must land on the right §.
+TRACE_COLUMN_SPEC_VERSION: dict[str, str] = {
+    "agent_id": "v1.1",
+    "session_id": "v1.1",
+    "provider_response_id": "v1.2",
+}
+
+TRACE_COLUMNS_ADDED_SINCE_1_0: tuple[str, ...] = tuple(TRACE_COLUMN_SPEC_VERSION)
 
 
 def _trace_column_names(engine: Engine) -> set[str]:
@@ -260,7 +286,7 @@ def _trace_column_names(engine: Engine) -> set[str]:
 
 
 def ensure_trace_columns(engine: Engine) -> list[str]:
-    """Add the SPEC v1.1 ``traces`` columns to an existing table (idempotent).
+    """Add the post-1.0 ``traces`` columns to an existing table (idempotent).
 
     Additive only: nullable columns plus their indexes, via
     ``ALTER TABLE traces ADD COLUMN`` (the one ALTER every dialect this
@@ -294,7 +320,8 @@ def ensure_trace_columns(engine: Engine) -> list[str]:
             except (OperationalError, ProgrammingError) as exc:
                 if name not in _trace_column_names(engine):
                     raise RuntimeError(
-                        f"traces table lacks column {name!r} (added in SPEC v1.1) and it "
+                        f"traces table lacks column {name!r} (added in SPEC "
+                        f"{TRACE_COLUMN_SPEC_VERSION.get(name, 'v1.1')}) and it "
                         f"could not be added automatically ({exc.__class__.__name__}: "
                         f"{exc.orig if exc.orig is not None else exc}). Run manually: "
                         f"{statement}"
@@ -328,10 +355,10 @@ def make_engine(url: str | None = None, *, create_all: bool = True) -> Engine:
     Resolution order for the URL: explicit arg → TRACEGUARD_DB_URL env →
     DEFAULT_DB_URL (sqlite:///traceguard.db in the current working directory).
 
-    An existing ``traces`` table created before SPEC v1.1 is brought up to
-    date on open (:func:`ensure_trace_columns`: additive nullable columns
-    only) regardless of ``create_all``, because the ORM cannot read the table
-    without them.
+    An existing ``traces`` table created before a post-1.0 column was added
+    is brought up to date on open (:func:`ensure_trace_columns`: additive
+    nullable columns only) regardless of ``create_all``, because the ORM
+    cannot read the table without them.
     """
     resolved = url or os.environ.get("TRACEGUARD_DB_URL") or DEFAULT_DB_URL
     engine = create_engine(resolved, future=True)

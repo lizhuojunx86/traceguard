@@ -24,6 +24,11 @@ from `traceguard`. Zero new dependencies (stdlib `hashlib`/`json`).
 新列不进入,旧链逐字节不变)——它们受 append-only 守卫保护(ORM 层不许改),但**不被链 attest**:
 直接改库文件把 `agent_id` 换掉,`verify_chain` 看不见。纳入信封待 algo v2。
 
+SPEC v1.2 新增的 `provider_response_id` **同款**:不在信封内,受守卫保护,不被链 attest。
+这一条正是下文 L1.5 的能力边界所在——逐请求核对能证明“某个 response id 在两侧都存在”,
+**不能**证明“这一行的 id 没有被人事后改成另一个”。改了 id 的行会安静地匹配上另一条台账记录,
+而链看不见这次改动。
+
 ```python
 import traceguard
 from traceguard import audit
@@ -43,18 +48,23 @@ print(anchor.to_json())              # store this OUTSIDE the DB
 CLI:
 
 ```bash
-python -m traceguard.audit enable  --db sqlite:///traces.db   # [--chain-only] [--no-backfill] [--strict]
-python -m traceguard.audit verify  --db sqlite:///traces.db   # exit 1 on BREAK findings
-python -m traceguard.audit verify  --db ... --anchor '<json>' # full walk + anchor check(加测截断/重写)
-python -m traceguard.audit anchor  --db sqlite:///traces.db   # print the head digest
-python -m traceguard.audit anchor  --db ... --sink file:/mnt/other-host/anchors.jsonl \
-                                            --sink git-note:/path/repo --sink webhook:https://...   # v2: store it OUTSIDE the DB
-python -m traceguard.audit anchor  --db ... --sink file:... --every 300             # v2: keep anchoring (interval = exposure window)
-python -m traceguard.audit verify  --db ... --anchor-file /mnt/other-host/anchors.jsonl  # v2: verify against the newest stored anchor
-python -m traceguard.audit reconcile --db ... --source anthropic-usage --window 2026-08-01T00:00:00Z,2026-08-08T00:00:00Z \
-                                            --api-key-id apikey_...              # v2: self-reported vs provider totals (capture_mismatch)
-python -m traceguard.audit disable --db sqlite:///traces.db
+# --db 是顶层选项,必须放在子命令前面
+python -m traceguard.audit --db sqlite:///traces.db enable   # [--chain-only] [--no-backfill] [--strict]
+python -m traceguard.audit --db sqlite:///traces.db verify   # exit 1 on BREAK findings
+python -m traceguard.audit --db ... verify --anchor '<json>' # full walk + anchor check(加测截断/重写)
+python -m traceguard.audit --db sqlite:///traces.db anchor   # print the head digest
+python -m traceguard.audit --db ... anchor --sink file:/mnt/other-host/anchors.jsonl \
+                                           --sink git-note:/path/repo --sink webhook:https://...   # v2: store it OUTSIDE the DB
+python -m traceguard.audit --db ... anchor --sink file:... --every 300             # v2: keep anchoring (interval = exposure window)
+python -m traceguard.audit --db ... verify --anchor-file /mnt/other-host/anchors.jsonl  # v2: verify against the newest stored anchor
+python -m traceguard.audit --db ... reconcile --source anthropic-usage --window 2026-08-01T00:00:00Z,2026-08-08T00:00:00Z \
+                                           --api-key-id apikey_...              # v2: self-reported vs provider totals (capture_mismatch)
+python -m traceguard.audit --db sqlite:///traces.db disable
 ```
+
+**`--db` 放在子命令后面会被 argparse 拒掉**(`unrecognized arguments: --db ...`)。
+本节此前的示例全是那种写法,照抄一条都跑不起来。`verify-bundle` 是唯一不开库的
+子命令,它不接受 `--db`。
 
 ## What each layer honestly delivers
 
@@ -89,7 +99,8 @@ v1 的覆盖照实登记——可检测的说可检测,不设防的说不设防:
 | 修改已链行的覆盖字段 | **可检测**(`hash_mismatch` BREAK) | 全量 preimage 重算 |
 | 删除已链 trace 行 | **可检测**(`missing_trace` BREAK) | pass 2 全表扫 |
 | 尾部截断 / 全链重写 | **仅锚定后可检测**(`anchor_mismatch`);无外部锚不可检测。v2 的 anchor sink + 定期锚定把暴露窗口缩到锚定间隔,不改变"两次锚定之间不可检测"这一事实 | 边界声明 1,锚定频率 = 暴露窗口;下文 Anchors |
-| 采集层伪造(spoofed tool call 类,METR: >7% transcripts) | **逐条不设防**——自报证据产生于 agent 控制的进程内,链忠实保存谎言。v2 `reconcile` 做**总量**对账:同 model 同时间窗的自报 token 量 vs 供应商 usage 报告,超阈值 = `capture_mismatch`(WARN);单条 trace 的真实性仍不可证 | 存储完整性 ≠ 采集真实性;分层见下文 Reconcile 与 `docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md` §5 |
+| 采集层伪造(spoofed tool call 类,METR: 约 7% 受评 transcripts) | **逐条不设防**——自报证据产生于 agent 控制的进程内,链忠实保存谎言。v2 `reconcile` 做**总量**对账:同 model 同时间窗的自报 token 量 vs 供应商 usage 报告,超阈值 = `capture_mismatch`(WARN);单条 trace 的真实性仍不可证 | 存储完整性 ≠ 采集真实性;分层见下文 Reconcile 与 `docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md` §5 |
+| 采集层**漏报**或**多报**单次调用 | **有带外逐请求台账时可检测**(`capture_unmatched` WARN,带 `direction`)。总量对账在这里会失效——少报的调用与多报的调用可以互相抵消,而供应商 usage API 只给 token 量、不给调用数 | 下文 L1.5;`docs/spec-changes/2026-09-10-source-snapshot-approval-binding.md` §1.2 |
 | 高权限攻击者(可写库文件) | **v1 不设防** | 边界声明 1,WORM/签名/自动外锚 out of scope |
 
 ## Mechanics
@@ -180,6 +191,7 @@ about rows inserted while audit was off. Findings:
 | `deleted_with_record` | WARN | chained trace gone, deletion tombstone exists |
 | `coverage_gap` | GAP | traces with no entry (pre-enable / disable window / fail-open skip) |
 | `capture_mismatch` | WARN | (`reconcile`, not `verify_chain`) self-reported token volume for a model/window disagrees with the provider's out-of-band usage report beyond the tolerance, or a model appears on only one side |
+| `capture_unmatched` | WARN | (`reconcile_requests`, not `verify_chain`) **one specific call** is present on only one side of a per-request comparison, or one `response_id` appears twice on a side. Carries `direction`: `out_of_band_only` / `self_reported_only` |
 
 Full walk is O(n) and the default (~26k entries verify in well under a
 second). `from_anchor=` **adds** an anchor-consistency check on top of the
@@ -209,17 +221,53 @@ audit.anchor_to(engine, sinks)                     # once; raises AnchorSinkErro
 audit.AnchorScheduler(engine, sinks, interval_s=300).start()   # daemon thread; logs ERROR and keeps going
 ```
 
-What each sink honestly gives you: a **file** sink is out of the DB, not out of
-the host — whoever can edit the DB file can usually edit a sibling file, so put
-it on another host / filesystem / append-only medium. A **git note** is as
-tamper-evident as the repository's history, which is only as good as a remote
-the DB writer cannot force-push (`git push origin refs/notes/traceguard-audit`).
-A **webhook** delivers; what the receiver does with the anchor is the actual
-guarantee. `anchor_to` tries every sink and then raises if any failed — an
-anchor that silently never landed is a false sense of coverage (SPEC B3.4).
-The scheduler interval IS the exposure window: entries appended since the last
-tick can still be truncated without trace. `verify --anchor-file PATH` closes
-the loop against the newest anchor a file sink wrote.
+`anchor_to` 逐个尝试每个 sink,只要有失败就在最后汇总抛出——一个静默没落地的锚
+是虚假的覆盖感(SPEC 附录 B3.4)。scheduler 的间隔**就是**暴露窗口:上一次 tick
+之后新增的条目仍可被无痕截断。`verify --anchor-file PATH` 用 file sink 写下的最新
+锚闭环。
+
+### 每种 sink:证明什么 / 证明不了什么 / 依赖谁 / 失败时怎样
+
+| sink | 证明什么 | 证明不了什么 | 依赖谁 | 失败时怎样 |
+|---|---|---|---|---|
+| `file:PATH` | 锚在这个文件被写入的那一刻存在过 | 文件本身没被改。**出了库,没出主机**——能改库文件的人通常也能改旁边的文件 | 文件系统;放在另一台主机 / 只追加介质上才真正有意义 | `AnchorSinkError`(路径不可写);`anchor_to` 汇总抛出,scheduler 记 ERROR 并继续 |
+| `git-note:REPO` | 锚进了仓库对象库,与代码历史绑在一起 | 比仓库历史本身更强的东西。本地 note 可被删改;**要把信任根挪出主机必须 push 到一个 DB 写入者无法 force-push 的 remote** | git 仓库 + 那个 remote 的管理者 | `git notes append` 非零退出即 `AnchorSinkError` |
+| `webhook:URL` | 锚被投递给了那个接收方 | 接收方拿它做了什么。**投递不是保存**——真正的保证在接收端 | 你自己运维的那个接收方 | 非 2xx 或传输错误即 `AnchorSinkError` |
+| `rfc3161`(tg-attest 产出,本包只收录) | 一个 TSA 在某时刻见过这个 digest | 无——**本包不验签**。结构完整 ≠ token 有效 | 那个 TSA 与它的 CA 链;验签的信任根由收件人自己选 | 结构不全在 bundle 校验里是 BREAK |
+| **`ots:DIR`**(v1.2,extra `anchors`) | 分得清 **pending** 与 **complete**。complete 时:证明文件**声称** digest 在某个比特币区块之前已存在——经比特币节点验过之后,这是唯一一个不落在"你得信某一方"上的锚 | **pending 时:什么都不证明**——那只是日历服务器的承诺。**complete 本身也不是本包证明的**:不走 merkle 路径、不取区块头,手写一个 `.ots` 同样判 complete。complete 也**不给精确时刻**:区块时间有分钟到小时级的不确定性 | 比特币链;完整验证需要一个比特币节点(`ots verify`),否则你是在信区块浏览器或日历服务器。**traceguard 两者都不做** | 所有日历都不可达即 `AnchorSinkError`,且**不写出任何文件**(半个锚比没有锚更糟) |
+| `rekor:`(**未实现**,设计见下) | — | — | — | — |
+
+**多一种锚不改变暴露窗口。** 边界声明 1 的措辞不因此放松:OTS 让"链头在 T 时刻已存在"
+不再依赖单一方,但**两次锚定之间新增的条目仍然可以被静默截断**。这两件事是独立的,
+把它们混起来是这一节最容易犯的错。
+
+```bash
+# 需要 anchors extra:pip install 'traceguard[anchors]'
+python -m traceguard.audit --db sqlite:///traces.db anchor --sink ots:/mnt/anchors/ots
+python -m traceguard.audit --db sqlite:///traces.db verify \
+    --ots-proof /mnt/anchors/ots/anchor-00000042-<digest>.ots [--ots-upgrade]
+```
+
+每个锚写**两个**文件:`.ots` 证明 + 同名 `.json` 侧车(锚本体)。digest 是
+`sha256(anchor.to_json())` —— 覆盖**整份锚声明**而不只是 `row_hash`:只盖头哈希会让
+`seq` 与 `entry_count` 不被 attest,于是把链头重新指到一条被重写的链里的另一个位置,
+证明照样对得上。两个文件放一起,日后**不需要数据库**就能自证。
+
+刚 stamp 出来的证明是 **pending**;`--ots-upgrade` 向日历服务器要升级后的证明 ——
+问的是 pending 附件里记的那个 URI(它才是持有证明的那台),不是当初提交的地址:
+默认的 `a.pool.opentimestamps.org` 是个转发池,两者本来就不是同一台。
+拿不到不是错误——刚 stamp 完拿不到是常态。
+
+### `rekor:` — 设计节,**本次未实现**
+
+Sigstore 透明日志的 `hashedrekord` 条目,与 OTS 并用可给出第二种独立见证。未实现的
+理由照实写,不是"没时间":它需要一把 ECDSA P-256 签名密钥,而**那把钥匙只证明
+"上传者是同一个"**,不证明身份——除非接上 OIDC 身份流程,而那是另一整套东西。
+密钥管理(生成、权限、轮换、丢失后怎么办)是一个独立的设计面,应当由一个真实需求
+拉动,而不是因为"顺手也加上"。OTS 已经给了"不依赖单一方"这个属性;rekor 的增量
+主要是可查询的透明日志,今天没有消费者要求它。
+
+重开条件与 §8.4 其余项相同:一个**外部**组织在生产里用,并主动提出。
 
 **Reconcile (v2, capture-fidelity layer L1).** The chain answers "was what the
 SDK stored changed afterwards?"; it cannot answer "was what the SDK stored
@@ -232,15 +280,16 @@ the provider's usage report, an out-of-band source the agent does not write to.
 |---|---|---|---|
 | L0 | wrapper 自报 + hash chain | SDK 看到的调用事后未被无痕改动 | 自报本身的真实性 |
 | **L1(v2)** | `reconcile`:traces 聚合 vs 供应商 usage 报告 | 同 model 同时间窗的 token 总量在容差内一致 | 单条 trace 的真实性 |
+| **L1.5(v1.2)** | `reconcile_requests`:按 `provider_response_id` 与带外**逐请求台账**等值连接 | **被带外源逐条确认存在的那些调用**确实发生过——采集层没有凭空造出它们,带外侧也看见了它们 | 内容是否如实(台账里是一个 id,不是一份记录);两侧都没有的调用;以及 `provider_response_id` 本身是否被事后改过(它在信封外) |
 | L2(不做) | 逐条真实性:供应商签名请求日志 | — | 超出 SDK 能力边界,不承诺 |
 
 ```bash
 export ANTHROPIC_ADMIN_KEY=sk-ant-admin...   # Admin API key; never a regular key, never in a tracked file
-python -m traceguard.audit reconcile --db sqlite:///traces.db --source anthropic-usage \
+python -m traceguard.audit --db sqlite:///traces.db reconcile --source anthropic-usage \
     --window 2026-08-01T00:00:00Z,2026-08-08T00:00:00Z --bucket-width 1d \
     --api-key-id apikey_01... --workspace-id wrkspc_01...   # narrow the org-wide report to THIS DB's traffic
 # or, from a saved report (a curl dump; also the deterministic test path):
-python -m traceguard.audit reconcile --db ... --source json:usage.json --window ...
+python -m traceguard.audit --db ... reconcile --source json:usage.json --window ...
 ```
 
 Conventions that MUST line up, or every finding is a false positive: `tokens_in`
@@ -254,6 +303,95 @@ spelled out in the finding: **traces > provider** = self-reports the provider
 never served (spoofed or replayed), or a report filtered narrower than the DB;
 **provider > traces** = traffic the SDK never recorded (uninstrumented calls,
 traces dropped fail-open, or an org-wide report wider than this DB).
+
+### 逐请求核对(L1.5):`request-ledger/v1`
+
+总量对账有一个它自己解决不了的问题:少报的调用与多报的调用可以**互相抵消**,而供应商
+usage API 只给 token 量、不给调用数(08-27 §8 实施备注)。于是"总量对得上"并不排除
+"这一条是编的、那一条被吞了"。逐请求核对问的是总量问不了的问题:**这一次调用在两侧都
+存在吗**。连接键是供应商自己返回的响应 id(`traces.provider_response_id`,SPEC v1.2)。
+
+带外源只要能导出下面这个形状,就能接进来——**不承诺任何具体网关的接口**:
+
+```json
+{"ledger": "request-ledger/v1", "source": "<gateway or provider name>",
+ "window": ["<ISO start>", "<ISO end>"],
+ "requests": [{"response_id": "…", "model": "…", "ts": "<ISO>",
+               "tokens_in": 0, "tokens_out": 0, "cost_usd": null}]}
+```
+
+```bash
+python -m traceguard.audit --db sqlite:///traces.db reconcile \
+    --source requests-json:/path/gateway-requests.json \
+    --window 2026-09-01T00:00:00Z,2026-09-08T00:00:00Z
+```
+
+三处纪律,都是"假阳性会教人忽略告警"的直接后果(SPEC 附录 B3.4):
+
+1. **`window` 是承重的,不是装饰。** 台账声称覆盖 `[a, b)`,而你要求核对 `[a, c)` 且
+   `c > b` —— 那么 `[b, c)` 里的每一条 trace 都会被报成 `self_reported_only`。这不是发现,
+   是伪影。`reconcile_requests` 在这种情况下**直接拒绝**并要求你收窄窗口。
+2. **`provider_response_id` 为 NULL 的行被计数、被排除,不被当成不匹配。** 它们要么早于
+   这一列存在,要么来自 wrapper 拿不到 id 的流式调用。把"诚实地说不知道"报成
+   `self_reported_only`,等于指控采集层伪造。
+3. **两个方向的措辞是固定的**,好让两次运行、两个人读到的是同一个断言:
+
+| `direction` | 情形 | 固定解释 |
+|---|---|---|
+| `out_of_band_only` | 台账有、traces 无 | a call the capture layer did not see — bypass or wrapper coverage gap |
+| `self_reported_only` | traces 有、台账无 | a record the provider side does not vouch for — fabrication, duplication, or an incomplete ledger |
+
+同一个 `response_id` 在任一侧出现两次单列为 duplicate:一个响应 id 标识一次调用,
+"同一次调用被记了两遍"与"一次调用不见了"不是同一件事。
+
+聚合层的 `capture_mismatch` 行为**完全不变**——两种 finding 证明的东西不同,混成一个
+kind 会让它们共用一个阈值和一套处置。
+
+## 证据 bundle(`evidence-bundle/v1`)
+
+把选定的 trace、覆盖它们的链段与链头、锚记录、`source_snapshot` 与 findings 打成一份
+自包含 JSON,好让**拿到它的人在没有数据库、没有网络、没有 traceguard 的情况下**自己验一遍。
+
+```bash
+python -m traceguard.audit --db sqlite:///traces.db bundle --out evidence.json \
+    --since 2026-09-01T00:00:00Z --anchor-file /mnt/other-host/anchors.jsonl
+python -m traceguard.audit verify-bundle evidence.json      # BREAK 时退出码 1
+```
+
+两种 `content_mode`,**结论不许合并成同一个词**:
+
+| 模式 | 验了什么 | summary 措辞 |
+|---|---|---|
+| `full` | 链衔接 + **逐条重算 `row_hash`**(内容被改则 `hash_mismatch` BREAK)+ 锚定比对 | 有锚覆盖:`bundle VERIFIED (full)`;无锚覆盖:`bundle INTERNALLY CONSISTENT (full)` |
+| `hash_only` | 链衔接 + 链头对锚。内容字段被剥掉,**条目哈希无法重算** | `bundle LINKAGE OK (hash_only) … content was NOT recomputed` |
+
+`hash_only` 通过意味着"这段链首尾相连、链头与锚一致",它**没有**对内容说过任何话。
+把它读成"内容已验证"是这个格式最容易犯、后果最大的误读,所以 `hash_only` 下永远至少带
+一条 `content_not_recomputed`(INFO),两种模式的 summary 也用两套措辞。
+(`content_not_recomputed` 是 **bundle 层的标注,不是 audit 的 finding kind**——
+不进 `FINDING_SEVERITY`,不受 §6.6 的 kind 冻结约束。)
+
+**锚只做结构校验,不做验签。** `rfc3161` 锚会被报成"这里有一个结构完整的 token,
+imprint 是 X",**不会**被报成"这个 token 有效":验签需要收件人自己选的信任根,而本包
+零新增运行时依赖。要后者,把 `token_b64` 交给 `openssl ts` 和一份你自己取回的 CA 证书。
+`ots` 锚处于 **pending** 时会发 WARN —— 日历服务器的承诺不是证据。
+
+**锚要覆盖到 bundle 里的 entry 才算数。** 锚记的 `seq` 落在导出的那段 entry 里,
+才会和那条 entry 的 `row_hash` 比,也才构成佐证;否则只能和 bundle 自己声明的
+`chain.head` 比,而攻击者重写内容再重链整段时根本不动 `chain.head`。所以一个锚都
+没绑上时报 `anchor_unlinked`(WARN),结论词也从 VERIFIED 降为 INTERNALLY
+CONSISTENT ——"内部自洽"正是重链之后的样子。部分导出(窗口不含链尾)默认就是这
+种情形,要么把窗口扩到被锚的 `seq`,要么趁这个窗口还是链尾时再锚一次。
+细节见 `docs/specs/evidence-bundle.md` §2 与 §4。
+
+上面这一整段的约束条件是 SPEC 附录 **B3.6**:同一份链数据上,bundle 的结论不得
+**强于** `verify_chain` 的结论——可以更弱(窗口外的破坏看不见、锚不绑定时只给
+INTERNALLY CONSISTENT),不可以更强(库判 FAIL 而 bundle 判 VERIFIED)。
+`tests/test_audit_differential.py` 用差分矩阵常驻守卫这一条。
+
+格式与字段:`docs/specs/evidence-bundle.md`;JSON Schema:
+`docs/specs/evidence-bundle-v1.schema.json`。tg-attest 按同一 schema 产出时间戳部分,
+两包继续零代码依赖,**schema 是契约**。
 
 ## Legal-deletion path
 
