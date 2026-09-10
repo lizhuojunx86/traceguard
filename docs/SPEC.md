@@ -248,17 +248,32 @@ source** (`source_snapshots.published_at` is its `valid_from`; see §6.1
 `traceguard.sources`) — MUST satisfy `valid_from <= feature_as_of`. Each
 project MUST enumerate its applicable reference-data kinds in its own
 integration document. (Invariant 2 is conceptually a special case with a
-strict/loose split; other reference data is strict-only.)
+strict/loose split; other reference data is strict-only **by default** —
+unless a §6.1 opt-in extension explicitly defines a loose mode for it; since
+v1.2, `traceguard.sources` does, see below.)
 
-*When `valid_from` is unknown (v1.2).* Where reference data states no
-"first valid at" time — common for vendor endpoints that return no
-`Last-Modified` and for MCP tool results — strict mode MUST refuse (one
-cannot establish that the content existed at `feature_as_of`), and loose mode
-MUST emit an `unverifiable` verdict and record the snapshot anyway; it MUST
-NOT collapse into a pass. Being unable to prove existence is not proof of
-absence, and the two modes must say different things. This adds no new
-invariant — it specifies invariant 3's behaviour on a missing input (§6,
-minor).
+*When `valid_from` is unknown (v1.2).* Scope first: §4.5's
+`validate_reference_timing` takes a **definite** `valid_from` and has no
+"unknown" state, so this rule does not change its behaviour and does not
+apply to prompt templates, alias tables, or any other instance whose call
+site must supply a `valid_from` itself. It binds only reference data that
+can express "the source stated no first-valid-at time" — today exactly one
+class: external data retrieved through §6.1 `traceguard.sources` (common for
+vendor endpoints that return no `Last-Modified`, and for MCP tool results).
+
+For that class, strict mode MUST refuse (one cannot establish that the
+content existed at `feature_as_of`), and loose mode MUST emit an
+`unverifiable` verdict and record the snapshot anyway; it MUST NOT collapse
+into a pass. Being unable to prove existence is not proof of absence, and
+the two modes must say different things.
+
+Classification: this is a **new refusal condition** under invariant 3, a
+minor under §6 ("new invariants: opt-in first, default-on a release later").
+That ramp is carried by `strict` being keyword-only **with no default** on
+`traceguard.sources.record_source`: the refusal fires only inside a new
+opt-in extension, and every call site there must state its mode explicitly,
+so no existing call site is silently converted into an error — which is what
+the ramp exists to prevent.
 
 **Invariant 4 — locked replay sets are immutable.** After
 `is_locked = TRUE`, the implementation MUST reject all writes to the set's

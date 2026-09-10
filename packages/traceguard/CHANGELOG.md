@@ -58,9 +58,15 @@ untouched, and the frozen 29-symbol public surface is unchanged.
     experimental — the fields have to survive real use first (revision
     decision D9; revisit after two minors).
 - SPEC §5 invariant 3 now names retrieved external data in its scope, with
-  `source_snapshots.published_at` as its `valid_from`. No new invariant: the
-  wording was already a general principle, and the addition is one instance
-  plus a behaviour rule for a missing input (§6.4 minor).
+  `source_snapshots.published_at` as its `valid_from`. No fifth invariant is
+  added — that wording was already a general principle. It does add one new
+  refusal condition under invariant 3 (strict mode refuses a source stating
+  no `valid_from`), scoped to `traceguard.sources`; existing instances are
+  untouched, since `validate_reference_timing` takes a definite `valid_from`
+  and has no "unknown" state. Classified minor under §6.4, with that
+  clause's warn-first ramp carried by `strict` being keyword-only with no
+  default: no existing call site can be silently converted into an error,
+  because there are none and there is no default to decide for them.
 - SPEC §6.6 registers `traceguard.approval` as **planned, not implemented**
   (interface, single-use `approval_id`, float-free payloads). Implementation
   is gated on a real consumer.

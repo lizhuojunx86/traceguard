@@ -110,9 +110,14 @@ SPEC §5 不变量 3 的"适用范围(非穷举)"列表追加一行:
 
 > - 取回的外部数据(`source_snapshots.published_at` 即其 `valid_from`)
 
-**不新增不变量**。不变量 3 的措辞本来就是通用原则("任何时间敏感的引用数据"),取回的外部数据
-一直落在它的字面覆盖内;本次是把一个已经适用、但没人想到要去用的实例**明文写出来**。按 §6.4,
-这是 minor(既没有添加新不变量,也没有修改既有不变量的定义)。
+**不新增第五条不变量**。不变量 3 的措辞本来就是通用原则,取回的外部数据一直落在它的字面覆盖内;
+本次是把一个已经适用、但没人想到要去用的实例**明文写出来**。
+
+但要照实说:除了那行实例枚举,§3.2 还在不变量 3 项下加了**一个新的拒绝条件**(源不声称
+`valid_from` 时 strict 拒绝)。它按 §6.4 的“添加新不变量 = minor”分支归类,其 ramp 由
+`strict` 无默认值承担——完整论证见 §7 的“D1 的定级”一段。既有实例(prompt template、
+alias 表)的行为**逐字未变**:§4.5 的 `validate_reference_timing` 只接受确定的 `valid_from`,
+没有“未知”这一态,新规则对它无从触发。
 
 ### 3.2 `published_at` 未知时的两种模式(D1)
 
@@ -195,12 +200,16 @@ verify(action: Any, approval: ApprovalRecord, *, strict: bool) -> ApprovalVerdic
 
 - `params_hash` 由 §4.4 的 canonical normalize 产出(`input_hash(action)`),**不另写一套规范化**。
 - 两步各写一条 trace,`operation` 为 `approval_bind` / `approval_verify`;开启 audit 时自然入链。
-- **默认不阻断**:只出 verdict。`strict` 为 keyword-only 显式参数(与 `select_model` 同款)。
+- **始终不阻断**:只出 verdict(同样没有“开启阻断”的参数)。`strict` 为 keyword-only
+  显式参数、无默认值(与 `select_model` 同款);它选的是判定的严格程度,不是要不要放行。
+  本节“默认”一词只用于 `forbid_floats=True` —— 那是唯一一个真的 Python 默认值。
   SDK 自身故障按 §4.1 fail-open。
 
 ### 5.2 两个已定夺的决策点
 
-**D3 — 默认 single-use**。同一 `approval_id` 第二次 `verify` 返回 verdict `consumed`,不放行。
+**D3 — 无条件 single-use**(不是“默认”:`bind` / `verify` 都**没有**关掉它的参数,
+§5.1 的签名里也不许后补一个 `single_use=`)。同一 `approval_id` 第二次 `verify` 返回
+verdict `consumed`,不放行。
 理由:审批被复用于第二次执行 = 审批失效。一张批条批的是一笔操作,不是一类操作;把"能不能重复用"
 交给调用点的默认值去决定,等于把最危险的那个语义设成静默的。
 
@@ -264,12 +273,30 @@ HTML / PDF:可机器验证的只有一种形态,多受众版本是模板加人�
 |---|---|---|
 | audit algo v1 哈希信封 | **不受影响,新列不被 attest** | `TRACE_CONTENT_FIELDS` 是硬编码白名单,由 golden tests 冻结;`provider_response_id` 不进信封,旧链逐字节不变、继续可验。`source_snapshots` 是独立表,完全在信封之外。纳入信封待 algo v2 |
 | `input_hash` / normalize | 不受影响 | 新列、`source_snapshots` 全部不参与计算,§4.4 算法零改动(§6.1 major 红线未触碰) |
-| 不变量 1–4 | **不变量 3 的适用范围明文扩大,定义不变**;1 / 2 / 4 零影响 | §6.4:添加新不变量 = minor,修改既有不变量 = major。本案两者都不是——不变量 3 的措辞本就是通用原则,新增的是一行实例枚举 |
+| 不变量 1–4 | 不变量 3 的适用范围明文扩大,并新增**一个拒绝条件**(D1);1 / 2 / 4 零影响 | 见下方“D1 的定级”一段——“加了一行实例枚举”够不到这一项,单列论证。§4.5 四个 validator 的签名逐字未动 |
 | 下游 quant_alpha_v2 (`v0.2.0-phase0`) | 零影响 | 锁 tag;新列 nullable,`source_snapshots` 需显式 `sources.enable()` 才建表,旧写入路径完全合法 |
 | 下游 huadian (guardian baseline) | 零影响 | 不同包,guardian 冻结,互不 import |
 | 29 符号顶层冻结面 | **零变化** | `traceguard.sources` 走子模块 import(与 audit / contamination 同款);`Span` 只**新增方法**(`record_source` / `record_provider_response_id`),既有签名不动 |
 | golden tests | **MUST 不改** | algo v1 冻结的定义。若实施中发现必须改 golden,即为方案错误,停下重审 |
-| SemVer | **minor:SPEC v1.1 → v1.2,包 1.5.x → 1.6.0** | §6.2 加 nullable 字段 = minor;§6.3 加新方法 = minor;§6.6 新增 opt-in 扩展 = minor;新增 finding kind = minor(08-27 修订案 A 规则)。发版动作本身不在本次实施范围 |
+| SemVer | **minor:SPEC v1.1 → v1.2,包 1.5.x → 1.6.0** | §6.2 加 nullable 字段 = minor;§6.3 加新方法 = minor;§6.6 新增 opt-in 扩展 = minor;§6.4 新增拒绝条件 = minor(ramp 见下段);新增 finding kind = minor(08-27 修订案 A 规则)。发版动作本身不在本次实施范围 |
+
+**D1 的定级**(单列,因为这是本表唯一可争议的一项)。§8.3 应用的 diff 除了那行实例枚举,
+还插入了一段带 MUST 的规范文本,所以必须按 §6.4 认领一条分支。认领的是前一条:
+这是不变量 3 项下的**新拒绝条件**,即“添加新不变量 = minor”。
+
+§6.4 给这条分支配了 ramp——“默认 warn,下个 release 转 error”——本案由
+**`strict` 为 keyword-only 且无默认值**(D10)承担,不是跳过:
+
+1. 该拒绝**只**在 `traceguard.sources` 这个新 opt-in 扩展内触发。§4.5 的
+   `validate_reference_timing(valid_from: datetime, ...)` 根本没有“未知”这一态,
+   所以 prompt template、alias 表等既有实例的行为**逐字未变**(§8.3 的 diff 已把
+   适用范围写死在取回数据上)。
+2. 扩展内每个调用点都**必须**显式说出 `strict=True` 还是 `strict=False`。ramp 要防的是
+   “既有调用点在某个 release 后被静默从 warn 转成 error”;这里既没有既有调用点,
+   也没有默认值可以替调用点做这个决定。
+
+即:ramp 的**目的**(不让任何人在没说过话的情况下被转成 error)由签名结构直接满足,
+强于按 release 计时的版本。
 
 **契约面的有意更新**(minor,CHANGELOG 逐条写明,不许静默改):
 `tests/test_audit_api_surface.py` 的 `FROZEN_FINDING_SEVERITY` 增加 `capture_unmatched: WARN`,
@@ -293,7 +320,7 @@ HTML / PDF:可机器验证的只有一种形态,多受众版本是模板加人�
 
 "关键约束"追加一条:
 
-> - `provider_response_id` 不参与 `input_hash` 计算(§4.4 算法不变),不参与不变量 1–4;与 `agent_id` / `session_id` 同,它在 audit algo v1 哈希信封之外(受 append-only 守卫保护,但不被链 attest)。流式调用无法取得最终响应 id 时 MUST 留 NULL,不得猜测或合成。
+> - `provider_response_id` 不参与 `input_hash` 计算(§4.4 算法不变),不参与不变量 1–4;与 `agent_id` / `session_id` 同,它在 audit algo v1 哈希信封之外(受 append-only 守卫保护,但不被链 attest)。流式调用无法取得最终响应 id 时 **MUST** 留 NULL,不得猜测或合成。
 
 ### 8.3 §5 不变量 3
 
@@ -303,53 +330,32 @@ HTML / PDF:可机器验证的只有一种形态,多受众版本是模板加人�
 
 该列表之后追加一段:
 
-> **`valid_from` 未知时(v1.2)**:当引用数据不提供任何"首次有效时间"(常见于不返回 `Last-Modified`
-> 的 vendor 端点与 MCP 工具结果),strict 模式 **MUST** 拒绝——无法证明该内容在 `feature_as_of`
-> 时已存在;loose 模式 **MUST** 产出 `unverifiable` 判定并照常记录,**MUST NOT** 折叠为通过。
-> 无法证明存在不等于证明不存在,两种模式各说各的。本条不新增不变量,是不变量 3 在缺失输入下的
-> 行为规定(§6.4 评估为 minor)。
+> **`valid_from` 未知时(v1.2)**。适用范围先说清楚:§4.5 的 `validate_reference_timing` 只接受一个**确定的** `valid_from`,不存在“未知”这一态,因此本条**不**改变它的行为,也不适用于 prompt template、alias 表这类调用点必须自己拿出 `valid_from` 的实例。本条只约束那些**能够表达“源没有声称首次有效时间”**的 reference data —— 今天只有一类:§6.6 `traceguard.sources` 记录的取回外部数据(常见于不返回 `Last-Modified` 的 vendor 端点与 MCP 工具结果)。
+>
+> 对这一类,strict 模式 **MUST** 拒绝——无法证明该内容在 `feature_as_of` 时已存在;loose 模式 **MUST** 产出 `unverifiable` 判定并照常记录,**MUST NOT** 折叠为通过。无法证明存在不等于证明不存在,两种模式各说各的。
+>
+> 定级:这是不变量 3 项下的**一个新拒绝条件**,按 §6.4“添加新不变量 = minor”归类。§6.4 给 minor 配的 ramp(默认 warn,下个 release 转 error)由 **`strict` 为 keyword-only 且无默认值**(§6.6 `traceguard.sources` 的 `record_source`)承担:该拒绝只在一个新的 opt-in 扩展内触发,而其每个调用点都必须显式说出自己的模式,因此不存在“既有调用点被静默转成 error”的情形——ramp 要防的正是这个。
 
 ### 8.4 §6.6 opt-in 扩展
 
-新增两个条目,并在 audit 条目末尾追加一句:
+新增两个条目(下面两行与 SPEC 中的行**逐字相同**,未做换行重排,便于日后逐字比对):
 
-> - `traceguard.sources` — **实验性** opt-in 扩展:取回数据的时点正确性。记录 `source_snapshot`
->   (`source_uri` / `source_kind` / `content_hash` / `retrieved_at` MUST,`published_at` /
->   `effective_at` / `normalized_hash` + `normalizer_id` / `source_version` / `mcp_server_id` /
->   `tool_name` / `cache_status` 可选),把不变量 3 的判定落到 `verdict`
->   (`verified` / `anachronistic` / `unverifiable` / `unchecked`)。**不存原文**——只存摘要与元数据,
->   原文归档是消费者的事。`import` 无副作用,须显式 `sources.enable(engine)`;写入失败按 §4.1
->   fail-open,绝不影响 trace 写入与宿主调用。字段表与决策记录见
->   `docs/spec-changes/2026-09-10-source-snapshot-approval-binding.md`,honest layering 见
->   `docs/sources.md`。实验性期间其 API 面**不进** contract-guard;graduate 需两个 minor 的实跑。
+> - `traceguard.sources` — **实验性** opt-in 扩展(v1.2):取回数据的时点正确性。记录 `source_snapshot`(`source_uri` / `source_kind` / `content_hash` / `retrieved_at` 为 MUST,`published_at` / `effective_at` / `normalized_hash` + `normalizer_id` / `source_version` / `mcp_server_id` / `tool_name` / `cache_status` 可选),把不变量 3 的判定落到 `verdict`(`verified` / `anachronistic` / `unverifiable` / `unchecked`)。**不存原文**——只存摘要与元数据,原文归档是消费者自己的事。`import` 无副作用,须显式 `sources.enable(engine)`;写入失败按 §4.1 fail-open,绝不影响 trace 写入与宿主调用。字段表与决策记录见 `docs/spec-changes/2026-09-10-source-snapshot-approval-binding.md`,诚实分层见 `docs/sources.md`。实验性期间其 API 面**不进** contract-guard;graduate 需在真实 trace 上实跑两个 minor。
 >
-> - `traceguard.approval` — **规划,尚未实现**。审批参数绑定:`bind(action, *, approver,
->   approved_at, expires_at, forbid_floats=True)` 以 §4.4 canonical normalize 产出 `params_hash`;
->   执行前 `verify(action, approval, *, strict)` 重算并返回 verdict ∈ {`match`, `mismatch`(带差异
->   路径), `expired`, `consumed`}。两步各写一条 trace(`operation` 为 `approval_bind` /
->   `approval_verify`),开启 audit 时自然入链。**默认不阻断**;同一 `approval_id` single-use;
->   载荷禁止 `float`(金额以字符串传入),避开 §4.4 浮点定精度带来的歧义。实现以一个真实消费者
->   为 gate。
+> - `traceguard.approval` — **规划,尚未实现**(v1.2 登记)。审批参数绑定:`bind(action, *, approver, approved_at, expires_at, forbid_floats=True)` 以 §4.4 canonical normalize 产出 `params_hash`;执行前 `verify(action, approval, *, strict)` 重算并返回 verdict ∈ {`match`, `mismatch`(带差异路径), `expired`, `consumed`}。两步各写一条 trace(`operation` 为 `approval_bind` / `approval_verify`),开启 audit 时自然入链。**默认不阻断**;同一 `approval_id` single-use(第二次 `verify` 返回 `consumed`);载荷禁止 `float`,金额以字符串传入,避开 §4.4 浮点定精度带来的歧义。实现以一个真实消费者为 gate。
 
-audit 条目末尾(“诚实分层与边界见 `docs/audit.md`。”之前)追加:
+并在 audit 条目末尾(“诚实分层与边界见 `docs/audit.md`。”之前)追加:
 
-> 自 SPEC v1.2 起增补:finding kind 新增 `capture_unmatched`(WARN,逐请求存在性核对,带
-> `direction`);anchor sink 新增 `ots:` / `rekor:`(extra `traceguard[anchors]`,网络依赖,
-> 边界声明 1 的暴露窗口措辞不因此放松);证据 bundle 导出格式 `evidence-bundle/v1` 定义于
-> `docs/specs/evidence-bundle.md`。
+> 自 SPEC v1.2 起增补:finding kind 新增 `capture_unmatched`(WARN,逐请求存在性核对,带 `direction`);anchor sink 新增 `ots:` / `rekor:`(extra `traceguard[anchors]`,网络依赖,边界声明 1 的暴露窗口措辞不因此放松);证据 bundle 导出格式 `evidence-bundle/v1` 定义于 `docs/specs/evidence-bundle.md`。
 
 ### 8.5 附录 D 新增
 
 > ### v1.2 (2026-09-10)
 >
-> - §3.1 新增 nullable 字段 `provider_response_id`(逐请求带外对账的 join key);与 `agent_id` /
->   `session_id` 同,不参与 input_hash 与不变量,在 audit algo v1 信封之外。
-> - §5 不变量 3 适用范围明文加入"取回的外部数据";补 `valid_from` 未知时的 strict 拒绝 /
->   loose `unverifiable` 行为(不新增不变量)。
-> - §6.6 新增 `traceguard.sources`(实验性)与 `traceguard.approval`(规划);audit 条目增补
->   `capture_unmatched`、`ots:` / `rekor:` sink、`evidence-bundle/v1`。
-> - 动机与兼容性分析:`docs/spec-changes/2026-09-10-source-snapshot-approval-binding.md`。
->   SemVer **minor**。
+> - §3.1 新增 nullable 字段 `provider_response_id`(逐请求带外对账的 join key);与 `agent_id` / `session_id` 同,不参与 input_hash 与不变量,在 audit algo v1 信封之外。
+> - §5 不变量 3 适用范围明文加入“取回的外部数据”;补 `valid_from` 未知时的行为规定(strict 拒绝 / loose 产出 `unverifiable`),作用域限定在 §6.6 `traceguard.sources`。**不新增第五条不变量**——这是不变量 3 项下的新拒绝条件,按 §6.4 归 minor,ramp 由 `strict` 无默认值承担。
+> - §6.6 新增 `traceguard.sources`(实验性)与 `traceguard.approval`(规划);audit 条目增补 `capture_unmatched` finding kind、`ots:` / `rekor:` anchor sink、`evidence-bundle/v1` 导出格式。
+> - 动机与兼容性分析:`docs/spec-changes/2026-09-10-source-snapshot-approval-binding.md`。SemVer **minor**。
 
 ---
 
@@ -393,9 +399,9 @@ audit 条目末尾(“诚实分层与边界见 `docs/audit.md`。”之前)追�
 
 | # | 决策 | 定夺 | 理由 | 落在本文 |
 |---|---|---|---|---|
-| D1 | 不变量 3 遇到 `published_at` 未知 | strict 拒绝(措辞 "cannot establish that the source existed at feature_as_of");loose 产出 `unverifiable` 并照常记录。不新增不变量(§6.4 minor) | 沿 `routing_integrity` 四级判定先例;无法证明存在 ≠ 证明不存在 | §3.2 / §8.3 |
+| D1 | 不变量 3 遇到 `published_at` 未知 | strict 拒绝(措辞 "cannot establish that the source existed at feature_as_of");loose 产出 `unverifiable` 并照常记录。不新增第五条不变量;作为不变量 3 项下的新拒绝条件按 §6.4 归 minor,ramp 由 D10 承担(见 §7) | 沿 `routing_integrity` 四级判定先例;无法证明存在 ≠ 证明不存在,两种模式各说各的 | §3.2 / §8.3 |
 | D2 | `provider_response_id` 放哪 | `traces` 新增 nullable、有索引的列;在 algo v1 哈希信封**之外**(与 `agent_id` 同款,文档照实写) | 它是逐请求对账的 join key,不是稀疏业务数据——08-27 的开列 / 内嵌判据 | §4 |
-| D3 | approval 是否一次性 | 默认 single-use:同一 `approval_id` 第二次 `verify` 返回 `consumed`,不放行 | 审批被复用于第二次执行 = 审批失效 | §5.2 |
+| D3 | approval 是否一次性 | **无条件** single-use(无开关参数):同一 `approval_id` 第二次 `verify` 返回 `consumed`,不放行 | 审批被复用于第二次执行 = 审批失效 | §5.2 |
 | D4 | approval 载荷里的数值 | 默认 `forbid_floats=True`:载荷任何层级出现 `float` 即 raise `ApprovalPayloadError`;金额以字符串传入 | 避开 §4.4 浮点定精度带来的"审批 100.0、执行 100.00 算不算同一笔"歧义 | §5.2 |
 | D5 | 逐请求核对的 finding kind | 新增 `capture_unmatched`(WARN),带 `direction`;聚合核对继续用 `capture_mismatch` | 两种 finding 证明的东西不同,混在一个 kind 里会被当成同一件事 | §6.1 |
 | D6 | `source_snapshots` 哈希定义 | `content_hash = sha256(原始字节)`;`str` 入参按 UTF-8 编码并记 `content_encoding`;`normalized_hash` 可选,给了就必须给 `normalizer_id`(格式 `<name>@<version>`) | 没有名字和版本的规范化器产出的 hash 不可比(pit-archive 教训) | §2.1 |

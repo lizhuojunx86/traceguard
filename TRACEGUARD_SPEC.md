@@ -327,9 +327,13 @@ assert_replay_set_locked(replay_set_id: str) -> None
 
 业务方 **MUST** 在自己的 INTEGRATION 文档中枚举本项目内适用此原则的所有 reference data 类型。本宪法只规定原则,不预先枚举实例。
 
-**`valid_from` 未知时(v1.2)**:当引用数据不提供任何“首次有效时间”(常见于不返回 `Last-Modified` 的 vendor 端点与 MCP 工具结果),strict 模式 **MUST** 拒绝——无法证明该内容在 `feature_as_of` 时已存在;loose 模式 **MUST** 产出 `unverifiable` 判定并照常记录,**MUST NOT** 折叠为通过。无法证明存在不等于证明不存在,两种模式各说各的。本条不新增不变量,是不变量 3 在缺失输入下的行为规定(§6.4 评估为 minor)。
+**`valid_from` 未知时(v1.2)**。适用范围先说清楚:§4.5 的 `validate_reference_timing` 只接受一个**确定的** `valid_from`,不存在“未知”这一态,因此本条**不**改变它的行为,也不适用于 prompt template、alias 表这类调用点必须自己拿出 `valid_from` 的实例。本条只约束那些**能够表达“源没有声称首次有效时间”**的 reference data —— 今天只有一类:§6.6 `traceguard.sources` 记录的取回外部数据(常见于不返回 `Last-Modified` 的 vendor 端点与 MCP 工具结果)。
 
-> 注: 模型时间性(不变量 2)在概念上是本不变量的特化版本——模型是一种 reference data,`available_to_us_at` 是其 `valid_from`。之所以单独列出是因为模型有 strict / loose 两种模式,其他 reference data 默认只有 strict 模式。
+对这一类,strict 模式 **MUST** 拒绝——无法证明该内容在 `feature_as_of` 时已存在;loose 模式 **MUST** 产出 `unverifiable` 判定并照常记录,**MUST NOT** 折叠为通过。无法证明存在不等于证明不存在,两种模式各说各的。
+
+定级:这是不变量 3 项下的**一个新拒绝条件**,按 §6.4“添加新不变量 = minor”归类。§6.4 给 minor 配的 ramp(默认 warn,下个 release 转 error)由 **`strict` 为 keyword-only 且无默认值**(§6.6 `traceguard.sources` 的 `record_source`)承担:该拒绝只在一个新的 opt-in 扩展内触发,而其每个调用点都必须显式说出自己的模式,因此不存在“既有调用点被静默转成 error”的情形——ramp 要防的正是这个。
+
+> 注: 模型时间性(不变量 2)在概念上是本不变量的特化版本——模型是一种 reference data,`available_to_us_at` 是其 `valid_from`。之所以单独列出是因为模型有 strict / loose 两种模式,其他 reference data 默认只有 strict 模式——除非某个 §6.6 扩展为它显式定义了 loose 模式(v1.2 起:`traceguard.sources`,见上方“`valid_from` 未知时”)。
 
 ### 不变量 4: 锁定 replay set 不可变
 
@@ -587,7 +591,7 @@ MUST,不触发 SemVer,但每一条都有具体代价支撑,写在这里是为了
 ### v1.2 (2026-09-10)
 
 - §3.1 新增 nullable 字段 `provider_response_id`(逐请求带外对账的 join key);与 `agent_id` / `session_id` 同,不参与 input_hash 与不变量,在 audit algo v1 信封之外。
-- §5 不变量 3 适用范围明文加入“取回的外部数据”;补 `valid_from` 未知时的行为规定(strict 拒绝 / loose 产出 `unverifiable`),**不新增不变量**。
+- §5 不变量 3 适用范围明文加入“取回的外部数据”;补 `valid_from` 未知时的行为规定(strict 拒绝 / loose 产出 `unverifiable`),作用域限定在 §6.6 `traceguard.sources`。**不新增第五条不变量**——这是不变量 3 项下的新拒绝条件,按 §6.4 归 minor,ramp 由 `strict` 无默认值承担。
 - §6.6 新增 `traceguard.sources`(实验性)与 `traceguard.approval`(规划);audit 条目增补 `capture_unmatched` finding kind、`ots:` / `rekor:` anchor sink、`evidence-bundle/v1` 导出格式。
 - 动机与兼容性分析:`docs/spec-changes/2026-09-10-source-snapshot-approval-binding.md`。SemVer **minor**。
 
