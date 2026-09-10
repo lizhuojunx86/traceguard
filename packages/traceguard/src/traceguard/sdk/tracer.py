@@ -147,6 +147,7 @@ class Span:
         self._cost_usd: Decimal | None = None
         self._error_class: str | None = None
         self._error_message: str | None = None
+        self._provider_response_id: str | None = None
         # Buffered (snapshot, verdict, strict) triples from record_source.
         # Validation already happened at record time; only the WRITE is
         # deferred to _flush, where it is fail-open (see _write_sources_safe).
@@ -207,6 +208,22 @@ class Span:
         self._error_message = str(exc)
         if self._parse_status is None:
             self._parse_status = "failed"
+
+    def record_provider_response_id(self, response_id: Any) -> None:
+        """Record the provider's own identifier for this call (SPEC §3.1, v1.2).
+
+        The join key for per-request out-of-band reconciliation: OpenAI
+        ``response.id``, Anthropic ``message.id``. A new method rather than a
+        parameter on ``record_output`` — SPEC §6.3 counts a new method as a
+        minor and leaves every existing signature untouched.
+
+        A non-string, or an empty string, records NOTHING and leaves the
+        column NULL. "The provider did not give us one" and "here is an id"
+        are different facts, and a reconciliation that treats a placeholder
+        as an id manufactures a match that never happened.
+        """
+        if isinstance(response_id, str) and response_id:
+            self._provider_response_id = response_id
 
     def record_source(self, snapshot: Any, *, strict: bool) -> Any:
         """Attach one retrieved-source snapshot to this trace (SPEC v1.2 §6.6).
@@ -275,6 +292,7 @@ class Span:
             correlation_id=self.correlation_id,
             agent_id=self.agent_id,
             session_id=self.session_id,
+            provider_response_id=self._provider_response_id,
             input_hash=self._input_hash,
             input_summary=self._input_summary,
             model_id=self._model_id,

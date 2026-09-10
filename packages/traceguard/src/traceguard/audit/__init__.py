@@ -35,7 +35,16 @@ the MUST set):
    ``reconcile()`` compares self-reported token volume per model and window
    with the provider's usage report; disagreement is a ``capture_mismatch``
    finding. Storage integrity (the chain) and capture fidelity (this) are
-   different questions; only totals are cross-checked, never single calls.
+   different questions.
+
+6. **Per-request existence reconciliation** (SPEC v1.2, layer L1.5) —
+   ``reconcile_requests()`` joins ``traces.provider_response_id`` against a
+   ``request-ledger/v1`` document from an out-of-band source, one call at a
+   time. Totals can cancel (an under-report and an over-report net out, and
+   the Usage API gives no call counts at all); existence cannot. A call
+   present on one side only is ``capture_unmatched`` (WARN) carrying a
+   ``direction``. It still cannot vouch for a matched call's CONTENT — that
+   is L2, and L2 stays unbuilt.
 
 Importing this module has no side effects; nothing activates until
 :func:`enable` / :func:`attach`. Chain failures are fail-open by default
@@ -108,6 +117,17 @@ from traceguard.audit.anchors import (
 )
 from traceguard.audit.reconcile import (
     CAPTURE_MISMATCH,
+    CAPTURE_UNMATCHED,
+    DIRECTION_OUT_OF_BAND_ONLY,
+    DIRECTION_SELF_REPORTED_ONLY,
+    DIRECTION_TEXT,
+    REQUEST_LEDGER_SCHEMA,
+    LedgerRequest,
+    RequestLedger,
+    RequestReconcileResult,
+    load_request_ledger,
+    parse_request_ledger,
+    reconcile_requests,
     ModelComparison,
     ReconcileResult,
     SideTotals,
@@ -164,6 +184,18 @@ __all__ = [
     "load_usage_report",
     "fetch_anthropic_usage",
     "traces_usage",
+    # per-request existence reconciliation (SPEC v1.2, L1.5)
+    "CAPTURE_UNMATCHED",
+    "REQUEST_LEDGER_SCHEMA",
+    "DIRECTION_OUT_OF_BAND_ONLY",
+    "DIRECTION_SELF_REPORTED_ONLY",
+    "DIRECTION_TEXT",
+    "LedgerRequest",
+    "RequestLedger",
+    "RequestReconcileResult",
+    "parse_request_ledger",
+    "load_request_ledger",
+    "reconcile_requests",
     # hash algo (frozen v1)
     "ALGO_VERSION",
     "GENESIS_PREV_HASH",

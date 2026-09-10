@@ -400,6 +400,38 @@ underneath a citation is not evidence.
 Submission criteria and the corpus itself are in
 [`benchmark/`](benchmark/README.md), which currently holds one file and says so.
 
+## Retrieved data: `traceguard.sources` (experimental)
+
+The four invariants cover the model, the prompt, and feature ordering — not the
+data the pipeline fetched. A run can use the right model, the right prompt and
+the right `feature_as_of`, be handed a vendor value rewritten into existence
+weeks later, and pass all four while being wrong. Measured: 41.4% of vendor
+`epsActual` values differ between first sight and today, 15.3% flip a binary
+entry decision (`analysis/eps_revision.py` recomputes both offline).
+
+```python
+from traceguard import sources
+
+sources.enable(engine)                      # explicit; import has no side effects
+
+with tracer.span("quant", "eps", "llm_complete", feature_as_of=as_of) as span:
+    resp = httpx.get(url)                   # your request, your client
+    span.record_source(sources.from_http_response(resp), strict=False)
+```
+
+Each retrieval records a `source_snapshot` — `content_hash`, `retrieved_at`,
+the source's claimed `published_at`, and an invariant-3 `verdict` of
+`verified` / `anachronistic` / `unverifiable` / `unchecked`. `strict=True`
+refuses the middle two; `strict` is keyword-only with no default, so every call
+site states its intent. `python -m traceguard.sources --db URL drift` reports
+which sources changed content between retrievals, with n and a Wilson 95%
+interval.
+
+**No retrieved content is stored** — digests and metadata only. A snapshot
+proves which bytes the host handed over and how their claimed publication time
+relates to `feature_as_of`; it does not prove the host fetched them from
+`source_uri`, nor that `published_at` is true. Details: `docs/sources.md`.
+
 ## Contract
 
 The binding interface contract — table schemas, SDK signatures, the four

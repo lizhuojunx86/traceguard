@@ -71,6 +71,51 @@ untouched, and the frozen 29-symbol public surface is unchanged.
   (interface, single-use `approval_id`, float-free payloads). Implementation
   is gated on a real consumer.
 
+- `traces.provider_response_id` (SPEC §3.1 v1.2): nullable, **indexed** — the
+  join key for per-request reconciliation. `wrap_anthropic` records
+  `message.id`, `wrap_openai` records `response.id` (chat and responses).
+  Streaming calls leave it NULL: the wrappers do not drain the stream, so there
+  is no final message to take an id from, and a synthesized id would reconcile
+  as a real call. `routing_audit.ingest_claude_code` fills it from the
+  transcript's API message id; lines that fell back to `uuid:<line uuid>` for
+  identity leave it NULL rather than store a locally-minted value that would
+  look like a provider's. Rows ingested earlier are **not** backfilled — same
+  posture as `agent_id`/`session_id` in 1.5.0; the id stays in `output_parsed`.
+  Legacy databases get the column and its index on open
+  (`ensure_trace_columns`), and its failure message now names the SPEC revision
+  that introduced the specific missing column.
+- `traceguard.audit.reconcile_requests()` + the `request-ledger/v1` format —
+  capture-fidelity layer **L1.5**. L1 compares totals, which can cancel: an
+  under-reported call and an over-reported one net out, and the provider usage
+  API supplies token volume but no call counts. L1.5 asks what totals cannot —
+  is *this* call present on both sides — by joining `provider_response_id`
+  against an out-of-band request ledger. CLI: `reconcile --source
+  requests-json:PATH`. Any out-of-band source that can export the documented
+  shape works; no specific gateway interface is promised.
+- New finding kind `capture_unmatched` (WARN) carrying a `direction` of
+  `out_of_band_only` ("a call the capture layer did not see — bypass or wrapper
+  coverage gap") or `self_reported_only` ("a record the provider side does not
+  vouch for — fabrication, duplication, or an incomplete ledger"). **A new kind
+  is a SemVer minor** under the 2026-08-27 revision's rule A; `FINDING_SEVERITY`
+  and the frozen table in `tests/test_audit_api_surface.py` were updated
+  deliberately, and `ChainFinding` gained a defaulted `direction` field (§6.3,
+  additive). The aggregate `capture_mismatch` path is unchanged — the two kinds
+  prove different things, and one kind for both would give them one threshold
+  and one response.
+  - Three disciplines, each because a false positive teaches people to ignore
+    the check (SPEC B3.4): a ledger whose declared `window` does not cover the
+    requested one is **refused** rather than reporting the uncovered stretch as
+    missing; traces with a NULL `provider_response_id` are counted and excluded,
+    never reported as fabricated; and a `response_id` appearing twice on one
+    side is reported as a duplicate, not as something missing.
+- `traceguard.sources` gained `drift` (A5): the retrieval-to-retrieval
+  `content_hash` sequence per `source_uri`, summarised as a rate with its n and
+  a Wilson 95% interval. The counting discipline follows
+  `analysis/eps_revision.py` and is enforced by tests: `unchecked` snapshots are
+  not observations, a source retrieved only once is in neither side of the rate,
+  and an empty denominator reports `None` rather than 0.0. CLI: `python -m
+  traceguard.sources --db URL drift [--source-uri] [--since] [--json]`.
+
 ### Fixed
 
 - The sources write path's failure branch no longer inspects the *engine* to

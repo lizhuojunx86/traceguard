@@ -500,6 +500,13 @@ def _build_trace(rec: ParsedRecord) -> Trace:
         # rows written before 1.5.0 can still be joined on the JSON.
         agent_id=rec.agent_id,
         session_id=rec.source_session_id if rec.source_session_id != "unknown" else None,
+        # The API message id (SPEC §3.1 v1.2), when the transcript carried
+        # one. Lines that fell back to `uuid:<line uuid>` for identity have
+        # no provider id at all, so the column stays NULL rather than holding
+        # a locally-minted value that would look like a provider's. Rows
+        # ingested before 1.6.0 are NOT backfilled — same posture as
+        # agent_id/session_id in 1.5.0; the id remains in output_parsed.
+        provider_response_id=rec.meta.get("message_id"),
         model_id=rec.model_id,
         output_parsed=rec.meta,
         parse_status=rec.parse_status,

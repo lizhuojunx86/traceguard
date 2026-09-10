@@ -24,6 +24,11 @@ from `traceguard`. Zero new dependencies (stdlib `hashlib`/`json`).
 新列不进入,旧链逐字节不变)——它们受 append-only 守卫保护(ORM 层不许改),但**不被链 attest**:
 直接改库文件把 `agent_id` 换掉,`verify_chain` 看不见。纳入信封待 algo v2。
 
+SPEC v1.2 新增的 `provider_response_id` **同款**:不在信封内,受守卫保护,不被链 attest。
+这一条正是下文 L1.5 的能力边界所在——逐请求核对能证明“某个 response id 在两侧都存在”,
+**不能**证明“这一行的 id 没有被人事后改成另一个”。改了 id 的行会安静地匹配上另一条台账记录,
+而链看不见这次改动。
+
 ```python
 import traceguard
 from traceguard import audit
@@ -90,6 +95,7 @@ v1 的覆盖照实登记——可检测的说可检测,不设防的说不设防:
 | 删除已链 trace 行 | **可检测**(`missing_trace` BREAK) | pass 2 全表扫 |
 | 尾部截断 / 全链重写 | **仅锚定后可检测**(`anchor_mismatch`);无外部锚不可检测。v2 的 anchor sink + 定期锚定把暴露窗口缩到锚定间隔,不改变"两次锚定之间不可检测"这一事实 | 边界声明 1,锚定频率 = 暴露窗口;下文 Anchors |
 | 采集层伪造(spoofed tool call 类,METR: >7% transcripts) | **逐条不设防**——自报证据产生于 agent 控制的进程内,链忠实保存谎言。v2 `reconcile` 做**总量**对账:同 model 同时间窗的自报 token 量 vs 供应商 usage 报告,超阈值 = `capture_mismatch`(WARN);单条 trace 的真实性仍不可证 | 存储完整性 ≠ 采集真实性;分层见下文 Reconcile 与 `docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md` §5 |
+| 采集层**漏报**或**多报**单次调用 | **有带外逐请求台账时可检测**(`capture_unmatched` WARN,带 `direction`)。总量对账在这里会失效——少报的调用与多报的调用可以互相抵消,而供应商 usage API 只给 token 量、不给调用数 | 下文 L1.5;`docs/spec-changes/2026-09-10-source-snapshot-approval-binding.md` §1.2 |
 | 高权限攻击者(可写库文件) | **v1 不设防** | 边界声明 1,WORM/签名/自动外锚 out of scope |
 
 ## Mechanics
@@ -180,6 +186,7 @@ about rows inserted while audit was off. Findings:
 | `deleted_with_record` | WARN | chained trace gone, deletion tombstone exists |
 | `coverage_gap` | GAP | traces with no entry (pre-enable / disable window / fail-open skip) |
 | `capture_mismatch` | WARN | (`reconcile`, not `verify_chain`) self-reported token volume for a model/window disagrees with the provider's out-of-band usage report beyond the tolerance, or a model appears on only one side |
+| `capture_unmatched` | WARN | (`reconcile_requests`, not `verify_chain`) **one specific call** is present on only one side of a per-request comparison, or one `response_id` appears twice on a side. Carries `direction`: `out_of_band_only` / `self_reported_only` |
 
 Full walk is O(n) and the default (~26k entries verify in well under a
 second). `from_anchor=` **adds** an anchor-consistency check on top of the
@@ -232,6 +239,7 @@ the provider's usage report, an out-of-band source the agent does not write to.
 |---|---|---|---|
 | L0 | wrapper 自报 + hash chain | SDK 看到的调用事后未被无痕改动 | 自报本身的真实性 |
 | **L1(v2)** | `reconcile`:traces 聚合 vs 供应商 usage 报告 | 同 model 同时间窗的 token 总量在容差内一致 | 单条 trace 的真实性 |
+| **L1.5(v1.2)** | `reconcile_requests`:按 `provider_response_id` 与带外**逐请求台账**等值连接 | **被带外源逐条确认存在的那些调用**确实发生过——采集层没有凭空造出它们,带外侧也看见了它们 | 内容是否如实(台账里是一个 id,不是一份记录);两侧都没有的调用;以及 `provider_response_id` 本身是否被事后改过(它在信封外) |
 | L2(不做) | 逐条真实性:供应商签名请求日志 | — | 超出 SDK 能力边界,不承诺 |
 
 ```bash
@@ -254,6 +262,49 @@ spelled out in the finding: **traces > provider** = self-reports the provider
 never served (spoofed or replayed), or a report filtered narrower than the DB;
 **provider > traces** = traffic the SDK never recorded (uninstrumented calls,
 traces dropped fail-open, or an org-wide report wider than this DB).
+
+### 逐请求核对(L1.5):`request-ledger/v1`
+
+总量对账有一个它自己解决不了的问题:少报的调用与多报的调用可以**互相抵消**,而供应商
+usage API 只给 token 量、不给调用数(08-27 §8 实施备注)。于是"总量对得上"并不排除
+"这一条是编的、那一条被吞了"。逐请求核对问的是总量问不了的问题:**这一次调用在两侧都
+存在吗**。连接键是供应商自己返回的响应 id(`traces.provider_response_id`,SPEC v1.2)。
+
+带外源只要能导出下面这个形状,就能接进来——**不承诺任何具体网关的接口**:
+
+```json
+{"ledger": "request-ledger/v1", "source": "<gateway or provider name>",
+ "window": ["<ISO start>", "<ISO end>"],
+ "requests": [{"response_id": "…", "model": "…", "ts": "<ISO>",
+               "tokens_in": 0, "tokens_out": 0, "cost_usd": null}]}
+```
+
+```bash
+python -m traceguard.audit --db sqlite:///traces.db reconcile \
+    --source requests-json:/path/gateway-requests.json \
+    --window 2026-09-01T00:00:00Z,2026-09-08T00:00:00Z
+```
+
+三处纪律,都是"假阳性会教人忽略告警"的直接后果(SPEC 附录 B3.4):
+
+1. **`window` 是承重的,不是装饰。** 台账声称覆盖 `[a, b)`,而你要求核对 `[a, c)` 且
+   `c > b` —— 那么 `[b, c)` 里的每一条 trace 都会被报成 `self_reported_only`。这不是发现,
+   是伪影。`reconcile_requests` 在这种情况下**直接拒绝**并要求你收窄窗口。
+2. **`provider_response_id` 为 NULL 的行被计数、被排除,不被当成不匹配。** 它们要么早于
+   这一列存在,要么来自 wrapper 拿不到 id 的流式调用。把"诚实地说不知道"报成
+   `self_reported_only`,等于指控采集层伪造。
+3. **两个方向的措辞是固定的**,好让两次运行、两个人读到的是同一个断言:
+
+| `direction` | 情形 | 固定解释 |
+|---|---|---|
+| `out_of_band_only` | 台账有、traces 无 | a call the capture layer did not see — bypass or wrapper coverage gap |
+| `self_reported_only` | traces 有、台账无 | a record the provider side does not vouch for — fabrication, duplication, or an incomplete ledger |
+
+同一个 `response_id` 在任一侧出现两次单列为 duplicate:一个响应 id 标识一次调用,
+"同一次调用被记了两遍"与"一次调用不见了"不是同一件事。
+
+聚合层的 `capture_mismatch` 行为**完全不变**——两种 finding 证明的东西不同,混成一个
+kind 会让它们共用一个阈值和一套处置。
 
 ## Legal-deletion path
 

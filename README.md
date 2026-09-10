@@ -351,6 +351,43 @@ The full interface contract — table schemas, SDK signatures, semantics, and
 SemVer rules — lives in [docs/SPEC.md](docs/SPEC.md) (English) and
 [TRACEGUARD_SPEC.md](TRACEGUARD_SPEC.md) (Chinese original, authoritative).
 
+## Retrieved data: `traceguard.sources` (experimental)
+
+The four invariants cover the model, the prompt, and feature ordering. They do
+not cover the data the pipeline *fetched*. A backtest can use the right model,
+the right prompt and the right `feature_as_of`, be handed a vendor value that
+was rewritten into existence weeks later, and pass all four while being wrong.
+
+That is measured, not hypothetical: **41.4%** of vendor `epsActual` values
+differ between first sight and today, and **15.3%** flip a binary entry
+decision. A second capture put the same two figures at 18.6% and 4.6%.
+[`analysis/eps_revision.py`](analysis/eps_revision.py) recomputes both offline
+from data committed to this repo.
+
+`traceguard.sources` (opt-in, off the frozen import surface) records one
+`source_snapshot` per retrieval — `content_hash`, `retrieved_at`, the source's
+claimed `published_at`, and a `verdict` from invariant 3:
+
+| verdict | meaning |
+|---|---|
+| `verified` | `published_at` ≤ `feature_as_of` — the content demonstrably already existed |
+| `anachronistic` | it did not exist yet |
+| `unverifiable` | the source states no `published_at`, so existence can be neither shown nor ruled out |
+| `unchecked` | the call site passed no `feature_as_of`; nothing was compared |
+
+`strict=True` refuses the last two; `strict=False` records them. `strict` is
+keyword-only with no default, so every call site states its intent — the same
+discipline `select_model` uses. `python -m traceguard.sources --db URL drift`
+then reports which sources changed content between retrievals, as a rate with
+its n and a Wilson 95% interval.
+
+**No retrieved content is stored** — digests and metadata only. And the limits
+are stated rather than glossed: a snapshot proves which bytes the host handed
+over and how their claimed publication time relates to `feature_as_of`. It does
+not prove the host actually fetched them from `source_uri` (TraceGuard never
+made the request), nor that `published_at` is true — that is what the source
+says about itself. Details: [docs/sources.md](docs/sources.md).
+
 ## Evidence layer: `traceguard.audit`
 
 Time-correct traces are only worth as much as the guarantee that they were not
@@ -371,6 +408,16 @@ since SPEC v1.1, off the frozen import surface) adds that guarantee to the `trac
   `anchor --sink file:…|git-note:…|webhook:… [--every SECONDS]` stores the head
   outside the DB on a cadence, and `reconcile` checks self-reported token
   volume against the provider's usage report (`capture_mismatch`).
+- **Per-request existence check (L1.5)** — totals can cancel: an
+  under-reported call and an over-reported one net out, and the provider
+  usage API reports tokens but no call counts. `reconcile --source
+  requests-json:PATH` instead joins `traces.provider_response_id` against a
+  `request-ledger/v1` document from an out-of-band source, one call at a
+  time. A call present on only one side is `capture_unmatched` (WARN)
+  carrying a direction — `out_of_band_only` (a call the capture layer did
+  not see) or `self_reported_only` (a record the provider side does not
+  vouch for). It confirms that matched calls exist on both sides; it cannot
+  vouch for their *content*, which stays out of scope.
 
 Boundaries are stated rather than glossed: this is tamper-**evident**, not
 tamper-proof. Core SQL, raw drivers, and bulk APIs bypass the ORM guard, and

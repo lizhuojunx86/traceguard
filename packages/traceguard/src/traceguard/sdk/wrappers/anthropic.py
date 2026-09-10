@@ -74,6 +74,10 @@ class _WrappedMessages(_DelegatingWrapper):
                 # the stream, which this wrapper does not do. Record an honest
                 # 'partial' instead of a false 'success' with empty text and
                 # zero tokens (which would corrupt the trace dataset).
+                # provider_response_id stays NULL for the same reason: with no
+                # final message there is no id, and SPEC §3.1 (v1.2) requires
+                # NULL over a guess — a fabricated id would reconcile as a real
+                # call.
                 span.record_output(
                     parsed={
                         "id": getattr(response, "id", None),
@@ -92,6 +96,10 @@ class _WrappedMessages(_DelegatingWrapper):
                 "content_text": content_text,
                 "stop_reason": stop_reason,
             }
+            # Also to the indexed column (SPEC §3.1 v1.2) for per-request
+            # reconciliation. Still in output_parsed as well: the column is
+            # not backfilled, so older rows remain joinable on the JSON.
+            span.record_provider_response_id(response_id)
 
             # Anthropic direct always echoes the concrete model, so this is a
             # formality there — but the SDK's base_url can point at a gateway,

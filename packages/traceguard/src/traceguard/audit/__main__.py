@@ -6,14 +6,16 @@
     python -m traceguard.audit disable   --db sqlite:///traces.db
     python -m traceguard.audit verify    --db sqlite:///traces.db [--anchor '<json>' | --anchor-file PATH]
     python -m traceguard.audit anchor    --db sqlite:///traces.db [--sink SPEC ...] [--every SECONDS [--rounds N]]
-    python -m traceguard.audit reconcile --db sqlite:///traces.db --source anthropic-usage|json:PATH
+    python -m traceguard.audit reconcile --db sqlite:///traces.db
+                                         --source anthropic-usage|json:PATH|requests-json:PATH
                                          --window START,END [--bucket-width 1d] [--tolerance 0.05]
                                          [--project P] [--api-key-id ID ...] [--workspace-id ID ...]
                                          [--model-map TRACE=PROVIDER ...]
 
 ``verify`` exits 1 on BREAK findings (tamper evidence), 0 otherwise.
 ``anchor`` exits 1 when a sink refused the anchor (an anchor that did not land
-protects nothing). ``reconcile`` exits 1 on any ``capture_mismatch``.
+protects nothing). ``reconcile`` exits 1 on any ``capture_mismatch`` (or, with
+``--source requests-json:``, any ``capture_unmatched``).
 ``--db`` falls back to ``TRACEGUARD_DB_URL`` then the make_engine default.
 """
 
@@ -34,6 +36,8 @@ from traceguard.audit.anchors import (
 from traceguard.audit.chain import disable, enable
 from traceguard.audit.reconcile import (
     ADMIN_KEY_ENV,
+    load_request_ledger,
+    reconcile_requests,
     align_window,
     fetch_anthropic_usage,
     load_usage_report,
@@ -48,7 +52,9 @@ def _print_findings(findings) -> None:
     for finding in findings:
         loc = f"seq={finding.seq}" if finding.seq is not None else ""
         tid = f"trace_id={finding.trace_id}" if finding.trace_id is not None else ""
-        where = " ".join(x for x in (loc, tid) if x)
+        direction = getattr(finding, "direction", None)
+        dirn = f"direction={direction}" if direction else ""
+        where = " ".join(x for x in (loc, tid, dirn) if x)
         print(f"  [{finding.severity}] {finding.kind} {where}: {finding.detail}")
 
 
@@ -129,7 +135,9 @@ def main(argv: list[str] | None = None) -> int:
     p_rec.add_argument(
         "--source",
         required=True,
-        help="anthropic-usage (Usage Admin API; needs $ANTHROPIC_ADMIN_KEY) | json:PATH (saved report)",
+        help="anthropic-usage (Usage Admin API; needs $ANTHROPIC_ADMIN_KEY) | "
+        "json:PATH (saved usage report, aggregate) | requests-json:PATH "
+        "(a request-ledger/v1 document — per-request existence check, L1.5)",
     )
     p_rec.add_argument(
         "--window",
@@ -268,6 +276,25 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
             model_map[key] = value
         source = args.source
+        if source.startswith("requests-json:"):
+            # L1.5: per-request existence, not totals. Different question,
+            # different finding kind (capture_unmatched), different output.
+            try:
+                ledger = load_request_ledger(source[len("requests-json:") :])
+                per_request = reconcile_requests(
+                    engine,
+                    ledger=ledger,
+                    starting_at=start,
+                    ending_at=end,
+                    project=args.project,
+                    operation=args.operation,
+                )
+            except (ValueError, OSError) as exc:
+                print(str(exc), file=sys.stderr)
+                return 2
+            print(per_request.summary())
+            _print_findings(per_request.findings)
+            return 0 if per_request.ok else 1
         if source == "anthropic-usage":
             admin_key = os.environ.get(args.admin_key_env, "")
             if not admin_key:
@@ -288,7 +315,8 @@ def main(argv: list[str] | None = None) -> int:
             provider = load_usage_report(source[len("json:") :])
         else:
             print(
-                f"unknown --source {source!r}; expected anthropic-usage | json:PATH",
+                f"unknown --source {source!r}; expected anthropic-usage | json:PATH "
+                "| requests-json:PATH",
                 file=sys.stderr,
             )
             return 2

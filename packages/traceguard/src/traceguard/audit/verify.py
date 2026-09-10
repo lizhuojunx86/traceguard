@@ -79,6 +79,11 @@ class ChainFinding:
     seq: int | None
     trace_id: int | None
     detail: str
+    #: Which side held the record, for findings where that is the whole
+    #: point (``capture_unmatched``). A defaulted field, so every existing
+    #: positional construction is unchanged (SPEC §6.3: additive = minor).
+    #: ``None`` for every kind that has no direction.
+    direction: str | None = None
 
 
 @dataclass(frozen=True)
@@ -237,6 +242,13 @@ _SEVERITY = {
     # verify_chain — the self-reported token volume disagrees with the
     # provider's out-of-band report for the same model and window.
     "capture_mismatch": WARN,
+    # SPEC v1.2: per-request existence reconciliation, also from
+    # traceguard.audit.reconcile. Deliberately a SEPARATE kind from
+    # capture_mismatch: that one says two totals disagree (which a metering
+    # convention or a window edge can explain); this one says a specific
+    # call is absent from one side, which no counting convention explains.
+    # One kind for both would get them one threshold and one response.
+    "capture_unmatched": WARN,
 }
 
 #: Finding kind → severity. Contract-frozen since SPEC v1.1 (§6.6): adding a

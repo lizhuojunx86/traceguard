@@ -69,6 +69,19 @@ EXPECTED_AUDIT_API = {
     "load_usage_report",
     "fetch_anthropic_usage",
     "traces_usage",
+    # per-request existence reconciliation (SPEC v1.2, L1.5) — ADDED
+    # deliberately; new symbols on this surface are a SemVer minor (§6.3).
+    "CAPTURE_UNMATCHED",
+    "REQUEST_LEDGER_SCHEMA",
+    "DIRECTION_OUT_OF_BAND_ONLY",
+    "DIRECTION_SELF_REPORTED_ONLY",
+    "DIRECTION_TEXT",
+    "LedgerRequest",
+    "RequestLedger",
+    "RequestReconcileResult",
+    "parse_request_ledger",
+    "load_request_ledger",
+    "reconcile_requests",
     # hash algo (frozen v1)
     "ALGO_VERSION",
     "GENESIS_PREV_HASH",
@@ -87,7 +100,10 @@ EXPECTED_AUDIT_API = {
     "CanonicalizationError",
 }
 
-# kind -> severity, frozen since SPEC v1.1 (8 v1 kinds + capture_mismatch).
+# kind -> severity, frozen since SPEC v1.1 (8 v1 kinds + capture_mismatch),
+# plus capture_unmatched from SPEC v1.2. A new kind is a MINOR and updating
+# this table is the deliberate act that records it (2026-08-27 revision A);
+# changing or removing an existing one is a major and this test must fight it.
 FROZEN_FINDING_SEVERITY = {
     "anchor_mismatch": "BREAK",
     "link_broken": "BREAK",
@@ -98,6 +114,7 @@ FROZEN_FINDING_SEVERITY = {
     "deleted_with_record": "WARN",
     "coverage_gap": "GAP",
     "capture_mismatch": "WARN",
+    "capture_unmatched": "WARN",
 }
 
 # Parameter names of the public functions as of SPEC v1.1. The test allows the
@@ -203,9 +220,9 @@ def test_public_function_parameters_only_grow_with_defaults(name: str):
         )
 
 
-def test_algo_v1_envelope_excludes_the_v1_1_columns_and_cost_usd():
+def test_algo_v1_envelope_excludes_the_post_1_0_columns_and_cost_usd():
     assert audit.ALGO_VERSION == 1
-    for outside in ("agent_id", "session_id", "cost_usd"):
+    for outside in ("agent_id", "session_id", "provider_response_id", "cost_usd"):
         assert outside not in audit.TRACE_CONTENT_FIELDS
 
 

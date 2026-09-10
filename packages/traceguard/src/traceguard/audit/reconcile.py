@@ -49,6 +49,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Iterable, Mapping
 from urllib import parse as _urlparse
 from urllib import request as _urlrequest
@@ -61,6 +62,38 @@ from traceguard.audit.verify import WARN, ChainFinding
 from traceguard.store.models import Trace
 
 CAPTURE_MISMATCH = "capture_mismatch"
+
+#: SPEC v1.2 — per-request existence reconciliation (layer L1.5). A separate
+#: kind from CAPTURE_MISMATCH on purpose: that one says two TOTALS disagree,
+#: which a metering convention or a window edge can explain; this one says a
+#: SPECIFIC call is missing from one side, which no counting convention
+#: explains. Folding them together would give both the same threshold and the
+#: same response.
+CAPTURE_UNMATCHED = "capture_unmatched"
+
+#: Schema identifier every request ledger must declare.
+REQUEST_LEDGER_SCHEMA = "request-ledger/v1"
+
+#: Fixed interpretations, so an incident report pastes the same sentence every
+#: time and two people reading two runs are reading the same claim.
+DIRECTION_OUT_OF_BAND_ONLY = "out_of_band_only"
+DIRECTION_SELF_REPORTED_ONLY = "self_reported_only"
+DIRECTION_TEXT: Mapping[str, str] = MappingProxyType(
+    {
+        DIRECTION_OUT_OF_BAND_ONLY: (
+            "a call the capture layer did not see — bypass or wrapper coverage gap"
+        ),
+        DIRECTION_SELF_REPORTED_ONLY: (
+            "a record the provider side does not vouch for — fabrication, "
+            "duplication, or an incomplete ledger"
+        ),
+    }
+)
+
+#: Per direction; beyond this the rest are summarized in one line rather than
+#: itemized (mirrors verify._MAX_ITEMIZED_FINDINGS). A 40k-row bypass should
+#: not produce 40k findings.
+_MAX_ITEMIZED_UNMATCHED = 50
 
 ANTHROPIC_USAGE_PATH = "/v1/organizations/usage_report/messages"
 DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com"
@@ -503,8 +536,341 @@ def parse_window(text: str) -> tuple[datetime, datetime]:
     return start, end
 
 
+# ──────────────────────────────────────────────────────────────────────────
+# Per-request existence reconciliation (SPEC v1.2, layer L1.5)
+#
+# L1 compares totals, which two conventions can reconcile away: a metering
+# difference or a window edge explains a token delta, and the Usage API gives
+# no call counts at all (2026-08-27 §8 implementation note), so under- and
+# over-reporting can cancel. L1.5 asks a question totals cannot: does THIS
+# call exist on both sides? The join key is the provider's own response id,
+# which is why it is an indexed column rather than a JSON field.
+#
+# What L1.5 proves: every call confirmed present on both sides really was
+# issued — the capture layer did not invent it, and the out-of-band side saw
+# it. What it does NOT prove: that a matched record's CONTENT is truthful
+# (a ledger row carries an id, not a transcript), nor anything about calls
+# absent from both sides. Per-call authenticity is L2 and stays not built.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@dataclass(frozen=True)
+class LedgerRequest:
+    """One request as an out-of-band source reports it (``request-ledger/v1``)."""
+
+    response_id: str
+    model: str | None
+    ts: datetime
+    tokens_in: int | None
+    tokens_out: int | None
+    cost_usd: str | None
+
+
+@dataclass(frozen=True)
+class RequestLedger:
+    """A parsed ledger plus the window its issuer claims it covers.
+
+    ``window`` is load-bearing, not decoration: reconciling over a period the
+    ledger does not claim to cover would report every trace in the uncovered
+    stretch as ``self_reported_only`` — dozens of confident findings that are
+    pure artifact. :func:`reconcile_requests` refuses that instead.
+    """
+
+    schema: str
+    source: str
+    window: tuple[datetime, datetime] | None
+    requests: list[LedgerRequest]
+
+
+@dataclass
+class RequestReconcileResult:
+    ok: bool
+    starting_at: datetime
+    ending_at: datetime
+    ledger_source: str
+    ledger_requests: int = 0
+    trace_rows: int = 0
+    matched: int = 0
+    out_of_band_only: list[str] = field(default_factory=list)
+    self_reported_only: list[str] = field(default_factory=list)
+    ledger_duplicates: dict[str, int] = field(default_factory=dict)
+    traces_duplicates: dict[str, int] = field(default_factory=dict)
+    traces_without_response_id: int = 0
+    findings: list[ChainFinding] = field(default_factory=list)
+
+    def summary(self) -> str:
+        status = "OK" if self.ok else "CAPTURE UNMATCHED"
+        return (
+            f"per-request reconcile {status}: window {self.starting_at.isoformat()} → "
+            f"{self.ending_at.isoformat()} against {self.ledger_source!r}; "
+            f"{self.matched} matched, {len(self.out_of_band_only)} in the ledger only, "
+            f"{len(self.self_reported_only)} in traces only "
+            f"({self.ledger_requests} ledger request(s) vs {self.trace_rows} trace row(s) "
+            f"carrying a provider_response_id; {self.traces_without_response_id} trace(s) "
+            f"in the window carry none and were not compared); "
+            f"{len(self.findings)} finding(s)"
+        )
+
+
+def _ledger_request(raw: Mapping[str, Any], index: int) -> LedgerRequest:
+    response_id = raw.get("response_id")
+    if not isinstance(response_id, str) or not response_id:
+        raise ValueError(
+            f"request-ledger entry {index} has no usable 'response_id'; it is the "
+            "join key, and an entry without one cannot be reconciled"
+        )
+    ts_raw = raw.get("ts")
+    if not isinstance(ts_raw, str) or not ts_raw:
+        raise ValueError(f"request-ledger entry {index} ({response_id!r}) has no 'ts'")
+    cost = raw.get("cost_usd")
+    return LedgerRequest(
+        response_id=response_id,
+        model=raw.get("model") if isinstance(raw.get("model"), str) else None,
+        ts=_parse_rfc3339(ts_raw),
+        tokens_in=raw.get("tokens_in") if isinstance(raw.get("tokens_in"), int) else None,
+        tokens_out=raw.get("tokens_out") if isinstance(raw.get("tokens_out"), int) else None,
+        # Kept as a string: a float here would re-import the precision question
+        # cost_usd is excluded from the hash envelope to avoid.
+        cost_usd=None if cost is None else str(cost),
+    )
+
+
+def parse_request_ledger(payload: Mapping[str, Any]) -> RequestLedger:
+    """Validate and parse a ``request-ledger/v1`` document.
+
+    The schema tag is checked rather than sniffed: a silently mis-parsed ledger
+    would produce confident findings about calls it never described.
+    """
+    schema = payload.get("ledger")
+    if schema != REQUEST_LEDGER_SCHEMA:
+        raise ValueError(
+            f"not a {REQUEST_LEDGER_SCHEMA} document (its 'ledger' field is "
+            f"{schema!r}); see docs/audit.md for the format"
+        )
+    source = payload.get("source")
+    if not isinstance(source, str) or not source:
+        raise ValueError(
+            "request-ledger needs a non-empty 'source' naming who produced it — a "
+            "finding that cannot say which side vouched for a call is not evidence"
+        )
+    raw_window = payload.get("window")
+    window: tuple[datetime, datetime] | None = None
+    if raw_window is not None:
+        if not isinstance(raw_window, (list, tuple)) or len(raw_window) != 2:
+            raise ValueError("request-ledger 'window' must be a [start, end] pair")
+        window = (_parse_rfc3339(str(raw_window[0])), _parse_rfc3339(str(raw_window[1])))
+        if window[1] <= window[0]:
+            raise ValueError("request-ledger 'window' end must be after its start")
+    raw_requests = payload.get("requests")
+    if not isinstance(raw_requests, list):
+        raise ValueError("request-ledger 'requests' must be a list")
+    return RequestLedger(
+        schema=schema,
+        source=source,
+        window=window,
+        requests=[_ledger_request(r, i) for i, r in enumerate(raw_requests)],
+    )
+
+
+def load_request_ledger(path: str | os.PathLike[str]) -> RequestLedger:
+    """Read a ``request-ledger/v1`` JSON document from disk."""
+    return parse_request_ledger(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def _traces_by_response_id(
+    engine: Engine,
+    starting_at: datetime,
+    ending_at: datetime,
+    *,
+    project: str | None,
+    operation: str | None,
+) -> tuple[dict[str, list[int]], int]:
+    """``{response_id: [trace_id, ...]}`` plus the count with NO response id.
+
+    Rows with a NULL ``provider_response_id`` are counted and excluded, never
+    treated as unmatched: they predate the column, or came from a streaming
+    call the wrapper could not get an id for. Reporting them as
+    ``self_reported_only`` would accuse the capture layer of fabrication
+    wherever it was merely honest about not knowing.
+    """
+    stmt = (
+        select(Trace.provider_response_id, Trace.trace_id)
+        .where(Trace.invoked_at >= starting_at)
+        .where(Trace.invoked_at < ending_at)
+    )
+    if project is not None:
+        stmt = stmt.where(Trace.project == project)
+    if operation is not None:
+        stmt = stmt.where(Trace.operation == operation)
+
+    by_id: dict[str, list[int]] = {}
+    without = 0
+    with Session(engine) as sess:
+        for response_id, trace_id in sess.execute(stmt):
+            if not response_id:
+                without += 1
+                continue
+            by_id.setdefault(response_id, []).append(trace_id)
+    return by_id, without
+
+
+def _unmatched_findings(
+    ids: list[str],
+    direction: str,
+    *,
+    trace_ids: Mapping[str, list[int]] | None = None,
+) -> list[ChainFinding]:
+    findings: list[ChainFinding] = []
+    for response_id in ids[:_MAX_ITEMIZED_UNMATCHED]:
+        trace_id = None
+        if trace_ids:
+            candidates = trace_ids.get(response_id) or []
+            trace_id = candidates[0] if candidates else None
+        findings.append(
+            ChainFinding(
+                CAPTURE_UNMATCHED,
+                WARN,
+                None,
+                trace_id,
+                f"response_id {response_id!r}: {DIRECTION_TEXT[direction]}",
+                direction,
+            )
+        )
+    extra = len(ids) - _MAX_ITEMIZED_UNMATCHED
+    if extra > 0:
+        findings.append(
+            ChainFinding(
+                CAPTURE_UNMATCHED,
+                WARN,
+                None,
+                None,
+                f"... and {extra} more {direction} response_id(s) not itemized "
+                f"(cap {_MAX_ITEMIZED_UNMATCHED}); {DIRECTION_TEXT[direction]}",
+                direction,
+            )
+        )
+    return findings
+
+
+def reconcile_requests(
+    engine: Engine,
+    *,
+    ledger: RequestLedger,
+    starting_at: datetime,
+    ending_at: datetime,
+    project: str | None = None,
+    operation: str | None = "llm_complete",
+) -> RequestReconcileResult:
+    """Match traces against an out-of-band request ledger, one call at a time.
+
+    Both sides are restricted to ``[starting_at, ending_at)`` — the traces side
+    on ``invoked_at``, the ledger side on each entry's ``ts``. If the ledger
+    declares a ``window`` that does not cover the requested one, this RAISES
+    rather than reporting the uncovered stretch as missing: every trace there
+    would surface as ``self_reported_only``, and a screenful of findings that
+    are pure artifact is how a check teaches people to ignore it (SPEC B3.4).
+
+    Findings are ``capture_unmatched`` (WARN) carrying a ``direction``:
+    ``out_of_band_only`` (the ledger has it, traces do not) and
+    ``self_reported_only`` (traces have it, the ledger does not). A
+    ``response_id`` appearing twice on either side is reported separately as a
+    duplicate — the same id served twice is not the same fact as an id missing.
+
+    The aggregate ``capture_mismatch`` path (:func:`reconcile`) is unchanged.
+    """
+    if starting_at.tzinfo is None or ending_at.tzinfo is None:
+        raise ValueError("window timestamps must be tz-aware")
+    if ending_at <= starting_at:
+        raise ValueError("ending_at must be after starting_at")
+    if ledger.window is not None:
+        l_start, l_end = ledger.window
+        if starting_at < l_start or ending_at > l_end:
+            raise ValueError(
+                f"the ledger from {ledger.source!r} declares it covers "
+                f"[{l_start.isoformat()}, {l_end.isoformat()}), which does not cover "
+                f"the requested [{starting_at.isoformat()}, {ending_at.isoformat()}). "
+                "Narrow the window to the covered period: reconciling outside it "
+                "would report every trace there as missing from the ledger, which "
+                "says nothing about those traces."
+            )
+
+    in_window = [r for r in ledger.requests if starting_at <= r.ts < ending_at]
+    ledger_ids: dict[str, int] = {}
+    for req in in_window:
+        ledger_ids[req.response_id] = ledger_ids.get(req.response_id, 0) + 1
+
+    traces_by_id, without_id = _traces_by_response_id(
+        engine, starting_at, ending_at, project=project, operation=operation
+    )
+
+    result = RequestReconcileResult(
+        ok=True,
+        starting_at=starting_at,
+        ending_at=ending_at,
+        ledger_source=ledger.source,
+        ledger_requests=len(in_window),
+        trace_rows=sum(len(v) for v in traces_by_id.values()),
+        traces_without_response_id=without_id,
+    )
+    result.ledger_duplicates = {k: n for k, n in ledger_ids.items() if n > 1}
+    result.traces_duplicates = {k: len(v) for k, v in traces_by_id.items() if len(v) > 1}
+
+    ledger_set, traces_set = set(ledger_ids), set(traces_by_id)
+    result.matched = len(ledger_set & traces_set)
+    result.out_of_band_only = sorted(ledger_set - traces_set)
+    result.self_reported_only = sorted(traces_set - ledger_set)
+
+    result.findings.extend(
+        _unmatched_findings(result.out_of_band_only, DIRECTION_OUT_OF_BAND_ONLY)
+    )
+    result.findings.extend(
+        _unmatched_findings(
+            result.self_reported_only, DIRECTION_SELF_REPORTED_ONLY, trace_ids=traces_by_id
+        )
+    )
+    for response_id, n in sorted(result.ledger_duplicates.items()):
+        result.findings.append(
+            ChainFinding(
+                CAPTURE_UNMATCHED,
+                WARN,
+                None,
+                None,
+                f"response_id {response_id!r} appears {n} times in the ledger from "
+                f"{ledger.source!r}; a provider response id identifies one call, so "
+                "the out-of-band source is double-counting or replaying it",
+                DIRECTION_OUT_OF_BAND_ONLY,
+            )
+        )
+    for response_id, n in sorted(result.traces_duplicates.items()):
+        result.findings.append(
+            ChainFinding(
+                CAPTURE_UNMATCHED,
+                WARN,
+                None,
+                traces_by_id[response_id][0],
+                f"response_id {response_id!r} appears on {n} traces "
+                f"({traces_by_id[response_id]}); one provider response recorded as "
+                "several calls — duplicated capture, or a replayed self-report",
+                DIRECTION_SELF_REPORTED_ONLY,
+            )
+        )
+    result.ok = not result.findings
+    return result
+
+
 __all__ = [
     "CAPTURE_MISMATCH",
+    "CAPTURE_UNMATCHED",
+    "REQUEST_LEDGER_SCHEMA",
+    "DIRECTION_OUT_OF_BAND_ONLY",
+    "DIRECTION_SELF_REPORTED_ONLY",
+    "DIRECTION_TEXT",
+    "LedgerRequest",
+    "RequestLedger",
+    "RequestReconcileResult",
+    "parse_request_ledger",
+    "load_request_ledger",
+    "reconcile_requests",
     "UsageBucket",
     "SideTotals",
     "ModelComparison",
