@@ -183,8 +183,15 @@ untouched, and the frozen 29-symbol public surface is unchanged.
     before the window, after the head, inside a sparse selection's gap, between
     the last entry and the head, or with no head declared — it is compared to
     NOTHING and reported as `anchor_outside_window` (WARN) saying which side it
-    falls on and what window would corroborate. An anchor later than the head
-    says to re-export instead. `anchor_unlinked` now fires only when an anchor
+    falls on and what window would corroborate. An anchor PAST the head is split
+    on `exported_at`, which both sides already carry: taken after the export,
+    the chain merely advanced and the remedy is to re-export (WARN); taken at
+    or before it, the chain reached a higher seq than this export found, and on
+    an append-only chain that means entries below an anchored position were
+    removed — truncation, reported as `anchor_mismatch` (BREAK), the same
+    verdict `verify_chain --anchor-file` gives on that database. A missing
+    `exported_at` is treated as the dangerous case, so stripping a field cannot
+    downgrade a truncation. `anchor_unlinked` now fires only when an anchor
     really was compared against the head, since "compared only against
     chain.head" was untrue for the others, and `summary()` never says an
     uncompared anchor "matches" anything.
@@ -288,7 +295,9 @@ untouched, and the frozen 29-symbol public surface is unchanged.
   `ValueError: unsupported format character 'C'` from an unescaped `%` in
   "with a Wilson 95% CI" (argparse runs help through %-formatting). On Python
   3.14 it is worse than a help failure — `add_parser` validates help strings
-  eagerly, so `sources list` and `sources drift` did not run at all. Escaped,
+  eagerly, so the parser could not be built and **no** `sources` subcommand ran
+  at all, `enable` included (the suite showed four failures, which touched only
+  `list` and `drift`; the capability loss was the whole CLI). Escaped,
   plus `tests/test_cli_help.py`: every subcommand of both CLIs, discovered from
   the parser rather than a hardcoded list, must render `--help` and exit 0, and
   a static guard rejects an unescaped `%` at authoring time on any version.

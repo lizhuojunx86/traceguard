@@ -257,6 +257,130 @@ def test_an_anchor_later_than_the_head_says_to_re_export(chained):
     assert "Re-export" in outside[0].detail
 
 
+def test_an_anchor_past_the_head_that_predates_the_export_is_truncation(chained):
+    """seq going BACKWARDS is the thing the chain exists to catch.
+
+    An anchor taken at seq N, and an export that then finds a lower tip, means
+    entries below an anchored position are gone. `verify_chain --anchor-file`
+    calls that a BREAK on the same database and the same anchor; verify_bundle
+    treating it as a stale-anchor warning would leave the two shipped tools
+    contradicting each other on identical input, in the direction SPEC B3.4
+    names as the dangerous one.
+    """
+    from sqlalchemy import delete
+
+    from traceguard.audit.models import AuditChainEntry
+
+    anchor = audit.export_anchor(chained)  # taken at the true tip
+
+    audit.detach(chained)
+    with Session(chained) as s:
+        ids = list(s.execute(select(Trace.trace_id).order_by(Trace.trace_id)).scalars())
+        for tid in ids[-2:]:
+            s.execute(delete(AuditChainEntry).where(AuditChainEntry.trace_id == tid))
+            s.execute(delete(Trace).where(Trace.trace_id == tid))
+        s.commit()
+    audit.attach(chained)
+
+    # The other tool's verdict on this database, for the record.
+    assert not audit.verify_chain(chained, from_anchor=anchor).ok
+
+    bundle = export_bundle(chained)
+    assert bundle["chain"]["head"]["seq"] < anchor.seq
+    bundle["anchors"] = [anchor_record(anchor, location="/mnt/anchors.jsonl")]
+
+    result = verify_bundle(bundle)
+    assert not result.ok, "a truncation below an anchored position must not pass"
+    breaks = [f for f in result.findings if f.kind == "anchor_mismatch"]
+    assert len(breaks) == 1
+    assert "truncation or rollback" in breaks[0].detail
+    assert "not a stale anchor" in breaks[0].detail
+
+
+def test_an_anchor_past_the_head_that_postdates_the_export_is_only_stale(chained):
+    """The benign half of the same branch: the chain simply advanced after the
+    export. Told apart by exported_at, which both sides already carry."""
+    bundle = export_bundle(chained)
+    tg = Tracer(engine=chained)
+    for i in range(2):
+        with tg.span("p", "c", "llm_complete", feature_as_of=NOW) as span:
+            span.record_input({"q": f"after {i}"})
+    newer = audit.export_anchor(chained)
+    assert newer.seq > bundle["chain"]["head"]["seq"]
+    bundle["anchors"] = [anchor_record(newer, location="/mnt/a")]
+
+    result = verify_bundle(bundle)
+    assert result.ok
+    outside = [f for f in result.findings if f.kind == "anchor_outside_window"]
+    assert len(outside) == 1
+    assert "AFTER this bundle's head" in outside[0].detail
+    assert "Re-export" in outside[0].detail
+
+
+def test_a_stripped_exported_at_cannot_downgrade_a_truncation(chained):
+    """Both sides always write exported_at, so a bundle missing it is
+    hand-edited — and removing a field must not turn a BREAK into a warning."""
+    anchor = audit.export_anchor(chained)
+    bundle = export_bundle(chained, trace_ids=[])
+    bundle["chain"]["head"] = {**bundle["chain"]["head"], "seq": anchor.seq - 1}
+    record = anchor_record(anchor, location="/mnt/a")
+    del record["exported_at"]
+    bundle["anchors"] = [record]
+
+    result = verify_bundle(bundle)
+    assert not result.ok
+    breaks = [f for f in result.findings if f.kind == "anchor_mismatch"]
+    assert len(breaks) == 1 and "no exported_at" in breaks[0].detail
+
+
+def test_a_no_seq_anchor_with_no_head_reports_no_comparison(chained):
+    """Both halves are schema-valid — `chain.head` is optional and `seq` is
+    nullable — and each had a passing test, but no test combined them.
+
+    With no head there is nothing to compare against, yet the anchor was
+    counted as head-compared: summary() claimed a match that never happened and
+    anchor_unlinked said it "was compared against this bundle's declared head".
+    """
+    bundle = export_bundle(chained, content_mode="hash_only")
+    record = anchor_record(audit.export_anchor(chained), location="/mnt/a")
+    bundle["anchors"] = [{k: v for k, v in record.items() if k != "seq"}]
+    del bundle["chain"]["head"]
+
+    result = verify_bundle(bundle)
+    assert result.ok
+    assert result.anchors_outside_window == 1
+    assert result.anchors_binding == 0
+    assert "match" not in result.summary()
+    assert not [f for f in result.findings if f.kind == "anchor_unlinked"]
+    outside = [f for f in result.findings if f.kind == "anchor_outside_window"]
+    assert len(outside) == 1
+    assert "carries no seq" in outside[0].detail
+    assert "declares no chain head" in outside[0].detail
+
+
+def test_an_empty_export_does_not_blame_a_gap_that_cannot_exist(chained):
+    """A window matching no traces exports zero entries, so an anchor below the
+    head falls between nothing."""
+    older = audit.export_anchor(chained)
+    tg = Tracer(engine=chained)
+    with tg.span("p", "c", "llm_complete", feature_as_of=NOW) as span:
+        span.record_input({"q": "later"})
+
+    empty = export_bundle(
+        chained,
+        since=NOW - timedelta(days=900),
+        until=NOW - timedelta(days=899),
+        anchors=[anchor_record(older, location="/mnt/a")],
+    )
+    assert empty["chain"]["entries"] == []
+
+    result = verify_bundle(empty)
+    outside = [f for f in result.findings if f.kind == "anchor_outside_window"]
+    assert len(outside) == 1
+    assert "no entries at all" in outside[0].detail
+    assert "gap" not in outside[0].detail
+
+
 def test_an_anchor_at_the_head_is_still_compared_to_it(chained):
     """Branch 2 is unchanged: a head-seq anchor that disagrees is a real BREAK,
     because the head does not follow from the anchored position."""

@@ -3,8 +3,10 @@
 argparse runs help strings through %-formatting, so a bare `%` raises
 ValueError. Until 3.13 that surfaced only when someone actually asked for help;
 from 3.14 on ``add_parser`` validates the string eagerly, so a bad help string
-stops the CLI being constructed at all — on 3.14 ``sources list`` and
-``sources drift`` failed outright, not just ``--help``.
+stops the CLI being constructed at all: on 3.14 EVERY ``sources`` subcommand
+died, ``enable`` included, because all three ``add_parser`` calls run before
+``parse_args``. Only four tests failed there — they happened to be the ones
+touching ``list`` and ``drift`` — so the test count understated the damage.
 
 The bug that prompted this ("with a Wilson 95% CI") sat in a shipped
 subcommand, and no test anywhere touched ``--help``, which is how a

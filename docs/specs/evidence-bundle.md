@@ -59,7 +59,8 @@
 | **条目哈希重算**(仅 `full`) | 每条 entry 的 `row_hash` 可以从它的元数据 + bundle 里那条 trace 的内容重算出来,即**内容与条目相符** | 内容本身是不是真的(采集真实性,见 `docs/audit.md` L0/L1/L1.5) |
 | **锚定绑定** | 锚记的 `seq` 落在 bundle 携带的 entry 里,且哈希与那条 entry 相符,即**这批 entry 被外部锚覆盖** | 锚本身可信 —— 那取决于锚存在哪儿、谁能改它。`file:` 锚与库文件同主机时几乎不证明什么 |
 | **链头对锚**(**仅当**锚记的 `seq` 正好是 `chain.head.seq`,或旧锚没记 `seq`) | 锚等于 bundle 声明的 `chain.head` | **什么都不证明**:`chain.head` 是 bundle 自己的字段,重写内容再重链整段,head 与锚都原封不动。此时报 `anchor_unlinked`(WARN),结论词降为 INTERNALLY CONSISTENT |
-| **不比**(锚落在窗口外的任何其它位置) | —— | 什么都不比,也**不报 BREAK**。一个如实记录了别的链位置的锚,对这批 entry 本来就无话可说;拿它的摘要去跟 head 比,等于把一个诚实的锚报成「链被重写了」的证据。报 `anchor_outside_window`(WARN),见 §4 |
+| **不比**(锚落在窗口外的其它位置) | —— | 什么都不比,也**不报 BREAK**。一个如实记录了别的链位置的锚,对这批 entry 本来就无话可说;拿它的摘要去跟 head 比,等于把一个诚实的锚报成「链被重写了」的证据。报 `anchor_outside_window`(WARN),见 §4 |
+| **链尾倒退** | 锚记的 `seq` 高于 head,且锚**不晚于**这次导出 | 这是**唯一**一种窗口外的锚仍然构成证据的情形:append-only 的链上 `seq` 只增不减,所以链尾比被锚位置更低 = 有条目被删。报 `anchor_mismatch`(BREAK),与 `verify_chain --anchor-file` 一致 |
 | **结构校验** | bundle 符合 schema;`rfc3161` 锚的结构完整 | **不做密码学验签**,见 §4 |
 
 **bundle 自身不是防篡改的**:它是一份可以被任意编辑的 JSON。它的价值在于
@@ -179,11 +180,24 @@ entry** 时才给;缺任一条就降为 `INTERNALLY CONSISTENT` —— 重链一
    比。不符仍是 `anchor_mismatch`(BREAK):head 与被锚的位置对不上是真事。
    相符**不算佐证**,见 §2。
 3. **早于窗口首条 entry**,或落在稀疏选择的**断口**里,或夹在最后一条 entry 与
-   head **之间**,或 bundle **根本没声明 head** → **不比**,报
-   `anchor_outside_window`(WARN),计入 `anchors_outside_window`。文案会说清它
-   落在哪一侧,以及拿到佐证要把窗口导到哪个 `seq`。
-4. **晚于 `chain.head.seq`** → 同样不比,但换一套文案:锚比这次导出还新,该做的
-   是**重新导出**,不是扩窗口。
+   head **之间**,或 bundle **一条 entry 都没有**,或 bundle **根本没声明 head**
+   → **不比**,报 `anchor_outside_window`(WARN),计入 `anchors_outside_window`。
+   文案会说清它落在哪一侧,以及拿到佐证要把窗口导到哪个 `seq`。
+   注意情形 2 的前提是 **head 存在**:没有 head 时,没记 `seq` 的旧锚也走这一路 ——
+   否则会记下一次**根本没发生过的比对**,`summary()` 就会说出一个不存在的 match。
+4. **晚于 `chain.head.seq`** → 这里有两种**相反**的可能,靠 `exported_at` 分辨
+   (锚和 `chain.head` 都带这个字段):
+   - 锚的 `exported_at` **晚于** head 的 → 链只是在导出之后又长了。不比,报
+     `anchor_outside_window`(WARN),该做的是**重新导出**。
+   - 锚的 `exported_at` **早于或等于** head 的 → 锚证明链曾经到过 `seq N`,而这次
+     导出看到的链尾**更低**。append-only 的链上 `seq` 只增不减,所以这是**被锚位置
+     以下的条目被删掉了** —— 截断或回滚,正是哈希链存在的理由,也正是
+     `verify_chain --anchor-file` 在同一个库、同一个锚上报的 `anchor_mismatch`
+     (BREAK)。这里报 WARN 会让两个都发出去的工具在**同一份输入**上互相矛盾,
+     而且矛盾的方向是 SPEC B3.4 点名的那个危险方向。所以报 **BREAK**。
+   - 两边的 `exported_at` 有一个缺失或读不出来 → **按危险的那种算(BREAK)**。
+     `anchor_record` 与 `export_bundle` 都必写这个字段,所以缺了就是手改过的文件;
+     删掉一个字段不该能把截断降级成一条警告。
 5. 有锚**被拿去和 head 比过**、却一个都没绑上 → 另加 `anchor_unlinked`(WARN)。
    只在情形 2 发生过时才发:情形 3/4 什么都没比,再说一句「只跟 head 比过」就是假话。
 

@@ -499,9 +499,12 @@ def _check_anchors(
             continue
 
         # (2) at the declared head, or an old anchor that carries no seq.
-        if seq is None or (head_seq is not None and seq == head_seq):
+        # `head_hash is not None` is part of the CONDITION, not a check inside
+        # it: with no head there is nothing to compare against, and counting the
+        # comparison anyway made summary() report a match that never happened.
+        if head_hash is not None and (seq is None or (head_seq is not None and seq == head_seq)):
             head_compared += 1
-            if head_hash is not None and row_hash != head_hash:
+            if row_hash != head_hash:
                 findings.append(
                     ChainFinding(
                         "anchor_mismatch", BREAK, seq, None,
@@ -512,19 +515,60 @@ def _check_anchors(
                 )
             continue
 
-        # (4) later than this export.
-        outside_window += 1
+        # (4) past the declared head. Which of two opposite things this means
+        # is decided by WHEN the anchor was taken, and both timestamps are in
+        # the bundle already.
         if head_seq is not None and seq > head_seq:
+            anchor_at = _parse_dt(anchor.get("exported_at"))
+            head_at = _parse_dt(head.get("exported_at"))
+            if anchor_at is None or head_at is None or anchor_at <= head_at:
+                # The anchor existed at or before this export, and it attests a
+                # HIGHER position than the export found. On an append-only chain
+                # seq only grows, so the tip moved BACKWARDS: rows below an
+                # anchored position are gone. That is truncation or rollback —
+                # the thing the chain exists to catch, and what `verify_chain
+                # --anchor-file` reports as a BREAK on the same database and the
+                # same anchor. Reporting it as a warning here would leave the
+                # two shipped tools contradicting each other on identical input,
+                # in the direction SPEC B3.4 calls the dangerous one.
+                #
+                # Unknown timestamps are treated as the dangerous case on
+                # purpose: `anchor_record` and `export_bundle` both always write
+                # `exported_at`, so a bundle missing them is hand-edited, and
+                # stripping a field must not downgrade a truncation to a warning.
+                unknown = anchor_at is None or head_at is None
+                findings.append(
+                    ChainFinding(
+                        "anchor_mismatch", BREAK, seq, None,
+                        f"anchors[{i}] attests chain position seq {seq}, but this bundle's "
+                        f"head is only seq {head_seq}, and the anchor "
+                        + (
+                            "carries no exported_at to rule out that it predates the export"
+                            if unknown
+                            else f"was exported at {anchor_at.isoformat()}, at or before this "
+                            f"bundle's head ({head_at.isoformat()})"
+                        )
+                        + ". The chain reached seq "
+                        f"{seq} and this export found a LOWER tip: on an append-only chain "
+                        "that means entries below an anchored position were removed — "
+                        "truncation or rollback, not a stale anchor",
+                    )
+                )
+                continue
+            outside_window += 1
             findings.append(
                 ChainFinding(
                     ANCHOR_OUTSIDE_WINDOW, WARN, seq, None,
                     f"anchors[{i}] is at seq {seq}, LATER than this bundle's declared head "
-                    f"(seq {head_seq}): it was taken after this export, so nothing here can "
-                    "be compared to it. Re-export the bundle from a database that has "
-                    f"reached seq {seq}",
+                    f"(seq {head_seq}), and was exported at {anchor_at.isoformat()}, AFTER "
+                    f"this bundle's head ({head_at.isoformat()}): the chain simply advanced "
+                    "after the export, so nothing here can be compared to it. Re-export the "
+                    f"bundle from a database that has reached seq {seq}",
                 )
             )
             continue
+
+        outside_window += 1
 
         # (3)/(5) before the window, inside a gap, between the last entry and
         # the head, or nowhere placeable because no head was declared.
@@ -543,16 +587,24 @@ def _check_anchors(
                 f"which falls between the last entry carried here (seq {entry_seqs[-1]}) and "
                 f"the declared head (seq {head_seq})"
             )
+        elif not entry_seqs:
+            where = "and this bundle carries no entries at all for it to cover"
         else:
             where = "which falls in a gap in this bundle's entries"
+        at = f"is at seq {seq}" if seq is not None else "carries no seq"
         findings.append(
             ChainFinding(
                 ANCHOR_OUTSIDE_WINDOW, WARN, seq, None,
-                f"anchors[{i}] is at seq {seq}, {where}. It was NOT compared to anything: an "
+                f"anchors[{i}] {at}, {where}. It was NOT compared to anything: an "
                 "anchor for a chain position this bundle does not carry says nothing about "
                 "these entries, and comparing its digest to the head would report a truthful "
-                "anchor as proof of a rewrite. For corroboration, export a window that "
-                f"reaches seq {seq}, or anchor again while this window is the chain tip",
+                "anchor as proof of a rewrite. For corroboration, "
+                + (
+                    f"export a window that reaches seq {seq}, or "
+                    if seq is not None
+                    else ""
+                )
+                + "anchor again while this window is the chain tip",
             )
         )
 
