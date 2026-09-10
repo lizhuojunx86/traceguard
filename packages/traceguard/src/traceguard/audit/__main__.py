@@ -389,7 +389,14 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "reconcile":
         try:
             start, end = parse_window(args.window)
-            start, end = align_window(start, end, args.bucket_width)
+            # Bucket alignment is a Usage-API concern: that API snaps every
+            # bucket to a UTC minute/hour/day edge, so the totals path has to
+            # ask for whole buckets. A request ledger has no buckets, and
+            # widening its window to the --bucket-width default of 1d both
+            # refused windows the ledger does cover and pulled in traces the
+            # ledger never claimed to vouch for — reporting them as fabricated.
+            if not args.source.startswith("requests-json:"):
+                start, end = align_window(start, end, args.bucket_width)
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 2

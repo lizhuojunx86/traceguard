@@ -418,3 +418,114 @@ def test_cli_rejects_a_ledger_that_does_not_cover_the_window(tmp_path, capsys):
         "--window", f"{T0.isoformat()},{T1.isoformat()}",
     ]) == 2
     assert "does not cover the requested" in capsys.readouterr().err
+
+
+# ── artifacts that would train a reader to ignore this check ────────────────
+
+def test_clock_skew_is_not_reported_as_fabrication(engine):
+    """The two sides stamp on different clocks. A ledger entry a second outside
+    the window still vouches for the call it describes."""
+    audit.enable(engine)
+    inside = T0 + timedelta(hours=1)
+    _trace(engine, "msg_skewed", ts=inside)
+    ledger = _ledger("msg_skewed", window=(T0 - timedelta(days=1), T1), ts=T0 - timedelta(seconds=2))
+
+    result = _run(engine, ledger)
+
+    assert result.self_reported_only == []
+    assert result.vouched_outside_window == ["msg_skewed"]
+    assert not [
+        f for f in result.findings if f.direction == DIRECTION_SELF_REPORTED_ONLY
+    ], "clock skew must not read as a call the provider never saw"
+    assert "1 vouched for outside the window" in result.summary()
+    audit.detach(engine)
+
+
+def test_an_id_absent_from_the_whole_ledger_is_still_reported(engine):
+    """The skew allowance must not swallow the real finding."""
+    audit.enable(engine)
+    _trace(engine, "msg_nowhere")
+    result = _run(engine, _ledger("msg_other"))
+
+    assert result.self_reported_only == ["msg_nowhere"]
+    assert any(f.direction == DIRECTION_SELF_REPORTED_ONLY for f in result.findings)
+    audit.detach(engine)
+
+
+def test_duplicates_obey_the_itemization_cap(engine):
+    """A double-logging ledger otherwise emits one finding per id, unbounded —
+    by the single path that skipped the cap."""
+    from traceguard.audit.reconcile import _MAX_ITEMIZED_UNMATCHED
+
+    audit.enable(engine)
+    ids = [f"msg_{i:04d}" for i in range(_MAX_ITEMIZED_UNMATCHED + 20)]
+    payload = {
+        "ledger": REQUEST_LEDGER_SCHEMA,
+        "source": "acme-gateway",
+        "window": [T0.isoformat(), T1.isoformat()],
+        "requests": [
+            {"response_id": rid, "ts": (T0 + timedelta(hours=1)).isoformat()}
+            for rid in ids
+            for _ in range(2)  # each one logged twice
+        ],
+    }
+    result = _run(engine, parse_request_ledger(payload))
+
+    dupes = [f for f in result.findings if "appears 2 times in the ledger" in f.detail]
+    assert len(dupes) == _MAX_ITEMIZED_UNMATCHED
+    assert any("more response_id(s) duplicated in the ledger" in f.detail for f in result.findings)
+    audit.detach(engine)
+
+
+def test_a_malformed_ts_names_the_entry(engine):
+    payload = {
+        "ledger": REQUEST_LEDGER_SCHEMA,
+        "source": "acme-gateway",
+        "requests": [
+            {"response_id": "msg_ok", "ts": T0.isoformat()},
+            {"response_id": "msg_bad", "ts": "yesterday afternoon"},
+        ],
+    }
+    with pytest.raises(ValueError) as exc:
+        parse_request_ledger(payload)
+    assert "entry 1" in str(exc.value)
+    assert "'msg_bad'" in str(exc.value)
+    assert "RFC 3339" in str(exc.value)
+
+
+def test_a_json_true_is_not_a_token_count(engine):
+    """isinstance(True, int) is True, so `true` would arrive as 1 token."""
+    ledger = parse_request_ledger(
+        {
+            "ledger": REQUEST_LEDGER_SCHEMA,
+            "source": "acme-gateway",
+            "requests": [
+                {"response_id": "msg_a", "ts": T0.isoformat(), "tokens_in": True,
+                 "tokens_out": 5},
+            ],
+        }
+    )
+    assert ledger.requests[0].tokens_in is None
+    assert ledger.requests[0].tokens_out == 5
+
+
+def test_the_default_operation_filter_does_not_print_a_caveat(engine):
+    """A caveat on every run trains people past the caveats that matter."""
+    audit.enable(engine)
+    _trace(engine, "msg_a")
+    assert "was filtered to" not in _run(engine, _ledger("msg_a")).summary()
+    audit.detach(engine)
+
+
+def test_a_traces_side_filter_is_declared_in_the_summary(engine):
+    """The ledger side cannot be filtered to match, so the ledger-only column
+    counts calls the filter removed."""
+    audit.enable(engine)
+    _trace(engine, "msg_a", project="proj")
+    _trace(engine, "msg_b", project="other")
+    result = _run(engine, _ledger("msg_a", "msg_b"), project="proj")
+
+    assert result.out_of_band_only == ["msg_b"]  # filtered out of traces, still in the ledger
+    assert "the traces side was filtered to" in result.summary()
+    assert "project='proj'" in result.summary()
+    audit.detach(engine)
