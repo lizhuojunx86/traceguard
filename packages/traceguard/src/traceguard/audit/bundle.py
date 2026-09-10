@@ -66,6 +66,10 @@ CONTENT_NOT_RECOMPUTED = "content_not_recomputed"
 #: but covers a chain position this bundle does not carry, so it corroborates
 #: nothing about the entries inside.
 ANCHOR_UNLINKED = "anchor_unlinked"
+#: Bundle-level: an anchor that names a chain position this bundle does not
+#: carry and is not the declared head. Nothing is compared — an honest anchor
+#: exported before or after this window is NOT evidence of a rewrite.
+ANCHOR_OUTSIDE_WINDOW = "anchor_outside_window"
 #: Bundle-level: the entries carried are not consecutive in the chain, so
 #: linkage cannot connect the runs on either side of the gap.
 CHAIN_GAP = "chain_gap"
@@ -164,6 +168,9 @@ class BundleVerifyResult:
     #: against the bundle's own ``chain.head`` field. Only these tie the
     #: included entries to something the bundle's author did not write.
     anchors_binding: int = 0
+    #: anchors that name a chain position this bundle can neither bind nor
+    #: place against its head. They were NOT compared to anything.
+    anchors_outside_window: int = 0
     #: entries whose seq run is unbroken. A sparse selection (``--trace-ids``
     #: picking non-adjacent traces) is legitimate but cannot be linkage-checked
     #: across its gaps.
@@ -225,10 +232,19 @@ class BundleVerifyResult:
             )
         if self.anchors_binding:
             return f"{self.anchors_binding} anchor(s) bind these entries"
-        if self.anchors_checked:
+        compared_to_head = self.anchors_checked - self.anchors_outside_window
+        if compared_to_head > 0:
             return (
-                f"{self.anchors_checked} anchor(s) match the bundle's declared head, but NONE "
+                f"{compared_to_head} anchor(s) match the bundle's declared head, but NONE "
                 "covers the entries carried here — no external corroboration of this content"
+            )
+        if self.anchors_outside_window:
+            # Never "match": these were compared to nothing at all, and saying
+            # otherwise is the same overclaim as the head comparison, one step
+            # further from any evidence.
+            return (
+                f"{self.anchors_outside_window} anchor(s) present, none comparable to this "
+                "window — no external corroboration of this content"
             )
         return "no anchor covers these entries — internal consistency only"
 
@@ -379,24 +395,48 @@ def _recompute(entry: dict, content: Any) -> str:
 
 
 def _check_anchors(
-    bundle: dict, head_hash: str | None, entries: list[dict]
-) -> tuple[int, int, list[ChainFinding]]:
-    """Structure-check every anchor and compare those that carry a digest.
+    bundle: dict, head: dict, entries: list[dict]
+) -> tuple[int, int, int, list[ChainFinding]]:
+    """Structure-check every anchor and compare it against what it can be placed against.
 
-    Returns ``(checked, binding, findings)``. An anchor whose ``seq`` names an
-    entry CARRIED HERE is compared against that entry — that is the only
-    comparison that constrains the bundle's contents, and it is what ``binding``
-    counts. An anchor that only matches ``chain.head`` constrains nothing: the
-    head is a field of the bundle, so an attacker who rewrites the entries and
-    re-chains them leaves the head, and therefore that comparison, untouched.
+    Returns ``(checked, binding, outside_window, findings)``. An anchor names a
+    chain position (``seq``), and where that position falls decides what — if
+    anything — the anchor can be compared to here:
+
+    1. **inside the window** (``seq`` names an entry carried here) → compared
+       against THAT entry. The only comparison that constrains the bundle's
+       contents, and what ``binding`` counts; a difference is a real
+       ``anchor_mismatch`` (BREAK).
+    2. **at the declared head** (or an old anchor carrying no ``seq``) →
+       compared against ``chain.head``. That constrains nothing — the head is a
+       field of the bundle, so a rewrite that re-chains the entries leaves both
+       it and the anchor untouched — but a mismatch there is still a real
+       BREAK: it says the head does not follow from the anchored position.
+    3. **before the window** (or in one of a sparse selection's gaps, or between
+       the last entry and the head) → NOT compared. This is the ordinary shape
+       of an evidence export: an anchor taken at seq 3 has nothing to say about
+       entries 4..6, and comparing its digest to the head produced
+       ``anchor_mismatch`` — the tool accusing a truthful anchor of proving a
+       rewrite. ``anchor_outside_window`` (WARN) instead.
+    4. **after the head** → also not compared, and its own finding: the anchor
+       is newer than this export, so the export should be redone.
+    5. **no head declared** → nothing to place a non-window anchor against, so
+       it falls to case 3 with that named as the reason.
 
     No signature is ever verified (spec §4): a structurally valid RFC 3161
     token is reported as present, not as valid.
     """
     findings: list[ChainFinding] = []
     by_seq = {e.get("seq"): e.get("row_hash") for e in entries if e.get("seq") is not None}
+    entry_seqs = sorted(by_seq)
+    head_hash = head.get("row_hash")
+    head_seq = head.get("seq")
+    if not isinstance(head_seq, int) or isinstance(head_seq, bool):
+        head_seq = None
     checked = 0
     binding = 0
+    outside_window = 0
+    head_compared = 0
     for i, anchor in enumerate(bundle.get("anchors") or []):
         kind = anchor.get("kind")
         if kind not in VALID_ANCHOR_KINDS:
@@ -431,10 +471,20 @@ def _check_anchors(
         row_hash = anchor.get("row_hash")
         if not row_hash:
             continue
-        checked += 1
         seq = anchor.get("seq")
+        if seq is not None and (not isinstance(seq, int) or isinstance(seq, bool)):
+            # Report a hand-edited file rather than raising out of verify.
+            findings.append(
+                ChainFinding(
+                    "anchor_malformed", BREAK, None, None,
+                    f"anchors[{i}] has seq {seq!r}, which is not an integer chain position",
+                )
+            )
+            continue
+        checked += 1
+
+        # (1) inside the window: the only comparison that constrains the entries.
         if seq in by_seq:
-            # The one comparison that constrains the entries themselves.
             if row_hash != by_seq[seq]:
                 findings.append(
                     ChainFinding(
@@ -447,22 +497,73 @@ def _check_anchors(
             else:
                 binding += 1
             continue
-        if head_hash is not None and row_hash != head_hash:
+
+        # (2) at the declared head, or an old anchor that carries no seq.
+        if seq is None or (head_seq is not None and seq == head_seq):
+            head_compared += 1
+            if head_hash is not None and row_hash != head_hash:
+                findings.append(
+                    ChainFinding(
+                        "anchor_mismatch", BREAK, seq, None,
+                        f"anchors[{i}] row_hash {row_hash} != the bundle's chain head "
+                        f"{head_hash}; the chain was truncated or rewritten relative to "
+                        "this anchor",
+                    )
+                )
+            continue
+
+        # (4) later than this export.
+        outside_window += 1
+        if head_seq is not None and seq > head_seq:
             findings.append(
                 ChainFinding(
-                    "anchor_mismatch", BREAK, seq, None,
-                    f"anchors[{i}] row_hash {row_hash} != the bundle's chain head {head_hash}; "
-                    "the chain was truncated or rewritten relative to this anchor",
+                    ANCHOR_OUTSIDE_WINDOW, WARN, seq, None,
+                    f"anchors[{i}] is at seq {seq}, LATER than this bundle's declared head "
+                    f"(seq {head_seq}): it was taken after this export, so nothing here can "
+                    "be compared to it. Re-export the bundle from a database that has "
+                    f"reached seq {seq}",
                 )
             )
+            continue
 
-    if entries and checked and not binding:
+        # (3)/(5) before the window, inside a gap, between the last entry and
+        # the head, or nowhere placeable because no head was declared.
+        if head_seq is None:
+            where = (
+                "and this bundle declares no chain head, so there is nothing to place it "
+                "against"
+            )
+        elif entry_seqs and seq < entry_seqs[0]:
+            where = (
+                f"which is BEFORE the first entry carried here (seq {entry_seqs[0]}) — the "
+                "ordinary shape of an evidence export taken after the anchor"
+            )
+        elif entry_seqs and seq > entry_seqs[-1]:
+            where = (
+                f"which falls between the last entry carried here (seq {entry_seqs[-1]}) and "
+                f"the declared head (seq {head_seq})"
+            )
+        else:
+            where = "which falls in a gap in this bundle's entries"
+        findings.append(
+            ChainFinding(
+                ANCHOR_OUTSIDE_WINDOW, WARN, seq, None,
+                f"anchors[{i}] is at seq {seq}, {where}. It was NOT compared to anything: an "
+                "anchor for a chain position this bundle does not carry says nothing about "
+                "these entries, and comparing its digest to the head would report a truthful "
+                "anchor as proof of a rewrite. For corroboration, export a window that "
+                f"reaches seq {seq}, or anchor again while this window is the chain tip",
+            )
+        )
+
+    if entries and head_compared and not binding:
         seqs = [e.get("seq") for e in entries if e.get("seq") is not None]
         span = f"seq {seqs[0]}..{seqs[-1]}" if seqs else "the entries carried here"
         findings.append(
             ChainFinding(
                 ANCHOR_UNLINKED, WARN, None, None,
-                f"{checked} anchor(s) were checked and none names a seq this bundle carries "
+                f"{head_compared} anchor(s) were compared against this bundle's declared "
+                f"head and none names a seq it carries "
                 f"({span}); each was compared only against the bundle's own `chain.head` "
                 "field. That comparison is between two values the bundle's author wrote, so "
                 "it does NOT corroborate the entries here: rewriting their content and "
@@ -471,7 +572,7 @@ def _check_anchors(
                 "again while this window is the chain tip",
             )
         )
-    return checked, binding, findings
+    return checked, binding, outside_window, findings
 
 
 def verify_bundle(bundle: dict) -> BundleVerifyResult:
@@ -675,9 +776,12 @@ def verify_bundle(bundle: dict) -> BundleVerifyResult:
             )
         )
 
-    checked, binding, anchor_findings = _check_anchors(bundle, head_hash, entries)
+    checked, binding, outside, anchor_findings = _check_anchors(
+        bundle, chain.get("head") or {}, entries
+    )
     result.anchors_checked = checked
     result.anchors_binding = binding
+    result.anchors_outside_window = outside
     result.findings.extend(anchor_findings)
 
     result.ok = not result.breaks

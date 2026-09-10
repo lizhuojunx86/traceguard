@@ -171,6 +171,23 @@ untouched, and the frozen 29-symbol public surface is unchanged.
     common case: widen the window or anchor again while it is the chain tip.
     Related: an entry at `seq` 1 must seed from `GENESIS_PREV_HASH`, else a
     whole re-chained history verifies from an attacker-chosen starting point.
+  - **An anchor from outside the exported window is not evidence of a
+    rewrite.** Any anchor whose `seq` was not carried in the bundle fell
+    through to the `chain.head` comparison, so the ordinary case — anchored on
+    Monday, exporting Tuesday's traces on Wednesday — produced
+    `anchor_mismatch` (BREAK) "the chain was truncated or rewritten relative to
+    this anchor" and a bundle that read `FAILED`. A truthful anchor, reported
+    as proof of tampering. Placement now decides what an anchor is compared to:
+    inside the window it binds an entry; at `chain.head.seq` (or with no `seq`,
+    for older anchors) it is compared to the head as before; anywhere else —
+    before the window, after the head, inside a sparse selection's gap, between
+    the last entry and the head, or with no head declared — it is compared to
+    NOTHING and reported as `anchor_outside_window` (WARN) saying which side it
+    falls on and what window would corroborate. An anchor later than the head
+    says to re-export instead. `anchor_unlinked` now fires only when an anchor
+    really was compared against the head, since "compared only against
+    chain.head" was untrue for the others, and `summary()` never says an
+    uncompared anchor "matches" anything.
   - **A sparse selection is not tampering.** `--trace-ids` on non-adjacent
     traces produced a bundle that failed its own verify with `link_broken`,
     because linkage was compared across chain positions the bundle does not

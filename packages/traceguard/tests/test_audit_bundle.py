@@ -192,6 +192,143 @@ def test_an_anchor_outside_the_exported_window_is_reported_as_binding_nothing(ch
     assert any(f.kind == "anchor_unlinked" for f in tampered.findings)
 
 
+def _extend(engine, n, tag="later"):
+    """Push the chain past the traces already written."""
+    tg = Tracer(engine=engine)
+    for i in range(n):
+        with tg.span("p", "c", "llm_complete", feature_as_of=NOW) as span:
+            span.record_input({"q": f"{tag} {i}"})
+
+
+def test_an_anchor_older_than_the_window_is_a_warning_not_a_break(chained):
+    """The ordinary shape of an evidence export: you anchored on Monday and
+    export Tuesday's traces on Wednesday.
+
+    That anchor is TRUTHFUL and simply has nothing to say about this window.
+    Comparing its digest to the chain head reported `anchor_mismatch` (BREAK)
+    — "the chain was truncated or rewritten relative to this anchor" — so the
+    tool accused an honest anchor of proving a rewrite, and the bundle read
+    FAILED.
+    """
+    older = audit.export_anchor(chained)  # taken at the current tip
+    _extend(chained, 3)
+
+    with Session(chained) as s:
+        ids = list(s.execute(select(Trace.trace_id).order_by(Trace.trace_id)).scalars())
+    bundle = export_bundle(chained, trace_ids=ids[3:])
+    bundle["anchors"] = [anchor_record(older, location="/mnt/monday.jsonl")]
+
+    result = verify_bundle(bundle)
+
+    assert result.ok, [f"{f.kind}: {f.detail}" for f in result.findings]
+    assert not [f for f in result.findings if f.kind == "anchor_mismatch"]
+    outside = [f for f in result.findings if f.kind == "anchor_outside_window"]
+    assert len(outside) == 1 and outside[0].severity == "WARN"
+    assert "BEFORE the first entry carried here" in outside[0].detail
+    assert "was NOT compared to anything" in outside[0].detail
+
+    # Exactly one finding per outside anchor: anchor_unlinked is about anchors
+    # compared to the head, and nothing was compared here.
+    assert not [f for f in result.findings if f.kind == "anchor_unlinked"]
+    assert result.anchors_outside_window == 1 and result.anchors_binding == 0
+    # ...and an uncompared anchor never reads as "match".
+    assert "match" not in result.summary()
+    assert "none comparable to this window" in result.summary()
+
+
+def test_an_anchor_later_than_the_head_says_to_re_export(chained):
+    """A bundle exported before the anchor was taken. Also truthful, also not
+    evidence of anything about these entries — but the remedy is the opposite
+    one, so it gets its own wording."""
+    bundle = export_bundle(chained)
+    head_seq = bundle["chain"]["head"]["seq"]
+    _extend(chained, 2)
+    newer = audit.export_anchor(chained)
+    assert newer.seq > head_seq
+    bundle["anchors"] = [anchor_record(newer, location="/mnt/later.jsonl")]
+
+    result = verify_bundle(bundle)
+
+    assert result.ok
+    assert not [f for f in result.findings if f.kind == "anchor_mismatch"]
+    outside = [f for f in result.findings if f.kind == "anchor_outside_window"]
+    assert len(outside) == 1
+    assert "LATER than this bundle's declared head" in outside[0].detail
+    assert "Re-export" in outside[0].detail
+
+
+def test_an_anchor_at_the_head_is_still_compared_to_it(chained):
+    """Branch 2 is unchanged: a head-seq anchor that disagrees is a real BREAK,
+    because the head does not follow from the anchored position."""
+    bundle = export_bundle(chained)
+    genuine = anchor_record(audit.export_anchor(chained), location="/mnt/a")
+    bundle["anchors"] = [dict(genuine, row_hash="0" * 64)]
+
+    result = verify_bundle(bundle)
+    assert not result.ok
+    assert any(f.kind == "anchor_mismatch" for f in result.findings)
+
+
+def test_an_anchor_without_a_seq_still_falls_back_to_the_head(chained):
+    """Anchors written before seq was recorded must keep working."""
+    bundle = export_bundle(chained)
+    genuine = anchor_record(audit.export_anchor(chained), location="/mnt/a")
+    legacy = {k: v for k, v in genuine.items() if k != "seq"}
+
+    assert verify_bundle({**bundle, "anchors": [legacy]}).ok
+    broken = verify_bundle({**bundle, "anchors": [dict(legacy, row_hash="0" * 64)]})
+    assert not broken.ok
+    assert any(f.kind == "anchor_mismatch" for f in broken.findings)
+
+
+def test_an_anchor_in_a_sparse_selections_gap_is_not_a_break(chained):
+    """Entries [1,3,5] with an anchor at 4: not carried, not the head, and the
+    old code sent it to the head comparison — the same false BREAK."""
+    _extend(chained, 3)
+    with Session(chained) as s:
+        ids = list(s.execute(select(Trace.trace_id).order_by(Trace.trace_id)).scalars())
+    bundle = export_bundle(chained, trace_ids=[ids[0], ids[2], ids[4]])
+    seqs = [e["seq"] for e in bundle["chain"]["entries"]]
+    gap_seq = seqs[0] + 1
+    assert gap_seq not in seqs and gap_seq < bundle["chain"]["head"]["seq"]
+
+    genuine = anchor_record(audit.export_anchor(chained), location="/mnt/a")
+    bundle["anchors"] = [dict(genuine, seq=gap_seq)]
+
+    result = verify_bundle(bundle)
+    assert result.ok
+    outside = [f for f in result.findings if f.kind == "anchor_outside_window"]
+    assert len(outside) == 1 and "gap in this bundle's entries" in outside[0].detail
+
+
+def test_an_outside_anchor_survives_a_bundle_that_declares_no_head(chained):
+    """`chain.head` is optional per the schema, so seq comparison must not
+    assume it exists (`seq > None` is a TypeError)."""
+    older = audit.export_anchor(chained)
+    _extend(chained, 2)
+    with Session(chained) as s:
+        ids = list(s.execute(select(Trace.trace_id).order_by(Trace.trace_id)).scalars())
+    bundle = export_bundle(chained, trace_ids=ids[3:])
+    bundle["anchors"] = [anchor_record(older, location="/mnt/a")]
+    del bundle["chain"]["head"]
+
+    result = verify_bundle(bundle)
+    assert result.ok
+    outside = [f for f in result.findings if f.kind == "anchor_outside_window"]
+    assert len(outside) == 1 and "declares no chain head" in outside[0].detail
+
+
+def test_a_non_integer_anchor_seq_is_reported_not_raised(chained):
+    bundle = export_bundle(chained)
+    genuine = anchor_record(audit.export_anchor(chained), location="/mnt/a")
+    bundle["anchors"] = [dict(genuine, seq="seven")]
+
+    result = verify_bundle(bundle)
+    assert not result.ok
+    malformed = [f for f in result.findings if f.kind == "anchor_malformed"]
+    assert len(malformed) == 1 and "not an integer chain position" in malformed[0].detail
+
+
 def test_a_rechained_full_history_is_caught_by_the_genesis_seed(chained):
     """A segment starting at seq 1 must seed from the genesis constant, or the
     attacker picks their own starting point and the whole history re-chains."""
