@@ -6,16 +6,23 @@ The root `pipeline-guardian` package is frozen and never published.
 ## One-time setup
 
 1. Account at <https://pypi.org> with 2FA enabled.
-2. A project-scoped API token (scope: `traceguard`), stored somewhere safe.
-   The very first publish requires an account-scoped token (the project
-   doesn't exist yet); replace it with a project-scoped one afterwards.
+2. A trusted publisher on the `traceguard` PyPI project (Manage project →
+   Publishing → Add a new publisher): owner `lizhuojunx86`, repository
+   `traceguard`, workflow `publish.yml`, environment `pypi`. These are the
+   values `publish.yml`'s header comment lists and the publisher that 1.6.0's
+   provenance names; it is what lets step 5 upload with no stored token.
+3. Only for the fallback below: a project-scoped API token (scope:
+   `traceguard`), stored somewhere safe.
 
 ## Release checklist
 
 1. Bump the version in **both** places (they must match):
    - `packages/traceguard/pyproject.toml` → `version`
    - `packages/traceguard/src/traceguard/__init__.py` → `__version__`
-2. Run the test suite: `cd packages/traceguard && uv sync && uv run pytest`
+2. Run the test suite: `cd packages/traceguard && uv sync --extra openai && uv run pytest`
+   (keep the extra: a bare `uv sync` uninstalls the openai SDK that
+   `scripts/routing_probe_daily.sh` runs with; the tests themselves pass
+   without it)
 3. Commit on a **release branch** and open a PR — releases go through a PR, not
    a direct push to `main` (see note below):
 
