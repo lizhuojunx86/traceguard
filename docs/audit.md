@@ -99,7 +99,7 @@ v1 的覆盖照实登记——可检测的说可检测,不设防的说不设防:
 | 修改已链行的覆盖字段 | **可检测**(`hash_mismatch` BREAK) | 全量 preimage 重算 |
 | 删除已链 trace 行 | **可检测**(`missing_trace` BREAK) | pass 2 全表扫 |
 | 尾部截断 / 全链重写 | **仅锚定后可检测**(`anchor_mismatch`);无外部锚不可检测。v2 的 anchor sink + 定期锚定把暴露窗口缩到锚定间隔,不改变"两次锚定之间不可检测"这一事实 | 边界声明 1,锚定频率 = 暴露窗口;下文 Anchors |
-| 采集层伪造(spoofed tool call 类,METR: >7% transcripts) | **逐条不设防**——自报证据产生于 agent 控制的进程内,链忠实保存谎言。v2 `reconcile` 做**总量**对账:同 model 同时间窗的自报 token 量 vs 供应商 usage 报告,超阈值 = `capture_mismatch`(WARN);单条 trace 的真实性仍不可证 | 存储完整性 ≠ 采集真实性;分层见下文 Reconcile 与 `docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md` §5 |
+| 采集层伪造(spoofed tool call 类,METR: 约 7% 受评 transcripts) | **逐条不设防**——自报证据产生于 agent 控制的进程内,链忠实保存谎言。v2 `reconcile` 做**总量**对账:同 model 同时间窗的自报 token 量 vs 供应商 usage 报告,超阈值 = `capture_mismatch`(WARN);单条 trace 的真实性仍不可证 | 存储完整性 ≠ 采集真实性;分层见下文 Reconcile 与 `docs/spec-changes/2026-08-27-audit-v2-correlation-schema.md` §5 |
 | 采集层**漏报**或**多报**单次调用 | **有带外逐请求台账时可检测**(`capture_unmatched` WARN,带 `direction`)。总量对账在这里会失效——少报的调用与多报的调用可以互相抵消,而供应商 usage API 只给 token 量、不给调用数 | 下文 L1.5;`docs/spec-changes/2026-09-10-source-snapshot-approval-binding.md` §1.2 |
 | 高权限攻击者(可写库文件) | **v1 不设防** | 边界声明 1,WORM/签名/自动外锚 out of scope |
 
