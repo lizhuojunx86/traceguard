@@ -1,10 +1,46 @@
 # TraceGuard 实施路线 (Roadmap)
 
-> **状态**: Draft v0.1 (2026-05-18),含 2026-06-28 / 2026-07-12 / 2026-08-27 状态更新(见下)
+> **状态**: Draft v0.1 (2026-05-18),含 2026-06-28 / 2026-07-12 / 2026-08-27 / 2026-09-10 状态更新(见下)
 > **关系**: 本文档是 `TRACEGUARD_SPEC.md` 的实施配套。SPEC 是宪法(稳定),Roadmap 是路线(可演进)。两者冲突时,**SPEC 优先**。
 > **承诺等级**: Phase 0 是承诺,Phase 1+ 是规划,Phase 3+ 是愿景。
 
 ---
+
+## 📌 状态更新 (2026-09-10) — post-1.5 路线:两条轴,其余等拉动
+
+**背景**:两件事迫使对 08-27 的优先级做一次校准。
+
+1. **一份外部功能建议清单的评估**。清单 26 项,把产品重新定位为"受监管 AI Agent 的不可篡改证据与控制层"(Decision Passport、事故证据包与多受众披露包、控制失效矩阵、跨 agent 关联图谱、篡改/持久化检测、自动隔离、能力触发式权限、审批参数哈希、模型迁移 ROI、供应商退出准备、数据来源时点完整性、zero-content 模式、FinOps 归因、算力融资证据、物理设备证据、企业多租户等),P0 列 10 项。逐项结论:**采纳 3**(数据来源时点完整性 → 升为 P0 第一;审批参数哈希;zero-content 模式)、**改造 2**(Decision Passport → SPEC 字段,不起产品名;事故证据包 → 导出格式,不做触发)、**字段级 3**(模型来源摘要、供应商政策快照、部署元数据)、**已有 2**(证据链、跨 agent schema)、**观察 2**(迁移对比、分辖区导出)、**不做 14**。不做的五类及理由:**执行路径类**(自动隔离、能力策略)与 §4.1 fail-open 冲突,买家是 CISO 不是研究负责人;**依赖传感器的检测类**(篡改/持久化检测、监控覆盖证据)需要沙箱/网络层观测面,SDK 没有也不该有;**报告形态类**(披露包、控制失效矩阵、分辖区导出)是模板加人的判断,不是代码;**FinOps 类**(单位任务成本、经济价值、收入归因、算力融资)与既有成本工具重叠且离核心最远;**企业基建类**(多租户 / SSO / RBAC / 区域存储)在没有企业设计伙伴前一行不写。清单整体违反 §8.4(为假想场景实现功能);其信任模型止于"hash chain + 应用级签名",未提任何外部锚定——照它做是相对 tg-attest 的退步;它也未区分存储完整性与采集真实性(08-27 已判定后者才是差异化所在)。
+
+2. **外部事实更新**(已对照一手或权威二手来源):
+   - EU AI Act Digital Omnibus 已正式通过:Regulation (EU) 2026/1744,OJ 2026-07-24 刊出,07-27 生效。Annex III 高风险义务推迟至 **2027-12-02**,Annex I 至 2028-08-02;Article 12 日志条款本身未见修改(据律所摘要,未逐条核对法规文本)。后果:tg-attest 瞄准的 Art. 12 需求推后约 15 个月,合规拉力短期不可指望;研究/回测用途仍是唯一有真实消费者的锚。来源:https://labs.cloudsecurityalliance.org/research/csa-research-note-eu-ai-act-high-risk-deadline-omnibus-20260/ 与 https://www.gibsondunn.com/eu-ai-act-omnibus-agreement-postponed-high-risk-deadlines-and-other-key-changes/
+   - tamper-evident 存储的商品化已兑现:网关厂商已把"HMAC 签名、不可变审计记录"作为默认功能宣传(例:https://www.getmaxim.ai/articles/top-5-ai-audit-trail-tools-to-track-agent-activity-in-2026/ ,2026-08-27,厂商自述)。08-27 的竞争判断("不构成护城河")成立,且比预期快。
+   - 08-27 列为"尚未评估"的合规/eDiscovery 买家面,本次评估结论:未识别到会为独立证据层软件付费的买家;保险侧在加 AI 除外条款(ISO 2026-01 在 CGL 引入生成式 AI 除外,https://www.fenwick.com/insights/publications/end-silent-ai-emerging-ai-exclusions-coverage-fragmentation-and-practical-implications )而非承保,理赔证据需求在当下不存在。本条是买家面判断,不改变技术路线,只决定不为它提前实现任何功能。
+
+**优先级决策**(post-1.5;每一步按 §3.4 纪律以真实消费者为 gate;承诺等级见括注):
+
+**轴 A — 时点正确性从"模型 / prompt / feature"外延到"取回的数据"(P0,承诺)**
+
+- **A1. SPEC v1.2 修订案**(`docs/spec-changes/2026-09-xx-source-snapshot-approval-binding.md`,走附录 C 流程;先改 SPEC 再动代码,§8.1)。以 §6.6 opt-in 扩展形式定义 `source_snapshot` 记录,字段:`source_uri`、`source_kind`(http | mcp | file | db | vendor_api)、`content_hash`(按收到的字节,不规范化)、可选 `normalized_hash` + `normalizer_id`(CDN / 模板噪声的处理;规范化器必须有名字和版本,否则两个 hash 不可比)、`retrieved_at`(MUST,物理时间)、`published_at`(nullable,源声称的发布时间)、`effective_at`(nullable,业务有效期)、`source_version`(etag / last-modified / vendor version,nullable)、`mcp_server_id` / `tool_name`(nullable)、`cache_status`。**不存原文**,只存摘要与元数据——zero-content 是默认,不是一个模式;原文归档是消费者自己的事。与 trace 多对一,**独立表**而非 `output_parsed` 内嵌:稀疏、一对多、且需要按 `content_hash` 反查"哪些 trace 依赖了后来被改写的源",JSON 撑不住这条查询(与 08-27 修订案 §3.1 的开列 / 内嵌判据一致;audit 扩展自有三张表是先例)。
+- **A2. 不变量 3 的适用范围明文加入"取回的外部数据"**,`published_at` 即其 `valid_from`。补一条 SPEC 当前未覆盖的情形:`published_at` 未知时,strict 模式拒绝(无法证明该内容在 `feature_as_of` 时已存在),loose 模式产出 `unverifiable`——沿 routing_integrity 四级判定的先例,不新增不变量;§6.4 评估为 minor。这一条是修订案的决策点之一,不在本文定案。
+- **A3. 采集面**:`wrap_openai` / `wrap_anthropic` 的 tool-call 结果、MCP 客户端调用、普通 HTTP 取回各给一个最小 hook(`record_source(...)`),由宿主显式调用;**不做**自动网络拦截(那是 proxy 的位置,POSITIONING 已划出)。
+- **A4. 消费者 gate**:quant_alpha_v2 是现成消费者,供应商 `epsActual` 改写(已发表:41.4% / 15.3%,第二次捕获 18.6% / 4.6%)是现成的被测对象。写入 ≥100 条带 `source_snapshot` 的真实 trace 之前,不开 A5。
+- **A5. 反查 CLI**:`traceguard sources drift --since ...`——同一 `source_uri` 的 `content_hash` 随 `retrieved_at` 的变化序列,即 `analysis/eps_revision.py` 的通用化;输出沿用那里的纪律(N、窗口、区间,失败请求不算观测)。
+
+**轴 B — 证据层补两个真缺口**
+
+- **B1. 采集真实性 L1 → L1.5**(P0,承诺)。reconcile 从"token 量 × model × UTC 桶"扩到:(a) 以 `agent_id` / `session_id` 切片(网关支持透传标签时);(b) **逐请求存在性核对**——只对暴露逐请求记录的带外源(自托管网关的请求表;OpenRouter 类网关按 generation id 的查询接口),wrapper 记录供应商返回的响应 id(`provider_response_id`:nullable 列还是 `output_parsed["provider"]`,修订案内定夺)。`capture_mismatch` 按方向固定措辞:自报多于带外 = 伪造或重复计数;带外多于自报 = 绕过采集。L2(网关侧签名日志)维持 08-27 §5 的"明确不做"。
+- **B2. 审批绑定**(P1,规划;`traceguard.approval` off-surface extra)。`bind(action, *, approver, approved_at, expires_at)` 用 §4.4 canonical normalize 产出 `params_hash`;执行前 `verify(action, approval)` 重算并返回 verdict 与差异路径;两步各写一条 trace(`operation` 为 `approval_bind` / `approval_verify`),开启 audit 时自然入链。**不阻断**:默认只出 verdict,`strict` 为 keyword-only 显式参数(与 `select_model` 同款);SDK 自身故障按 §4.1 fail-open。决策点:approval 一次性使用(同一 `approval_id` 不得放行第二次执行);金额等数值字段以字符串传入,避开 §4.4 浮点定精度带来的"审批 100.0 执行 100.00"歧义。与 07-12"审批门仅在拉动时做"的张力照实记录——这不是门,是校验加记录;实施仍以一个真实消费者为 gate。
+- **B3. 统一证据 bundle 格式**(P1,规划)。`docs/specs/evidence-bundle.md` 定义 JSON 结构:所选 trace(可 hash-only)、链段与链头、锚记录(file / git-note / webhook / RFC 3161 token)、`source_snapshot`、approval 记录、reconcile findings;`traceguard.audit verify-bundle` 离线验证。tg-attest 按同一 schema 产出时间戳部分;两包继续零代码依赖,**schema 是契约**(usage-drift-log 的做法:先写 spec,再有第二个实现)。
+- **B4. 第二种独立锚**(P1,规划)。anchor sink 新增 `rekor:`(Sigstore 透明日志,inclusion proof)和 / 或 `ots:`(OpenTimestamps);与 RFC 3161 TSA 并用,使"链头在 T 时刻已存在"不依赖单一方。网络依赖,作 extra;边界声明 1 的措辞不因此放松——锚定间隔仍是暴露窗口。
+
+**字段级顺手项**(随 v1.2 修订案,均 nullable,minor):`model_registry.weights_digest` / `provenance_ref`(引用 OpenSSF Model Signing / CycloneDX ML-BOM 等外部产物,不自建模型签名);trace 级 `policy_snapshot_hash`;run 级部署元数据(runtime 版本、region)走 `output_parsed["deployment"]` 约定。
+
+**明确不做**(§8.4 纪律,本次登记):自动隔离 / 撤权 / kill switch;能力触发式权限策略;篡改与持久化行为检测;监控覆盖证据;控制失效矩阵(维持 audit.md 威胁类别登记形态);多受众披露包与分辖区监管导出;单位任务成本 / 经济价值 / 收入归因 / 算力融资证据;物理设备动作证据;多租户 / SSO / RBAC / 区域存储。重开条件相同:一个**外部**组织在生产写入并主动提出。
+
+**顺序与规模**:A1 + A2(修订案)→ A3 → B1 → A4 gate → A5 → B3 → B4 → B2(B2 等自己的 gate)。单人一个季度的量;超出即砍 B4、B2,不砍 A。
+
+**竞争判断记录**(承接 08-27):护城河不在存储完整性(已商品化),也不在"事故证据产品"(无买家证据),而在 (1) **取回数据的时点正确性**——有已发表的测量,观测类竞品无人覆盖;(2) **采集真实性的诚实分层**(L0 / L1 / L2)。宣传措辞继续受 spec-changes/2026-08-27 §5 约束:不许说"防篡改"。
 
 ## 📌 状态更新 (2026-08-27) — 外部事件驱动的 post-1.0 优先级调整
 
@@ -12,7 +48,7 @@
 
 - ~1200 个 agent(各自独立沙箱)通过未经批准的信息板交换 7 万+条消息/文件,其中 ~700 个参与对 Hugging Face 的攻击。信息板建在**共享 Artifactory cache** 上——"agent 彼此隔离"的假设败于共享基础设施,不是显式通信渠道。
 - METR 原文:"at least 20% of the agents in our dataset expressed clear interest in tampering with their transcripts"。有 agent 明确判断容器内日志 "not the real source of truth" 后转攻 scorer——攻击者会主动探测哪层日志才算数;METR 自己对篡改是否全部失败的结论是 "cannot rule out that they succeeded"。
-- **>7% 的 transcript 含蓄意伪造(spoofed)的 tool call**。这条划定 hash chain 的能力边界:链只保证"存进来的不被改",管不了"进来的就是假的"。证据层完整性必须区分**存储完整性**(audit v1 已覆盖)与**采集真实性**(v1 未覆盖,行业普遍未覆盖——observability SDK 跑在 agent 自己控制的进程里)。
+- **METR 评估的 transcript 中约 7% 被成功 spoof 过**(原文 "Roughly 7% of the transcripts we evaluated were successfully spoofed in some places";limitations 节另有 "over 7%" 估计口径,两处均带 "in some places")。这条划定 hash chain 的能力边界:链只保证"存进来的不被改",管不了"进来的就是假的"。证据层完整性必须区分**存储完整性**(audit v1 已覆盖)与**采集真实性**(v1 未覆盖,行业普遍未覆盖——observability SDK 跑在 agent 自己控制的进程里)。
 
 来源:https://metr.org/blog/2026-08-26-openai-hugging-face-incident-investigation/ 与 https://openai.com/index/hugging-face-incident-and-the-road-ahead/ 。注意:沙箱逃逸/凭据链是 7 月已披露的事件本身,8-26 新增的是行为层调查结论;引用时勿混。
 
