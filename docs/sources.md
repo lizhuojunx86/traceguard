@@ -53,9 +53,17 @@ SPEC §5 的四条不变量覆盖**模型**(不变量 2)、**prompt 与引用表
 | `unchecked` | 调用点没给 `feature_as_of`,压根没做比对 | 否 |
 
 - `unverifiable` ≠ `verified`:**无法证明存在不等于证明不存在**,更不等于通过。
-- `unverifiable` ≠ `unchecked`:前者是"源不肯说",后者是"我们没问"。
-  drift 统计里两者**都不计入观测**(`analysis/eps_revision.py` 的纪律:失败与未校验不是观测),
-  但它们要分开报,否则"没接上采集"会被读成"源不给时间戳"。
+- `unverifiable` ≠ `unchecked`:前者是"源不肯说",后者是"我们没问"。两者要分开报,
+  否则"没接上采集"会被读成"源不给时间戳"。在 drift 统计里两者的待遇**并不相同**:
+  - `unverifiable` **计入观测**——检索发生了、字节被摘要了,不能证明的只是*时间*那一项,
+    而 drift 问的是字节。
+  - `unchecked` **不计入观测**(`analysis/eps_revision.py` 的纪律:失败与未校验不是观测),
+    但它**留在该 source 的摘要序列里**。这两件事是两个问题:"算不算这条速率的分母"
+    与"这次检索的字节算不算这个源的历史"。把它整条从序列里删掉,只会让相邻对比较
+    的变更数**变少**(`[a≠b] ≤ [a≠e] + [e≠b]`),于是 `a → b(unchecked) → a` 被报成
+    "0 次变更"——偏向"这里没问题",正是把它排除在分母之外想防的那个方向。
+  - 只有 `unchecked` 观测、却看得出摘要变了的源,计入 `sources_changed_uncomparable`
+    单独报:进不了速率的分子(它没挣到那个分母),但也不许没有声音。
 - `unchecked` 不 actionable:什么都没声称,就没有什么可以不信。把它算进去,等于让
   没插桩的调用点撑大报告——那是教人忽略告警最快的办法(SPEC 附录 B3.4)。
 
@@ -136,10 +144,27 @@ with traceguard.tracer.span("quant", "eps", "llm_complete", feature_as_of=as_of)
 python -m traceguard.sources --db sqlite:///traces.db enable
 python -m traceguard.sources --db sqlite:///traces.db list --verdict anachronistic
 python -m traceguard.sources --db sqlite:///traces.db list --source-uri 'https://vendor.example/%' --json
+
+# 哪些源在两次检索之间改了内容(带 Wilson 95% 区间)
+python -m traceguard.sources --db sqlite:///traces.db drift
+python -m traceguard.sources --db sqlite:///traces.db drift --since 2026-09-01T00:00:00Z --json
 ```
 
-`--db` 是顶层选项,**必须放在子命令前面**。`list` 在列出任何 actionable verdict
-(`anachronistic` / `unverifiable`)时退出码为 1,可以直接拿来卡 CI。
+`--db` 是顶层选项,**必须放在子命令前面**。
+
+| 子命令 | 做什么 | 退出码 |
+|---|---|---|
+| `enable` | 建表(幂等) | 0 |
+| `list` | 列出 snapshot 行 | 列到任何 actionable verdict(`anachronistic` / `unverifiable`)即 **1**,可以直接拿来卡 CI |
+| `drift` | 按 `source_uri` 分组比摘要序列 | 有源发生过变更即 **1** |
+
+`list` 的页脚在 `--limit` 截断时会明说 **THIS PAGE ONLY** —— 一页的条数不是总数,
+而那一行正是 CI 会读的一行。`drift` 的 summary 在带了 `--since` / `--source-uri` 时
+会附上 `Scope:` —— 同一句话既能描述"没有源漂移过",也能描述"最近六小时没有源漂移过",
+只有一个是让人放心的。
+
+两个子命令在库里没有 `source_snapshots` 表时都会给一句人话(退出码 2),不是
+SQLAlchemy 的 traceback。
 
 ## 失败语义(SPEC §4.1)
 

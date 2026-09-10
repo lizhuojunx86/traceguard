@@ -115,6 +115,26 @@ untouched, and the frozen 29-symbol public surface is unchanged.
   not observations, a source retrieved only once is in neither side of the rate,
   and an empty denominator reports `None` rather than 0.0. CLI: `python -m
   traceguard.sources --db URL drift [--source-uri] [--since] [--json]`.
+  - **"Not an observation" is not "did not happen".** `unchecked` rows were
+    dropped from the digest SEQUENCE as well as the denominator, and deleting
+    an element can only ever lower an adjacent-pair change count — so
+    `a -> b(unchecked) -> a` reported ZERO changes for a source that
+    demonstrably served two byte-sets and changed back. The bias ran in exactly
+    the direction the exclusion exists to prevent. Unchecked rows now stay in
+    the sequence (they carry real digests) and stay out of the rate.
+  - A source whose digests changed without two observations is reported as
+    `sources_changed_uncomparable` rather than vanishing: it cannot enter the
+    numerator without a denominator it has not earned, and silence there
+    re-opens the same hole by another door.
+  - `summary()` now declares the `--since` / `--source-uri` it was computed
+    under. The same sentence otherwise describes "nothing drifted" and "nothing
+    drifted in this six-hour slice", and only one of those is reassuring.
+  - `list` said "50 snapshot(s), 50 actionable" when `--limit` had truncated
+    120 matching rows — a page presented as a total, in the line a CI gate
+    reads. It now says THIS PAGE ONLY and names the limit.
+  - `list` and `drift` against a database where the extension was never enabled
+    print one sentence and exit 2, instead of a `no such table` traceback that
+    reads like a bug in traceguard.
 
 - `traceguard.audit.export_bundle()` / `verify_bundle()` and the
   **`evidence-bundle/v1`** format (`docs/specs/evidence-bundle.md`, JSON Schema

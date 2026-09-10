@@ -26,7 +26,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from traceguard.sources.drift import compute_drift, drift_to_dict
-from traceguard.sources.models import SourceSnapshotRow, ensure_source_tables
+from traceguard.sources.models import (
+    SourceSnapshotRow,
+    ensure_source_tables,
+    source_tables_exist,
+)
 from traceguard.sources.validate import SourceVerdict
 from traceguard.store.models import make_engine
 
@@ -111,6 +115,19 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     engine = make_engine(args.db)
 
+    if args.command in ("list", "drift") and not source_tables_exist(engine):
+        # Otherwise SQLAlchemy raises "no such table: source_snapshots" as a
+        # traceback, which reads like a bug in traceguard rather than a database
+        # that has simply never had the extension turned on.
+        print(
+            f"no source_snapshots table in {args.db}: traceguard.sources has not been "
+            "enabled on this database. Run `python -m traceguard.sources --db "
+            f"{args.db} enable`, or call sources.enable(engine) in-process, and record "
+            "some snapshots first.",
+            file=sys.stderr,
+        )
+        return 2
+
     if args.command == "enable":
         ensure_source_tables(engine)
         print(
@@ -131,10 +148,16 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
         if args.verdict:
             stmt = stmt.where(SourceSnapshotRow.verdict == args.verdict)
-        stmt = stmt.limit(max(1, args.limit))
-
+        limit = max(1, args.limit)
+        # Fetch one extra row to learn whether the page is the whole story. The
+        # footer used to print len(rows) as the count, so 120 actionable
+        # snapshots under the default limit reported "50 snapshot(s), 50
+        # actionable" — a truncated page presented as the total, in the one
+        # line a CI gate reads.
         with Session(engine) as sess:
-            rows = list(sess.scalars(stmt))
+            rows = list(sess.scalars(stmt.limit(limit + 1)))
+        truncated = len(rows) > limit
+        rows = rows[:limit]
 
         actionable = 0
         for row in rows:
@@ -151,10 +174,13 @@ def main(argv: list[str] | None = None) -> int:
                     f"{row.content_hash[:12]} {row.source_uri}"
                 )
         if not args.json:
-            print(
-                f"{len(rows)} snapshot(s), {actionable} actionable "
-                "(anachronistic / unverifiable)"
-            )
+            shown = f"{len(rows)} snapshot(s), {actionable} actionable"
+            if truncated:
+                shown += (
+                    f" — THIS PAGE ONLY (--limit {limit} reached; more rows match). "
+                    "Raise --limit for the totals"
+                )
+            print(f"{shown} (anachronistic / unverifiable)")
         return 1 if actionable else 0
 
     if args.command == "drift":

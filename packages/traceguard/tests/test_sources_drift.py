@@ -94,17 +94,79 @@ def test_a_flip_back_counts_as_two_changes(src_engine):
 # ── counting discipline ─────────────────────────────────────────────────────
 
 def test_unchecked_snapshots_are_not_observations(src_engine):
-    """They would dilute the rate toward zero exactly where nobody looked."""
+    """They would dilute the rate toward zero exactly where nobody looked.
+
+    The assertion is about the RATE, which is what the discipline governs. An
+    earlier version of this test also asserted `sources_total == 1` — that the
+    all-unchecked source disappeared entirely — which pinned a rule that turned
+    out to be wrong in a way that hid real changes; see
+    test_an_unchecked_row_inside_a_sequence_cannot_erase_a_change.
+    """
     _add(src_engine, "https://v.example/x", "a" * 64, "b" * 64)
     _add(src_engine, "https://v.example/y", "c" * 64, "d" * 64, verdict="unchecked")
 
     report = compute_drift(src_engine)
     assert report.snapshots_scanned == 4
     assert report.snapshots_unchecked == 2
-    assert report.sources_total == 1  # the unchecked source contributes nothing
+    # The unchecked source is in neither side of the rate...
+    assert report.sources_comparable == 1
     assert report.drift_rate == 1.0
-    # The exclusion is named in the summary, never silently applied.
+    # ...and the exclusion is named in the summary, never silently applied.
     assert "2 unchecked snapshot(s)" in report.summary()
+
+
+def test_an_unchecked_row_inside_a_sequence_cannot_erase_a_change(src_engine):
+    """`unchecked` rows used to be dropped from the digest sequence, not just
+    from the denominator.
+
+    Deleting an element can only ever LOWER the adjacent-pair change count, so
+    the bias ran toward "no drift here" — the exact direction the exclusion
+    exists to prevent. a -> b(unchecked) -> a reported ZERO changes for a source
+    that served two different byte-sets and changed back.
+    """
+    uri = "https://v.example/flip"
+    _add(src_engine, uri, "a" * 64)
+    _add(src_engine, uri, "b" * 64, verdict="unchecked")
+    _add(src_engine, uri, "a" * 64)
+
+    src = compute_drift(src_engine).sources[0]
+    assert src.changes == 2
+    assert src.distinct_hashes == 2
+    assert src.drifted
+    # ...while the rate's denominator still counts only the two checked rows.
+    assert src.observations == 2
+    assert src.unchecked_in_sequence == 1
+
+
+def test_a_change_seen_without_two_observations_is_reported_outside_the_rate(src_engine):
+    """An all-unchecked source used to vanish with no source-level count.
+
+    It cannot enter the numerator without a denominator it has not earned, and
+    it must not be silent either — that is the same hole by another door.
+    """
+    _add(src_engine, "https://v.example/x", "a" * 64, "b" * 64)
+    _add(src_engine, "https://v.example/dark", "c" * 64, "d" * 64, verdict="unchecked")
+
+    report = compute_drift(src_engine)
+    assert report.sources_comparable == 1  # unchanged: not in the rate
+    assert report.sources_drifted == 1
+    assert report.sources_changed_uncomparable == 1
+    assert "fewer than two observations" in report.summary()
+
+
+def test_summary_declares_the_filters_it_was_computed_under(src_engine):
+    """The same words otherwise describe "nothing drifted" and "nothing drifted
+    in this six-hour slice", and only one of them is reassuring."""
+    _add(src_engine, "https://v.example/x", "a" * 64, "b" * 64)
+
+    plain = compute_drift(src_engine).summary()
+    assert "Scope:" not in plain
+
+    scoped = compute_drift(src_engine, source_uri="https://v.example/%").summary()
+    assert "Scope: source_uri LIKE" in scoped
+
+    since = compute_drift(src_engine, since=T0).summary()
+    assert "Scope: retrieved_at >=" in since
 
 
 def test_unverifiable_snapshots_ARE_observations(src_engine):
@@ -235,6 +297,7 @@ def test_json_keys_are_stable_and_ordered(three_sources):
         "sources_comparable",
         "sources_single_observation",
         "sources_drifted",
+        "sources_changed_uncomparable",
         "total_changes",
         "drift_rate",
         "drift_rate_ci",
@@ -245,8 +308,10 @@ def test_json_keys_are_stable_and_ordered(three_sources):
         "observations",
         "distinct_hashes",
         "changes",
+        "unchecked_in_sequence",
         "comparable",
         "drifted",
+        "changed_uncomparable",
         "first_seen",
         "last_seen",
         "sequence",
@@ -290,3 +355,42 @@ def test_cli_drift_exits_0_when_nothing_changed(tmp_path, capsys):
     _add(eng, "https://v.example/stable", "a" * 64, "a" * 64)
 
     assert main(["--db", url, "drift"]) == 0
+
+
+# ── the CLI must not report a page as a total, or a traceback as a diagnosis ──
+
+def test_list_footer_says_when_it_is_showing_one_page(src_engine, tmp_path, capsys):
+    """The footer used to print len(rows) as the count, so 120 actionable
+    snapshots under the default limit read as "50 snapshot(s), 50 actionable" —
+    a truncated page presented as the total, in the line a CI gate reads."""
+    import traceguard
+    from traceguard.sources.__main__ import main
+
+    url = f"sqlite:///{tmp_path/'s.db'}"
+    eng = traceguard.make_engine(url)
+    from traceguard import sources
+
+    sources.enable(eng)
+    _add(eng, "https://v.example/many", *[f"{i:064x}" for i in range(12)], verdict="anachronistic")
+
+    assert main(["--db", url, "list", "--limit", "5"]) == 1
+    out = capsys.readouterr().out
+    assert "THIS PAGE ONLY" in out
+    assert "--limit 5 reached" in out
+
+    assert main(["--db", url, "list", "--limit", "50"]) == 1
+    assert "THIS PAGE ONLY" not in capsys.readouterr().out
+
+
+def test_the_cli_explains_an_unenabled_database(tmp_path, capsys):
+    import traceguard
+    from traceguard.sources.__main__ import main
+
+    url = f"sqlite:///{tmp_path/'empty.db'}"
+    traceguard.make_engine(url)  # traces schema only; sources never enabled
+
+    for command in ("list", "drift"):
+        assert main(["--db", url, command]) == 2
+        err = capsys.readouterr().err
+        assert "has not been enabled" in err
+        assert "no such table" not in err  # not a raw SQLAlchemy traceback

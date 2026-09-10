@@ -15,10 +15,22 @@ Counting discipline, inherited from that script and non-negotiable:
   ``unverifiable`` IS counted: the retrieval happened and the bytes were
   digested; only the *timing* claim was unprovable, and drift is about the
   bytes.
+- **...but "not an observation" is not "did not happen".** An ``unchecked``
+  retrieval still digested bytes, and the bytes are what drift is about. It
+  therefore stays in the source's DIGEST SEQUENCE while staying out of the
+  rate's denominator. Dropping it from the sequence was worse than a miscount:
+  deleting an element can only ever LOWER the adjacent-pair change count
+  (``[a≠b] ≤ [a≠e] + [e≠b]``), so ``a → b(unchecked) → a`` reported zero
+  changes for a source that demonstrably served two different byte-sets and
+  changed back. The bias ran in exactly the direction the first bullet exists
+  to prevent.
 - **A source seen once cannot have drifted.** It contributes to neither the
   numerator nor the denominator — one observation is not a comparison. Mixing
   single-retrieval sources into the denominator is the standard way to
   manufacture a reassuringly small percentage.
+- **A change seen without two observations is still reported**, just not in the
+  rate: ``sources_changed_uncomparable``. Silence there would re-open the hole
+  the second bullet closes, by a different door.
 - The proportion is reported with its **n and a Wilson 95% interval**, never
   bare.
 """
@@ -65,7 +77,18 @@ class SourceDrift:
 
     @property
     def observations(self) -> int:
-        return len(self.retrievals)
+        """Retrievals that count toward the RATE: everything but ``unchecked``.
+
+        Deliberately not ``len(self.retrievals)`` — the sequence carries the
+        unchecked rows too, because they hold real digests (see the module
+        docstring), but they are not observations.
+        """
+        return sum(1 for r in self.retrievals if r.verdict != SourceVerdict.UNCHECKED.value)
+
+    @property
+    def unchecked_in_sequence(self) -> int:
+        """Rows in the digest sequence that are not observations."""
+        return len(self.retrievals) - self.observations
 
     @property
     def distinct_hashes(self) -> int:
@@ -101,6 +124,15 @@ class SourceDrift:
         return self.comparable and self.changes > 0
 
     @property
+    def changed_uncomparable(self) -> bool:
+        """The digests changed, but there are fewer than two observations.
+
+        Real and reportable, and outside the rate: it cannot go in the
+        numerator without a denominator it has not earned.
+        """
+        return self.changes > 0 and not self.comparable
+
+    @property
     def first_seen(self) -> datetime | None:
         return self.retrievals[0].retrieved_at if self.retrievals else None
 
@@ -113,10 +145,11 @@ class SourceDrift:
 class DriftReport:
     """Sources grouped and counted, with the excluded populations named.
 
-    ``sources_total`` is every source that produced an observation;
+    ``sources_total`` is every source that produced a snapshot;
     ``sources_comparable`` is the denominator of ``drift_rate``. They differ by
     ``sources_single_observation``, which is reported rather than silently
-    folded away.
+    folded away — as is ``sources_changed_uncomparable``, the sources that
+    changed without earning a place in the denominator.
     """
 
     sources: list[SourceDrift] = field(default_factory=list)
@@ -146,6 +179,16 @@ class DriftReport:
         return sum(1 for s in self.sources if s.drifted)
 
     @property
+    def sources_changed_uncomparable(self) -> int:
+        """Sources whose digests changed with fewer than two observations.
+
+        Outside the rate and never silent: this is where a source retrieved
+        only through un-instrumented call sites shows up, and it is exactly the
+        population a rate would otherwise hide.
+        """
+        return sum(1 for s in self.sources if s.changed_uncomparable)
+
+    @property
     def drift_rate(self) -> float | None:
         """Share of *comparable* sources that changed at least once.
 
@@ -171,6 +214,8 @@ class DriftReport:
                 f"no comparable source yet: {self.sources_total} source(s), none "
                 f"retrieved twice ({self.snapshots_scanned} snapshot(s) scanned, "
                 f"{self.snapshots_unchecked} unchecked and not counted)"
+                + self._uncomparable_clause()
+                + self._scope_clause()
             )
         low, high = self.drift_rate_ci
         return (
@@ -180,7 +225,33 @@ class DriftReport:
             f"over {self.snapshots_scanned} snapshot(s). Excluded: "
             f"{self.sources_single_observation} source(s) retrieved only once, "
             f"{self.snapshots_unchecked} unchecked snapshot(s)."
+            + self._uncomparable_clause()
+            + self._scope_clause()
         )
+
+    def _uncomparable_clause(self) -> str:
+        n = self.sources_changed_uncomparable
+        if not n:
+            return ""
+        return (
+            f" {n} source(s) changed digest with fewer than two observations — real, "
+            "and outside the rate."
+        )
+
+    def _scope_clause(self) -> str:
+        """Every sentence above is about the FILTERED population, so say so.
+
+        Without this the same words describe "no source drifted" and "no source
+        drifted in the last six hours", and only one of them is reassuring.
+        """
+        scope = []
+        if self.since is not None:
+            scope.append(f"retrieved_at >= {self.since.isoformat()}")
+        if self.source_uri_pattern is not None:
+            scope.append(f"source_uri LIKE {self.source_uri_pattern!r}")
+        if not scope:
+            return ""
+        return " Scope: " + "; ".join(scope) + "."
 
 
 def compute_drift(
@@ -193,7 +264,8 @@ def compute_drift(
 
     ``since`` filters on ``retrieved_at``; ``source_uri`` is a SQL LIKE
     pattern. Snapshots whose verdict is ``unchecked`` are counted in
-    ``snapshots_unchecked`` and otherwise ignored (see the module docstring).
+    ``snapshots_unchecked`` and kept OUT of the rate's denominator, but stay in
+    each source's digest sequence — they carry real digests (module docstring).
 
     Ordering is ``(retrieved_at, snapshot_id)``: two retrievals can share a
     timestamp at the DB's resolution, and insertion order is then the only
@@ -215,7 +287,6 @@ def compute_drift(
             report.snapshots_scanned += 1
             if row.verdict == SourceVerdict.UNCHECKED.value:
                 report.snapshots_unchecked += 1
-                continue
             entry = grouped.setdefault(row.source_uri, SourceDrift(row.source_uri))
             entry.retrievals.append(
                 Retrieval(
@@ -243,6 +314,7 @@ def drift_to_dict(report: DriftReport) -> dict:
         "sources_comparable": report.sources_comparable,
         "sources_single_observation": report.sources_single_observation,
         "sources_drifted": report.sources_drifted,
+        "sources_changed_uncomparable": report.sources_changed_uncomparable,
         "total_changes": report.total_changes,
         "drift_rate": rate,
         "drift_rate_ci": [low, high] if rate is not None else None,
@@ -252,8 +324,10 @@ def drift_to_dict(report: DriftReport) -> dict:
                 "observations": s.observations,
                 "distinct_hashes": s.distinct_hashes,
                 "changes": s.changes,
+                "unchecked_in_sequence": s.unchecked_in_sequence,
                 "comparable": s.comparable,
                 "drifted": s.drifted,
+                "changed_uncomparable": s.changed_uncomparable,
                 "first_seen": s.first_seen.isoformat() if s.first_seen else None,
                 "last_seen": s.last_seen.isoformat() if s.last_seen else None,
                 "sequence": [
