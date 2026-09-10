@@ -33,11 +33,14 @@ after feature_as_of" is decided.
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from enum import Enum
 
 from traceguard.sources.record import SourceSnapshot
 from traceguard.validators.lookahead import InvariantViolation, validate_reference_timing
+
+_log = logging.getLogger("traceguard.sources")
 
 #: ``kind`` passed to :func:`validate_reference_timing`, so a violation message
 #: names the reference-data class the way every other invariant-3 call site does.
@@ -92,6 +95,36 @@ def validate_source_snapshot(
     should have to state it.
     """
     if feature_as_of is None:
+        return SourceVerdict.UNCHECKED
+
+    if feature_as_of.tzinfo is None:
+        # A naive feature_as_of cannot be compared against published_at, which
+        # __post_init__ guarantees is aware — the bare `<=` inside
+        # validate_reference_timing raises TypeError. That TypeError used to
+        # escape record_source onto the HOST's stack, so a snapshot recorded
+        # with strict=False broke the instrumented call: a §4.1 violation, and
+        # the more galling for being caused by span state the tracer itself
+        # accepted without complaint.
+        #
+        # Handled the way resolve_feature_as_of already handles the identical
+        # input for the same reason: fail open with a warning, not an
+        # exception. UNCHECKED is the honest verdict — nothing WAS compared —
+        # and strict still refuses, so strict never silently passes a source it
+        # could not check.
+        if strict:
+            raise ValueError(
+                f"feature_as_of={feature_as_of!r} is a naive datetime, so it cannot be "
+                f"compared against the tz-aware published_at of {snapshot.source_uri!r}. "
+                "Pass a tz-aware datetime, e.g. datetime.now(timezone.utc), or "
+                "traceguard.resolve_feature_as_of(value) which downgrades a naive one "
+                "to None."
+            )
+        _log.warning(
+            "feature_as_of is a naive datetime (no tzinfo); recording the snapshot for "
+            "%s as 'unchecked' because it cannot be compared against published_at — "
+            "pass a tz-aware datetime, e.g. datetime.now(timezone.utc)",
+            snapshot.source_uri,
+        )
         return SourceVerdict.UNCHECKED
 
     if snapshot.published_at is None:

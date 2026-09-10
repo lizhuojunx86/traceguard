@@ -22,6 +22,7 @@ from traceguard import sources
 from traceguard.sdk.tracer import Tracer
 from traceguard.sources.models import SourceSnapshotRow
 from traceguard.store.models import Trace, make_engine
+from traceguard.sources.validate import SourceVerdict, validate_source_snapshot
 from traceguard.validators.lookahead import InvariantViolation
 
 NOW = datetime(2026, 9, 10, 12, 0, tzinfo=timezone.utc)
@@ -303,3 +304,63 @@ def test_record_source_is_a_new_method_not_a_changed_signature():
     assert list(inspect.signature(Span.record_perf).parameters) == [
         "self", "latency_ms", "tokens_in", "tokens_out", "cost_usd",
     ]
+
+
+# ── §4.1: a naive feature_as_of must not break the host call ────────────────
+
+NAIVE_AS_OF = datetime(2026, 9, 1, 12, 0)  # deliberately no tzinfo
+
+
+def test_loose_record_source_survives_a_naive_feature_as_of(src_engine, caplog):
+    """The tracer accepts a naive feature_as_of, so span state alone could make
+    record_source raise on the HOST's stack.
+
+    published_at is guaranteed tz-aware; feature_as_of was never checked; the
+    bare `<=` inside validate_reference_timing raises TypeError, and
+    validate_source_snapshot caught only InvariantViolation. Instrumentation
+    must never break the instrumented call (SPEC §4.1), and this is the same
+    input resolve_feature_as_of already downgrades for the same reason.
+    """
+    tg = Tracer(engine=src_engine)
+    reached_end = False
+    with caplog.at_level("WARNING", logger="traceguard.sources"):
+        with tg.span("p", "c", "llm_complete", feature_as_of=NAIVE_AS_OF) as span:
+            span.record_input({"q": "hi"})
+            span.record_source(_snapshot(published_at=NOW - timedelta(days=2)), strict=False)
+            reached_end = True
+
+    assert reached_end, "record_source aborted the host call body"
+    assert "naive datetime" in caplog.text
+    assert "unchecked" in caplog.text
+
+
+def test_a_naive_feature_as_of_records_unchecked_not_a_guess(src_engine):
+    """Nothing was compared, so the verdict says nothing was compared."""
+    verdict = validate_source_snapshot(
+        _snapshot(published_at=NOW - timedelta(days=2)),
+        NAIVE_AS_OF,
+        strict=False,
+    )
+    assert verdict is SourceVerdict.UNCHECKED
+
+
+def test_strict_refuses_a_naive_feature_as_of_rather_than_passing_it(src_engine):
+    """Degrading strict to UNCHECKED would let it silently pass a source it
+    could not check — strictly worse than refusing."""
+    with pytest.raises(ValueError) as exc:
+        validate_source_snapshot(
+            _snapshot(published_at=NOW - timedelta(days=2)),
+            NAIVE_AS_OF,
+            strict=True,
+        )
+    assert "naive datetime" in str(exc.value)
+    assert "resolve_feature_as_of" in str(exc.value)
+
+
+def test_an_aware_feature_as_of_is_unaffected(src_engine):
+    assert (
+        validate_source_snapshot(
+            _snapshot(published_at=NOW - timedelta(days=2)), NOW, strict=True
+        )
+        is SourceVerdict.VERIFIED
+    )

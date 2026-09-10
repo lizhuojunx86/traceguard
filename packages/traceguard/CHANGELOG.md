@@ -256,6 +256,17 @@ untouched, and the frozen 29-symbol public surface is unchanged.
     beside `ots:` as an added sink with no marker; it appears in the bundle's
     `anchors[].kind` enum so the format can settle, and `parse_sink_spec` does
     not accept it.
+- `record_source(strict=False)` raised on the HOST's stack when the span's
+  `feature_as_of` was tz-naive — a §4.1 break, and caused by span state the
+  tracer accepts without complaint. `published_at` is guaranteed tz-aware, the
+  comparison inside `validate_reference_timing` is a bare `<=`, and
+  `validate_source_snapshot` caught only `InvariantViolation`, so the resulting
+  `TypeError` escaped. The identical span WITHOUT `record_source` survives, so
+  adding a snapshot turned a silent fail-open trace loss into a broken call.
+  Handled as `resolve_feature_as_of` already handles the same input for the same
+  reason: loose warns and records `unchecked` (nothing WAS compared), strict
+  raises `ValueError` — degrading strict would let it silently pass a source it
+  could not check, which is worse than refusing.
 - The append-only guard called every blocked column "hash-covered". `agent_id`,
   `session_id` and `provider_response_id` are outside the algo v1 envelope and
   still blocked — append-only is a policy about the row, not a consequence of

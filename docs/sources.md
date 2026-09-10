@@ -166,6 +166,20 @@ python -m traceguard.sources --db sqlite:///traces.db drift --since 2026-09-01T0
 两个子命令在库里没有 `source_snapshots` 表时都会给一句人话(退出码 2),不是
 SQLAlchemy 的 traceback。
 
+### `feature_as_of` 本身不是时区感知的时候
+
+`published_at` 由 `__post_init__` 保证是 tz-aware,而 `feature_as_of` 来自 span,
+tracer **接受** naive 值。两者直接比会抛 `TypeError`,而那个异常会顺着
+`record_source` 冒到**宿主调用**的栈上 —— loose 模式下也一样,这违反 §4.1。
+
+处理方式与 `resolve_feature_as_of`(它对同一个输入、出于同一个理由早就这么做了)
+一致:
+
+- **loose**:记一条 WARNING,verdict 记为 `unchecked` —— 确实什么都没比,这就是
+  `unchecked` 的字面意思。
+- **strict**:抛 `ValueError`。降级成 `unchecked` 会让 strict **静默放过**一个它
+  根本没能力检查的源,比抛出来更糟。
+
 ## 失败语义(SPEC §4.1)
 
 snapshot 行的写入**绝不**影响 trace 写入或宿主调用:
