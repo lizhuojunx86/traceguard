@@ -23,25 +23,56 @@ The root `pipeline-guardian` package is frozen and never published.
    (keep the extra: a bare `uv sync` uninstalls the openai SDK that
    `scripts/routing_probe_daily.sh` runs with; the tests themselves pass
    without it)
-3. Commit on a **release branch** and open a PR — releases go through a PR, not
-   a direct push to `main` (see note below):
+3. Commit the release on a **release branch** — or as the last commit of the
+   feature PR, as 1.5.0 and 1.6.0 did — and open a PR; releases go through a
+   PR, not a direct push to `main` (see the note after step 9). The release
+   commit carries the version bump, the `X.Y.Z` section of
+   `packages/traceguard/CHANGELOG.md` (step 9 publishes it as the release
+   notes) and, for a new minor, the root `README.md` mention of the new series
+   that `packages/traceguard/tests/test_readme_claims.py` checks in the
+   `contract-guard` job. Name
+   those files in both `git add` and `git commit`: `git commit -a` would sweep
+   in every other modified file, and a plain `git commit` anything staged
+   earlier.
 
    ```bash
+   cd "$(git rev-parse --show-toplevel)"
    git switch -c release/X.Y.Z
-   git commit -am "chore(release): bump traceguard SDK to X.Y.Z"
+   git add packages/traceguard/pyproject.toml packages/traceguard/src/traceguard/__init__.py packages/traceguard/uv.lock packages/traceguard/CHANGELOG.md README.md
+   git commit -m "chore(release): bump traceguard SDK to X.Y.Z" -- packages/traceguard/pyproject.toml packages/traceguard/src/traceguard/__init__.py packages/traceguard/uv.lock packages/traceguard/CHANGELOG.md README.md
    git push -u origin release/X.Y.Z
    gh pr create --base main --title "release/X.Y.Z: <summary>" --body "…"
    ```
 
-4. After the PR is reviewed, merge it (a merge commit, matching the repo's
-   release history), then tag the merged `main` and push the tag:
+   On the feature-PR route, run only the `cd`, `git add` and `git commit` lines
+   on the feature branch, then push it.
+
+4. After the PR is reviewed, and only with an explicit go-ahead for this
+   release, merge it yourself — a merge commit, matching the repo's release
+   history, and no auto-merge — then tag **that merge commit** and push the
+   tag. Take the commit from the PR, not from `main`'s tip: if another PR lands
+   between the merge and the pull, `main` has already moved past the release,
+   and `publish.yml`'s version check would still pass on the later commit. `N`
+   is the PR's number. The tag is created only on a commit whose
+   `pyproject.toml` and `__version__` both say `X.Y.Z`; the last command pushes
+   only if the tag really points at that commit, and that push is irreversible:
+   pushing the tag publishes to PyPI (step 5).
 
    ```bash
-   gh pr merge --merge            # don't auto-merge without an explicit OK
-   git switch main && git pull    # fast-forward to the merge commit
-   git tag vX.Y.Z                 # the tag points at the merge commit on main
-   git push origin vX.Y.Z
+   gh pr merge N --merge
+   git switch main && git pull --ff-only
+   sha=$(gh pr view N --json mergeCommit -q .mergeCommit.oid) && echo "$sha"
+   git merge-base --is-ancestor "$sha" HEAD \
+     && git show "$sha:packages/traceguard/pyproject.toml" | grep -q '^version = "X.Y.Z"' \
+     && git show "$sha:packages/traceguard/src/traceguard/__init__.py" | grep -q '^__version__ = "X.Y.Z"' \
+     && git tag vX.Y.Z "$sha"
+   [ -n "$sha" ] && [ "$(git rev-parse -q --verify 'vX.Y.Z^{commit}')" = "$sha" ] && git push origin vX.Y.Z
    ```
+
+   If `git tag` reports that the tag already exists and
+   `git ls-remote --tags origin vX.Y.Z` prints nothing, it is a local leftover
+   (a tag made before the merge, for instance): `git tag -d vX.Y.Z`, then run
+   the block again from the `sha=` line on.
 
 5. **Pushing the tag publishes.** `.github/workflows/publish.yml` triggers on
    `v*` and does the whole upload through PyPI Trusted Publishing (OIDC) — no
@@ -196,6 +227,15 @@ The root `pipeline-guardian` package is frozen and never published.
 
 9. Create the GitHub release: `gh release create vX.Y.Z --title "vX.Y.Z" --notes-file <the CHANGELOG section>`
 
+> **Why a PR, not `git push origin main`?** Releases go through a PR by
+> convention — a `release/X.Y.Z` branch (#6, #7, #41) or the feature PR carrying
+> the bump as its last commit (#52, #57). Nothing enforces it: `main`'s
+> protection requires the `contract-guard` and `traceguard-sdk` checks but does
+> not apply to admins, and admins have pushed to `main` directly. Don't, for a
+> release. Tag the **merge commit** after the PR lands, never before. The PyPI
+> publish is irreversible and needs an explicit, per-release go-ahead before
+> step 4, whose tag push is the point of no return.
+
 ### Fallback: publishing by hand
 
 A deliberate decision, never a reflex to a red run (step 5): only when
@@ -244,12 +284,6 @@ the shell afterwards, even when the upload is interrupted:
 ```
 
 Naming the two files explicitly means nothing else in `dist/` can ride along.
-
-> **Why a PR, not `git push origin main`?** Releases land through
-> `release/X.Y.Z` branches merged via PR (e.g. #5, #6, #7); a direct push to the
-> default branch is blocked by policy. Tag the **merge commit** after the PR
-> lands, never before. The PyPI publish is irreversible and needs an explicit,
-> per-release go-ahead.
 
 ## Versioning rules
 
