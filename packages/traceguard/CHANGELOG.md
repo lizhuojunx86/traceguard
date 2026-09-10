@@ -304,7 +304,12 @@ untouched, and the frozen 29-symbol public surface is unchanged.
 - CI runs the SDK suite on **3.12, 3.13 and 3.14** (`fail-fast: false`), not
   3.12 alone. `requires-python` is `>=3.11`, so every supported version but one
   went unexercised — which is exactly how the `%` above reached a release-shaped
-  branch. Both new legs are green.
+  branch. Both new legs are green. The matrix runs under its own job id with an
+  aggregate job named `traceguard-sdk` gating on it: `main`'s branch protection
+  requires that status context verbatim, and GitHub reports a matrix job under
+  its rendered name, so putting the matrix on that id directly would have meant
+  the required check was never reported again and every PR to `main` sat
+  unmergeable.
 - The append-only guard called every blocked column "hash-covered". `agent_id`,
   `session_id` and `provider_response_id` are outside the algo v1 envelope and
   still blocked — append-only is a policy about the row, not a consequence of

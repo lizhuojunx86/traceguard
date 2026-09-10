@@ -51,14 +51,22 @@ jobs:
   # and broke the `sources` CLI outright on 3.14, where `add_parser` validates
   # help strings eagerly. 3.11 is deliberately NOT in the matrix: adding it is a
   # separate decision about the floor, not about testing what we ship against.
-  traceguard-sdk:
+  #
+  # The matrix lives under its own job id, and an aggregate job below carries
+  # the name `traceguard-sdk`. That is not cosmetic: main's branch protection
+  # requires the status context `traceguard-sdk` verbatim, and GitHub reports a
+  # matrix job under its RENDERED name (`traceguard-sdk (3.12)` and friends).
+  # Putting the matrix on this job id directly would mean the required context
+  # is never reported again and every PR to main sits unmergeable at
+  # "Expected — Waiting for status to be reported".
+  traceguard-sdk-matrix:
     runs-on: ubuntu-22.04
     strategy:
       # Every version reports; one failing does not hide the others.
       fail-fast: false
       matrix:
         python-version: ["3.12", "3.13", "3.14"]
-    name: traceguard-sdk (py${{ matrix.python-version }})
+    name: SDK suite (py${{ matrix.python-version }})
     defaults:
       run:
         working-directory: packages/traceguard
@@ -89,6 +97,20 @@ jobs:
         if: matrix.python-version == '3.12'
         continue-on-error: true
         run: uv run ruff format --check .
+
+  # Aggregate gate. Reports under the exact context main's branch protection
+  # requires, and fails if ANY matrix leg failed or was skipped/cancelled —
+  # `needs.<job>.result` is "success" only when every leg succeeded.
+  traceguard-sdk:
+    runs-on: ubuntu-22.04
+    needs: traceguard-sdk-matrix
+    if: always()
+    steps:
+      - name: Every Python version passed
+        run: |
+          result='${{ needs.traceguard-sdk-matrix.result }}'
+          echo "matrix result: $result"
+          [ "$result" = 'success' ] || exit 1
 
   # Freeze guard: the tests that mechanically enforce the 1.0 contract — the
   # frozen public surface (__all__, 29 symbols), the normalizer golden hashes,
