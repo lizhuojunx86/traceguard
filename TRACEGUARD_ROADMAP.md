@@ -42,6 +42,33 @@
 
 **竞争判断记录**(承接 08-27):护城河不在存储完整性(已商品化),也不在"事故证据产品"(无买家证据),而在 (1) **取回数据的时点正确性**——有已发表的测量,观测类竞品无人覆盖;(2) **采集真实性的诚实分层**(L0 / L1 / L2)。宣传措辞继续受 spec-changes/2026-08-27 §5 约束:不许说"防篡改"。
 
+**收口(2026-09-10,随 1.6.0)**
+
+已落地:**A1**(SPEC v1.2 修订案,走附录 C 流程)、**A2**(不变量 3 明文含取回数据,
+`published_at` 未知时 strict 拒绝 / loose 出 `unverifiable`)、**A3**
+(`Span.record_source`,宿主显式调用,不做网络拦截)、**A5**(`sources drift`,
+沿 `analysis/eps_revision.py` 的计数纪律)、**B1**(`reconcile_requests` 与
+`request-ledger/v1`,逐请求存在性核对,新 finding kind `capture_unmatched`)、
+**B3**(`evidence-bundle/v1` 与离线 `verify-bundle`)、**B4 的 `ots:` 一半**
+(OpenTimestamps,extra `traceguard[anchors]`;边界声明 1 的措辞未放松)。
+
+未落地,照实登记:**B2**(审批绑定)只进了 SPEC §6.6 的"规划,未实现",一行代码没写,
+仍等自己的消费者 gate;**B4 的 `rekor:`** 是**设计登记,未实现**——它在 bundle 的
+`anchors[].kind` 枚举里是为了让格式先定下来,`parse_sink_spec` 不接受它,
+理由(需要只能证明"同一上传者"的 ECDSA 签名密钥,身份要另接 OIDC)写在 `docs/audit.md`。
+
+**A4 gate 未满足。** 门槛是 quant_alpha_v2 写入 ≥100 条带 `source_snapshot` 的真实
+trace;实测该仓库至今没有 `source_snapshots` 表,也没有任何调用 `record_source` 的代码,
+真实条数是 **0**。A5 仍然先做了——顺序上违反了"A4 gate → A5"的自订纪律,记在这里而不是
+抹掉。代价由 `traceguard.sources` **维持 experimental** 承担:不进 `contract-guard`
+job,API 面可在 minor 内变,README 与 SPEC §6.6 都这么写。毕业条件不变——先有真实用量。
+
+**差分守卫 B3.6 的由来**:1.6.0 的两轮 review 各抓出一个 `verify_bundle` 假阴性
+(尾部截断、链中删行),两次都是同一条被违反——导出件的结论强于库的结论,而两次都是靠
+"在同一份数据上同时跑 `verify_chain` 与 `verify_bundle`,看它们是否打架"发现的。
+这条诊断现在写进 SPEC 附录 B3.6(非规范)并由 `tests/test_audit_differential.py`
+的 72 格矩阵常驻守卫,不再依赖下一次有人想起来手动比一次。
+
 ## 📌 状态更新 (2026-08-27) — 外部事件驱动的 post-1.0 优先级调整
 
 **背景**:2026-08-26,METR/Redwood Research 发布对 7 月 OpenAI / Hugging Face 事件的独立调查,OpenAI 同日发布自查报告。与本产品直接相关的三条事实(已对照一手来源核实):

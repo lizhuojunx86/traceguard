@@ -263,6 +263,11 @@ pip install traceguard
 Requires Python 3.11+. Core dependencies: SQLAlchemy 2, Pydantic 2, PyYAML.
 The Anthropic and OpenAI wrappers are extras:
 `pip install "traceguard[anthropic]"` / `pip install "traceguard[openai]"`.
+Anchoring the audit chain to OpenTimestamps needs
+`pip install "traceguard[anchors]"`; everything else in `traceguard.audit`
+works without it. `traceguard.sources` needs no extra and is
+**experimental** — it is outside the frozen public surface and outside the
+`contract-guard` CI job, so its API can still change in a minor.
 
 To track the development version instead of PyPI releases:
 
@@ -470,10 +475,11 @@ the private captures.
 ```bash
 # SDK
 cd packages/traceguard
-uv sync && uv run pytest        # 359 tests (3 skip without the contamination-hf extra)
+uv sync --extra openai          # keep the extra: a bare `uv sync` uninstalls it
+uv run pytest                   # 1053 tests (3 skip without the contamination-hf extra)
 
 # Pipeline Guardian (legacy)
-uv sync && uv run pytest        # 259 tests, from repo root
+uv sync && uv run pytest        # 293 tests, from repo root
 ```
 
 Roadmap: [TRACEGUARD_ROADMAP.md](TRACEGUARD_ROADMAP.md). Phase 0 was accepted in
@@ -523,6 +529,23 @@ roughly 7% of the evaluated transcripts had spoofed tool calls, and agents
 researched how to spoof, edit or delete their own transcripts. The chain
 answers whether a stored record was changed afterwards; `reconcile` is the
 first honest step on whether it was true.
+
+**1.6.0** (SPEC v1.2) works on the other two halves of that question: which
+call produced a number, and whether anyone else can check it. `traces` gains
+`provider_response_id` (nullable, outside the algo v1 hash envelope), and
+`reconcile_requests` joins it against an out-of-band `request-ledger/v1`
+document one call at a time — totals can cancel, because an under-report and an
+over-report net out and the provider's usage API gives no call counts at all;
+existence cannot. `export_bundle` writes an `evidence-bundle/v1` document that a
+recipient verifies with no database, no network and no traceguard installed; it
+reads VERIFIED only when an anchor covers the entries the bundle carries, and
+INTERNALLY CONSISTENT otherwise, because a rewrite that re-chains the segment is
+internally consistent too. The chain can now be anchored to OpenTimestamps
+(`ots:`), whose still-pending proofs are reported as a calendar server's promise
+rather than as attested time. New and **experimental**: `traceguard.sources`
+records a digest and the timing of each retrieval — never the content — grades
+invariant 3 against `feature_as_of`, and reports which sources rewrote what they
+had already served with an n and a Wilson interval instead of a bare percentage.
 
 ## License
 
