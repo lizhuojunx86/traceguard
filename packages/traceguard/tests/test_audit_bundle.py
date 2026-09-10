@@ -255,8 +255,10 @@ def test_bundle_conforms_to_the_published_schema(chained, mode):
 
     head = audit.export_anchor(chained)
     bundle = export_bundle(chained, content_mode=mode, anchors=[anchor_record(head)])
-    payload = {k: v for k, v in bundle.items() if not k.startswith("_")}
-    jsonschema.validate(payload, schema)
+    # The RAW document, with nothing stripped. Filtering keys here once hid a
+    # real defect: the emitter was writing a private `_cost_events` key that
+    # the published schema rejects, and the test passed anyway.
+    jsonschema.validate(bundle, schema)
 
 
 def test_schema_rejects_an_rfc3161_anchor_without_its_token():
@@ -284,10 +286,28 @@ def test_empty_approvals_is_valid(chained):
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     bundle = export_bundle(chained)
     assert bundle["approvals"] == []
-    jsonschema.validate({k: v for k, v in bundle.items() if not k.startswith("_")}, schema)
+    jsonschema.validate(bundle, schema)
 
 
 # ── cost events travel with the bundle ──────────────────────────────────────
+
+def test_a_bundle_with_a_cost_event_still_matches_the_schema(chained):
+    """The regression this pair of fixes exists for: cost_events is a real,
+    declared field, and a bundle carrying one validates as emitted."""
+    jsonschema = pytest.importorskip("jsonschema")
+    if not SCHEMA_PATH.is_file():
+        pytest.skip("schema not reachable")
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    with Session(chained) as sess:
+        trace_id = sess.scalars(select(Trace)).first().trace_id
+    audit.record_cost_event(
+        chained, trace_id=trace_id, event_type="correction",
+        old_value=None, new_value="0.25", reason="test",
+    )
+    bundle = export_bundle(chained)
+    assert bundle["cost_events"], "the cost event must travel with the bundle"
+    jsonschema.validate(bundle, schema)
+
 
 def test_a_cost_event_entry_verifies(chained):
     with Session(chained) as sess:

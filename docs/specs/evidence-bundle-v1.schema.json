@@ -28,6 +28,11 @@
     "source_snapshots": {"type": "array", "items": {"$ref": "#/$defs/sourceSnapshot"}},
     "anchors": {"type": "array", "items": {"$ref": "#/$defs/anchor"}},
     "findings": {"type": "array", "items": {"$ref": "#/$defs/finding"}},
+    "cost_events": {
+      "type": "array",
+      "description": "Rows from audit_cost_events referenced by cost_event chain entries. Required for full-mode verification of those entries: the entry hash covers the event row, so it cannot be recomputed without them.",
+      "items": {"$ref": "#/$defs/costEvent"}
+    },
     "approvals": {
       "type": "array",
       "description": "Reserved. traceguard.approval is registered in SPEC v1.2 as planned but is NOT implemented, so this is always empty today. The field exists now so adding it later is not a schema break.",
@@ -148,6 +153,21 @@
           "then": {"required": ["tsa_url", "digest_alg", "message_imprint", "token_b64"]}
         }
       ]
+    },
+    "costEvent": {
+      "type": "object",
+      "required": ["event_id", "trace_id", "event_type", "occurred_at"],
+      "additionalProperties": false,
+      "properties": {
+        "event_id": {"type": "integer"},
+        "trace_id": {"type": "integer"},
+        "event_type": {"enum": ["deferred_first_write", "rollback", "correction"]},
+        "old_value": {"type": ["string", "null"]},
+        "new_value": {"type": ["string", "null"]},
+        "reason": {"type": ["string", "null"]},
+        "batch_id": {"type": ["string", "null"]},
+        "occurred_at": {"type": "string"}
+      }
     },
     "finding": {
       "type": "object",

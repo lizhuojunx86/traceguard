@@ -144,6 +144,12 @@ untouched, and the frozen 29-symbol public surface is unchanged.
   - `approvals` is present and always empty: `traceguard.approval` is registered
     in SPEC v1.2 as planned but not implemented, and reserving the field now
     means adding it later is not a schema break.
+  - `cost_events` is a declared, first-class field: a `cost_event` chain entry
+    hashes the event row, so `full` verification cannot recompute those entries
+    without it. It was briefly emitted as a private `_cost_events` key that the
+    published schema rejected — and the conformance test stripped underscore
+    keys before validating, so it passed anyway. The test now validates the RAW
+    document, which is the only version of that test worth having.
   - `jsonschema` is a **dev-only** dependency (schema conformance tests); the
     runtime still validates nothing and depends on nothing new.
 

@@ -282,7 +282,10 @@ def export_bundle(
         "anchors": list(anchors or []),
         "findings": [],
         "approvals": [],  # reserved; traceguard.approval is planned, not implemented
-        "_cost_events": [
+        # Not private and not optional: a cost_event chain entry hashes the
+        # event row, so `full` verification cannot recompute those entries
+        # without them. It is part of the published schema for that reason.
+        "cost_events": [
             {
                 "event_id": ev.event_id,
                 "trace_id": ev.trace_id,
@@ -388,7 +391,7 @@ def verify_bundle(bundle: dict) -> BundleVerifyResult:
     chain = bundle.get("chain") or {}
     entries = list(chain.get("entries") or [])
     traces = {t["trace_id"]: t for t in (bundle.get("traces") or [])}
-    cost_events = {e["event_id"]: e for e in (bundle.get("_cost_events") or [])}
+    cost_events = {e["event_id"]: e for e in (bundle.get("cost_events") or [])}
 
     result = BundleVerifyResult(
         ok=True, content_mode=content_mode, entries_checked=len(entries),

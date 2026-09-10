@@ -28,6 +28,7 @@
   "source_snapshots": [...],
   "anchors": [...],
   "findings": [...],
+  "cost_events": [...],
   "approvals": []
 }
 ```
@@ -43,6 +44,7 @@
 | `source_snapshots` | 这些 trace 的 `source_snapshot`(可选,`include_sources=False` 时为空数组) |
 | `anchors` | 外部锚记录,见 §4 |
 | `findings` | verify / reconcile 产出的 finding,`{kind, severity, seq, trace_id, detail, direction}` |
+| `cost_events` | 被 `cost_event` 链条目引用的 `audit_cost_events` 行。**`full` 模式验证这些条目必须有它**——条目哈希盖的是事件行本身,没有它就重算不出来 |
 | `approvals` | **保留字段,当前恒为空数组**。`traceguard.approval` 是 SPEC v1.2 登记的规划项,尚未实现;字段先在,免得将来加它变成 schema 破坏 |
 
 ---
