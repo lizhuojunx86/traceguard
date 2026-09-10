@@ -69,6 +69,8 @@ job,API 面可在 minor 内变,README 与 SPEC §6.6 都这么写。毕业条件
 这条诊断现在写进 SPEC 附录 B3.6(非规范)并由 `tests/test_audit_differential.py`
 的 72 格矩阵常驻守卫,不再依赖下一次有人想起来手动比一次。
 
+对外:发布文《Two verifiers, one database, opposite answers. 1,022 green tests didn't notice.》(dev.to,2026-09-10,https://dev.to/lizhuojunx86/two-verifiers-one-database-opposite-answers-1022-green-tests-didnt-notice-543g),内容即 B3.6 的两次发作与差分守卫;所有机械断言发前实测。
+
 ## 📌 状态更新 (2026-08-27) — 外部事件驱动的 post-1.0 优先级调整
 
 **背景**:2026-08-26,METR/Redwood Research 发布对 7 月 OpenAI / Hugging Face 事件的独立调查,OpenAI 同日发布自查报告。与本产品直接相关的三条事实(已对照一手来源核实):
