@@ -284,6 +284,18 @@ untouched, and the frozen 29-symbol public surface is unchanged.
   reason: loose warns and records `unchecked` (nothing WAS compared), strict
   raises `ValueError` — degrading strict would let it silently pass a source it
   could not check, which is worse than refusing.
+- The `sources` CLI could not print its own help: `--help` raised
+  `ValueError: unsupported format character 'C'` from an unescaped `%` in
+  "with a Wilson 95% CI" (argparse runs help through %-formatting). On Python
+  3.14 it is worse than a help failure — `add_parser` validates help strings
+  eagerly, so `sources list` and `sources drift` did not run at all. Escaped,
+  plus `tests/test_cli_help.py`: every subcommand of both CLIs, discovered from
+  the parser rather than a hardcoded list, must render `--help` and exit 0, and
+  a static guard rejects an unescaped `%` at authoring time on any version.
+- CI runs the SDK suite on **3.12, 3.13 and 3.14** (`fail-fast: false`), not
+  3.12 alone. `requires-python` is `>=3.11`, so every supported version but one
+  went unexercised — which is exactly how the `%` above reached a release-shaped
+  branch. Both new legs are green.
 - The append-only guard called every blocked column "hash-covered". `agent_id`,
   `session_id` and `provider_response_id` are outside the algo v1 envelope and
   still blocked — append-only is a policy about the row, not a consequence of

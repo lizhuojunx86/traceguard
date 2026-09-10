@@ -101,7 +101,10 @@ def main(argv: list[str] | None = None) -> int:
 
     p_drift = sub.add_parser(
         "drift",
-        help="which sources changed their content between retrievals (with a Wilson 95% CI)",
+        # `%%` because argparse runs help through %-formatting. A bare `%`
+        # raises ValueError from _expand_help on --help, and from Python 3.14
+        # on, add_parser validates eagerly — so it breaks the CLI outright.
+        help="which sources changed their content between retrievals (with a Wilson 95%% CI)",
     )
     p_drift.add_argument(
         "--source-uri",

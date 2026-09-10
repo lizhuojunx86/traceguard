@@ -43,8 +43,22 @@ jobs:
 
   # The traceguard SDK lives in packages/traceguard with its own uv project, so
   # the root job above never ran its suite. Run it here.
+  #
+  # Matrix: pyproject declares requires-python >=3.11, and this job tested only
+  # 3.12 — so every version the package claims to support but one went
+  # unexercised. That is not theoretical: an unescaped `%` in an argparse help
+  # string was invisible on 3.12/3.13 (it raises only when --help is asked for)
+  # and broke the `sources` CLI outright on 3.14, where `add_parser` validates
+  # help strings eagerly. 3.11 is deliberately NOT in the matrix: adding it is a
+  # separate decision about the floor, not about testing what we ship against.
   traceguard-sdk:
     runs-on: ubuntu-22.04
+    strategy:
+      # Every version reports; one failing does not hide the others.
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+    name: traceguard-sdk (py${{ matrix.python-version }})
     defaults:
       run:
         working-directory: packages/traceguard
@@ -54,22 +68,25 @@ jobs:
       - name: Setup uv
         uses: astral-sh/setup-uv@v3
 
-      - name: Install Python 3.12
-        run: uv python install 3.12
+      - name: Install Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
 
       - name: Install the traceguard SDK
-        run: uv sync --python 3.12
+        run: uv sync --python ${{ matrix.python-version }}
 
       - name: Run SDK tests
-        run: uv run pytest -q
+        run: uv run --python ${{ matrix.python-version }} pytest -q
 
       # Blocking (no continue-on-error): the SDK is lint-clean and stays that way.
+      # Lint and format are version-independent, so only one leg runs them.
       - name: Ruff lint
+        if: matrix.python-version == '3.12'
         run: uv run ruff check .
 
       # Informational: the tree is not ruff-format-clean (52 files would change);
       # enforcing format is a separate, deliberate reformat, not this gate.
       - name: Ruff format check
+        if: matrix.python-version == '3.12'
         continue-on-error: true
         run: uv run ruff format --check .
 
