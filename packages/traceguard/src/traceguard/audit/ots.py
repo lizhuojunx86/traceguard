@@ -31,6 +31,7 @@ import is lazy so the core package keeps its zero-dependency posture.
 from __future__ import annotations
 
 import hashlib
+import logging
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -44,6 +45,8 @@ DEFAULT_CALENDARS: tuple[str, ...] = (
     "https://b.pool.opentimestamps.org",
     "https://a.pool.eternitywall.com",
 )
+
+_log = logging.getLogger("traceguard.audit.ots")
 
 PENDING = "pending"
 COMPLETE = "complete"
@@ -272,7 +275,7 @@ class OtsAnchorSink:
 def upgrade_proof(
     path: str | os.PathLike[str],
     *,
-    calendars: Iterable[str] = DEFAULT_CALENDARS,
+    calendars: Iterable[str] | None = None,
     calendar_factory: Any = None,
 ) -> OtsProof:
     """Fetch the completed proof from a calendar and rewrite the ``.ots`` file.
@@ -281,6 +284,18 @@ def upgrade_proof(
     is the step that turns a promise into an attestation. Returns the proof as
     it stands AFTER the attempt — still pending if no calendar had it yet,
     which is a normal outcome shortly after stamping, not an error.
+
+    ``calendars`` defaults to ``None``, meaning **ask the URI inside each
+    pending attestation**, which is what that URI is for and what the reference
+    ``ots upgrade`` client does. Pass a list only to restrict which hosts may be
+    contacted; it is then an ALLOWLIST, not the set of hosts to ask.
+
+    Why this is not merely a nicety: submitting to a *pool* address
+    (``https://a.pool.opentimestamps.org``, the default) yields an attestation
+    naming the concrete calendar the pool forwarded to, which is a different
+    host. Treating ``calendars`` as the list to contact therefore skipped every
+    real attestation and returned "still pending" forever — a silent no-op
+    dressed as the normal outcome, which is the failure mode SPEC B3.4 is about.
     """
     mod = _ots()
     target = Path(path)
@@ -290,13 +305,18 @@ def upgrade_proof(
     )
     timestamp = detached.timestamp
 
+    allowlist = tuple(calendars) if calendars is not None else None
     upgraded = False
+    skipped: list[str] = []
     for _msg, attestation in list(timestamp.all_attestations()):
         if not isinstance(attestation, mod["PendingAttestation"]):
             continue
         uri = attestation.uri
         uri = uri.decode() if isinstance(uri, bytes) else str(uri)
-        if uri not in tuple(calendars) and not any(uri.startswith(c) for c in calendars):
+        if allowlist is not None and not any(
+            uri == allowed or uri.startswith(allowed) for allowed in allowlist
+        ):
+            skipped.append(uri)
             continue
         try:
             remote = (
@@ -307,6 +327,18 @@ def upgrade_proof(
             upgraded = True
         except Exception:  # noqa: BLE001 - a calendar that has nothing yet is normal
             continue
+
+    if skipped and not upgraded:
+        # Never silent: an allowlist that excludes every attestation looks
+        # exactly like "the calendar has nothing yet" unless it says so.
+        _log.warning(
+            "upgrade_proof contacted no calendar for %s: the allowlist %r excluded "
+            "every pending attestation URI %r. Pass calendars=None to ask the URI "
+            "inside each attestation (the default).",
+            target,
+            allowlist,
+            skipped,
+        )
 
     if upgraded:
         detached = mod["DetachedTimestampFile"](detached.file_hash_op, timestamp)

@@ -13,7 +13,8 @@ promises from docs/spec-changes/2026-08-27, made mechanical:
    their load-bearing sentences must still be there, verbatim.
 
 Plus the algo v1 envelope, which the golden tests pin byte-for-byte — here it is
-stated as a contract fact: the SPEC v1.1 columns are OUTSIDE it.
+stated as a contract fact: the columns added after SPEC v1.0 (``agent_id``,
+``session_id`` in v1.1, ``provider_response_id`` in v1.2) are OUTSIDE it.
 """
 
 from __future__ import annotations
@@ -195,7 +196,58 @@ FROZEN_PARAMETERS = {
     "traces_usage": ("engine", "starting_at", "ending_at", "project", "operation"),
     "canonical_json_bytes": ("payload",),
     "compute_row_hash": ("prev_hash", "payload"),
+    # SPEC v1.2 additions. Frozen from the moment they entered __all__ — the
+    # 08-27 precedent is that every public function on this surface is
+    # parameter-frozen, and a function that is exported but unlisted here is
+    # contract-bound with nothing enforcing §6.3 on it.
+    "reconcile_requests": (
+        "engine",
+        "ledger",
+        "starting_at",
+        "ending_at",
+        "project",
+        "operation",
+    ),
+    "parse_request_ledger": ("payload",),
+    "load_request_ledger": ("path",),
+    "export_bundle": (
+        "engine",
+        "since",
+        "until",
+        "trace_ids",
+        "content_mode",
+        "include_sources",
+        "anchors",
+    ),
+    "verify_bundle": ("bundle",),
+    "write_bundle": ("bundle", "path"),
+    "load_bundle": ("path",),
+    "anchor_record": ("anchor", "kind", "location"),
+    "ots_digest": ("anchor",),
+    "parse_ots_proof": ("data",),
+    "verify_ots_proof": ("proof", "anchor"),
+    "upgrade_proof": ("path", "calendars", "calendar_factory"),
 }
+
+
+def test_every_public_callable_is_parameter_frozen():
+    """No public function may sit on this surface unfrozen.
+
+    Without this, adding a symbol to ``EXPECTED_AUDIT_API`` and forgetting
+    ``FROZEN_PARAMETERS`` silently exempts it from §6.3 — it looks covered
+    because the surface test passes.
+    """
+    unfrozen = sorted(
+        name
+        for name in audit.__all__
+        if callable(getattr(audit, name))
+        and not isinstance(getattr(audit, name), type)
+        and name not in FROZEN_PARAMETERS
+    )
+    assert not unfrozen, (
+        f"public function(s) {unfrozen} are exported but not in FROZEN_PARAMETERS — "
+        "add them (with their current parameters) so §6.3 is enforced on them too"
+    )
 
 BOUNDARY_SENTENCES = (
     "哈希链不是 MAC,v1 无密钥。",

@@ -248,7 +248,9 @@ python -m traceguard.audit --db sqlite:///traces.db verify \
 `seq` 与 `entry_count` 不被 attest,于是把链头重新指到一条被重写的链里的另一个位置,
 证明照样对得上。两个文件放一起,日后**不需要数据库**就能自证。
 
-刚 stamp 出来的证明是 **pending**;`--ots-upgrade` 向日历服务器要升级后的证明。
+刚 stamp 出来的证明是 **pending**;`--ots-upgrade` 向日历服务器要升级后的证明 ——
+问的是 pending 附件里记的那个 URI(它才是持有证明的那台),不是当初提交的地址:
+默认的 `a.pool.opentimestamps.org` 是个转发池,两者本来就不是同一台。
 拿不到不是错误——刚 stamp 完拿不到是常态。
 
 ### `rekor:` — 设计节,**本次未实现**

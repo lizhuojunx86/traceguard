@@ -170,7 +170,13 @@ untouched, and the frozen 29-symbol public surface is unchanged.
     fresh stamp carries only a calendar server's promise. `parse_ots_proof`
     reports `pending` and `complete` separately and never conflates them;
     `--ots-upgrade` fetches the completed proof (getting nothing back shortly
-    after stamping is normal, not an error).
+    after stamping is normal, not an error). Upgrading asks the calendar URI
+    **inside the pending attestation**, which is the one holding the proof —
+    the default `a.pool.opentimestamps.org` is a pool that forwards to a
+    different host, so treating the submit address as the address to ask would
+    make the upgrade a permanent no-op that looks like "not ready yet".
+    `upgrade_proof(calendars=...)` is therefore an allowlist of hosts that may
+    be contacted, and it logs at WARNING when it excludes every attestation.
   - A complete proof bounds the digest to "existed before block N" — block times
     carry minutes-to-hours of uncertainty, and confirming the block needs a
     Bitcoin node or an explorer you choose to trust. traceguard does neither; it

@@ -217,6 +217,65 @@ def test_upgrade_with_nothing_available_stays_pending_and_is_not_an_error(tmp_pa
     assert still.status == PENDING
 
 
+def test_upgrade_asks_the_uri_inside_the_attestation_not_the_submit_url(tmp_path):
+    """The regression that made upgrade_proof a silent no-op in production.
+
+    Submitting to a POOL address returns an attestation naming the concrete
+    calendar the pool forwarded to — a different host from the one submitted
+    to. Filtering attestations by the submit URL therefore skipped every real
+    one and returned "still pending", which reads as the normal outcome.
+    """
+    pool = "https://a.pool.opentimestamps.org"
+    forwarded = "https://alice.btc.calendar.opentimestamps.org"
+
+    def submit_factory(url):
+        cal = _FakeCalendar(url)
+        # what a pool does: the promise names whoever actually holds it
+        cal.submit = lambda digest: _timestamp(digest, pending_uri=forwarded)
+        return cal
+
+    sink = OtsAnchorSink(tmp_path, calendars=(pool,), calendar_factory=submit_factory)
+    path = sink.store(ANCHOR)
+    assert parse_ots_proof(path).status == PENDING
+
+    asked = _factory(height=820000)
+    upgraded = upgrade_proof(path, calendar_factory=asked)
+
+    assert upgraded.status == COMPLETE, "the default must follow the attestation's own URI"
+    assert list(asked.made) == [forwarded], "asked the wrong host"
+
+
+def test_upgrade_calendars_is_an_allowlist_and_says_so_when_it_excludes_everything(
+    tmp_path, caplog
+):
+    """Passing `calendars` restricts which hosts may be contacted. An allowlist
+    that matches nothing must not be indistinguishable from "not ready yet"."""
+    sink = OtsAnchorSink(
+        tmp_path, calendars=("https://real.example",), calendar_factory=_factory()
+    )
+    path = sink.store(ANCHOR)
+
+    asked = _factory(height=830000)
+    with caplog.at_level("WARNING", logger="traceguard.audit.ots"):
+        still = upgrade_proof(path, calendars=("https://other.example",), calendar_factory=asked)
+
+    assert still.status == PENDING
+    assert not asked.made, "an excluded attestation must not be contacted"
+    assert "allowlist" in caplog.text and "https://real.example" in caplog.text
+
+
+def test_upgrade_allowlist_still_admits_the_host_it_names(tmp_path):
+    sink = OtsAnchorSink(
+        tmp_path, calendars=("https://real.example",), calendar_factory=_factory()
+    )
+    path = sink.store(ANCHOR)
+    upgraded = upgrade_proof(
+        path, calendars=("https://real.example",), calendar_factory=_factory(height=840000)
+    )
+    assert upgraded.status == COMPLETE
+    assert upgraded.bitcoin_heights == (840000,)
+
+
 def test_proofs_and_latest_read_the_directory_back(tmp_path):
     sink = OtsAnchorSink(tmp_path, calendars=("https://c.example",), calendar_factory=_factory())
     sink.store(ANCHOR)

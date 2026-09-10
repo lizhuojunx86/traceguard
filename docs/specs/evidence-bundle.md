@@ -83,8 +83,18 @@ algo v1 的哈希信封**包含内容字段**(`input_summary` / `output_parsed` 
 "内容已验证"是本格式最容易犯、后果最大的误读,所以 `verify_bundle` 在
 `hash_only` 下永远至少带一条 INFO finding,`summary()` 也换一套措辞。
 
-`content_not_recomputed` 是 **bundle 层的 finding,不是 audit 的 finding kind** ——
-它不进 `FINDING_SEVERITY`,不受 §6.6 的 kind 冻结约束。
+`verify_bundle` 产出的 finding 分两类,读的时候必须分清:
+
+| kind | 来源 | 冻结状态 |
+|---|---|---|
+| `hash_mismatch` / `link_broken` / `anchor_mismatch` | audit 的 finding kind,原样复用 | 进 `FINDING_SEVERITY`,受 §6.6 kind 冻结约束 |
+| `content_not_recomputed`(INFO) | bundle 层:声明这次验证没碰内容 | **不进** `FINDING_SEVERITY`,不受 §6.6 约束 |
+| `anchor_malformed`(BREAK) | bundle 层:`anchors[]` 条目结构不合法(见 §4) | 同上 |
+| `anchor_pending`(WARN) | bundle 层:OTS 证明仍是 pending(见 §4) | 同上 |
+
+后三个只在**验证 bundle** 这一个动作里出现,`verify_chain` 永远不会产出它们;
+把它们写进 `FINDING_SEVERITY` 会让"audit 的 kind 表"这件事失去边界,所以不写。
+代价是它们不被 kind 冻结测试保护 —— 这份文档就是它们的契约,改名同样是 major。
 
 ---
 
