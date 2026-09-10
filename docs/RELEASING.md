@@ -45,33 +45,55 @@ The root `pipeline-guardian` package is frozen and never published.
 
 5. **Pushing the tag publishes.** `.github/workflows/publish.yml` triggers on
    `v*` and does the whole upload through PyPI Trusted Publishing (OIDC) — no
-   token is typed, and none needs to exist on the machine. Watch it rather than
-   doing anything:
+   token is typed, and none needs to exist on the machine. Nothing stands
+   between the push and the upload: the `pypi` environment has no required
+   reviewers (as of 2026-09), and on 1.6.0 `publish` started three seconds after
+   `build` finished. The tag push is the point of no return, so the go-ahead has
+   to come before step 4. Watch the run, taking `<id>` from the first command:
 
    ```bash
-   gh run list --workflow publish.yml --limit 1     # take the run id
-   gh run watch <id>
+   gh run list --workflow publish.yml --branch vX.Y.Z --limit 1
+   gh run watch <id> --exit-status
    ```
 
    Three jobs, all of which must go green:
 
    - **build** — refuses the release unless the tag, `pyproject.toml`'s
      `version` and `__version__` all agree; runs the suite; rejects `* [0-9].py`
-     sync duplicates; and checks the built artifacts are exactly two, named
-     `traceguard-X.Y.Z-*`, with no `pipeline_guardian`.
+     sync duplicates; and checks that `dist/` holds exactly
+     `traceguard-X.Y.Z-py3-none-any.whl` and `traceguard-X.Y.Z.tar.gz`, with no
+     `pipeline_guardian`.
    - **publish** — uploads under the `pypi` environment.
    - **verify** — installs the version back from PyPI on 3.12 and round-trips
      `__version__`.
 
-   If **publish** sits in `waiting`, the `pypi` environment wants a manual
-   approval: approve it on GitHub. Do not re-run via `workflow_dispatch` and do
-   not fall back to a manual upload — a `workflow_dispatch` run has a different
-   ref and the version check will not mean what it means here.
+   Never start `publish.yml` by hand (`workflow_dispatch`). A dispatched run
+   builds the ref it was started on — the default branch unless `--ref` is
+   given — and checks the typed version only against that ref's own files, so a
+   dispatch from `main` after `main` has moved on without a new bump publishes
+   `main`'s tip under the tag's version. To retry, re-run the tag's own run.
 
-   If any job goes red **after the tag is pushed**: do not delete the tag, do
-   not re-tag, do not upload by hand. The version number is already spent
-   whether or not the upload happened (see the immutability note below). Read
-   the log, fix forward on a new patch version.
+   If a job goes red, read its log before anything else, and never delete or
+   move the tag: downstream repos pin tags, so a pushed tag stays where it is
+   whether or not anything was uploaded. What comes next depends on the job:
+
+   - **build** — nothing was uploaded. For a transient failure, re-run the
+     failed jobs of the same run (`gh run rerun <id> --failed`); for a defect in
+     the tagged code, fix it and release a new patch version.
+   - **publish** — check the index first:
+     `curl -s https://pypi.org/simple/traceguard/ | grep -oE 'traceguard-X.Y.Z(-py3-none-any.whl|.tar.gz)#sha256=[0-9a-f]*'`
+     (the verify job gives the index up to about 150 seconds to catch up). Both
+     files listed: the upload happened; go on to step 6. Only one: stop and read
+     the log again. Neither listed: nothing was uploaded. If the log reports the
+     token exchange failing with "This generally indicates a trusted publisher
+     configuration error", correct the publisher on PyPI (one-time setup, item
+     2) and re-run the whole run (`gh run rerun <id>`), which keeps provenance;
+     otherwise handle it like a red build.
+   - **verify** — the release is already on PyPI. This happened on 1.1.1 and
+     1.3.0, and neither needed a new version: re-run the job
+     (`gh run rerun <id> --failed`) or do step 6 by hand.
+
+   None of these is a reason for the manual upload below.
 
 6. Verify independently — not just by reading the workflow's own `verify` job.
    In an environment with no traceguard in it:
@@ -176,22 +198,52 @@ The root `pipeline-guardian` package is frozen and never published.
 
 ### Fallback: publishing by hand
 
-Only if `publish.yml` cannot run at all (the workflow is broken, or Trusted
-Publishing is misconfigured) — and only for a version number that has never
-been uploaded:
+A deliberate decision, never a reflex to a red run (step 5): only when
+`publish.yml` cannot publish this release at all and the release cannot wait —
+GitHub Actions itself being unavailable, say — and only for a version whose
+files are not on the index. A broken `publish.yml` inside the tag is a defect
+in the tagged code (a new patch version), and a misconfigured trusted publisher
+is corrected on PyPI and re-run (step 5); neither is a reason to come here. The
+path is kept on purpose as a break-glass option, and it costs two things: the
+only checks are the ones you run below, and the release ships without
+provenance (step 8), permanently for that version.
+
+Build the tagged tree, not the working tree (step 7 says why), and check it —
+the build job's version agreement, the suite and the artifact names — before
+anything leaves the machine:
 
 ```bash
-cd packages/traceguard
-uv build                       # MUST show traceguard-X.Y.Z, not pipeline_guardian
-read -s "PYPI_TOKEN?paste the project-scoped PyPI token, then Enter: "
-uv publish --token "$PYPI_TOKEN" \
-  dist/traceguard-X.Y.Z-py3-none-any.whl dist/traceguard-X.Y.Z.tar.gz
-curl -s https://pypi.org/simple/traceguard/ | grep X.Y.Z
+tmp=$(mktemp -d)
+git -C "$(git rev-parse --show-toplevel)" archive vX.Y.Z | tar -x -C "$tmp"
+cd "$tmp/packages/traceguard" && grep -m1 '^version = "X.Y.Z"' pyproject.toml \
+  && grep -m1 '^__version__ = "X.Y.Z"' src/traceguard/__init__.py \
+  && uv run pytest -q \
+  && env -u SOURCE_DATE_EPOCH uv build \
+  && ls dist/
 ```
 
-Publish the **explicit** version files so old artifacts left in `dist/` are not
-re-uploaded. This path skips every check the `build` job does, so run
-`uv run pytest` and eyeball `dist/` yourself first.
+Both `grep` lines must print, the suite must pass, and `dist/` must hold exactly
+`traceguard-X.Y.Z-py3-none-any.whl` and `traceguard-X.Y.Z.tar.gz`. Only then,
+from the same directory, paste the block below whole. The parentheses make the
+shell read all of it before `read` asks for the token. An empty line — a stray
+one from the paste, say — only repeats the prompt, and Ctrl-D stops without
+uploading. The token reaches `uv` through the environment rather than on its
+command line, and it exists only inside that subshell, so nothing is left in
+the shell afterwards, even when the upload is interrupted:
+
+```bash
+(
+  PYPI_TOKEN=
+  while [ -z "$PYPI_TOKEN" ]; do
+    printf 'project-scoped PyPI token: '; read -rs PYPI_TOKEN || exit 1; echo
+  done
+  UV_PUBLISH_TOKEN="$PYPI_TOKEN" uv publish \
+    dist/traceguard-X.Y.Z-py3-none-any.whl dist/traceguard-X.Y.Z.tar.gz
+  curl -s https://pypi.org/simple/traceguard/ | grep -oE 'traceguard-X.Y.Z(-py3-none-any.whl|.tar.gz)#sha256=[0-9a-f]*'
+)
+```
+
+Naming the two files explicitly means nothing else in `dist/` can ride along.
 
 > **Why a PR, not `git push origin main`?** Releases land through
 > `release/X.Y.Z` branches merged via PR (e.g. #5, #6, #7); a direct push to the
