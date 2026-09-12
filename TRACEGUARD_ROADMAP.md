@@ -57,8 +57,8 @@
 `anchors[].kind` 枚举里是为了让格式先定下来,`parse_sink_spec` 不接受它,
 理由(需要只能证明"同一上传者"的 ECDSA 签名密钥,身份要另接 OIDC)写在 `docs/audit.md`。
 
-**A4 gate 未满足。** 门槛是 quant_alpha_v2 写入 ≥100 条带 `source_snapshot` 的真实
-trace;实测该仓库至今没有 `source_snapshots` 表,也没有任何调用 `record_source` 的代码,
+**A4 gate 已满足(2026-09-12,1047 条带 `source_snapshot` 的 trace,来自 quant_alpha_v2 forward_poll)。** 门槛是 quant_alpha_v2 写入 ≥100 条带 `source_snapshot` 的真实
+trace;1.6.0 收口时实测该仓库还没有 `source_snapshots` 表,也没有任何调用 `record_source` 的代码,
 真实条数是 **0**。A5 仍然先做了——顺序上违反了"A4 gate → A5"的自订纪律,记在这里而不是
 抹掉。代价由 `traceguard.sources` **维持 experimental** 承担:不进 `contract-guard`
 job,API 面可在 minor 内变,README 与 SPEC §6.6 都这么写。毕业条件不变——先有真实用量。
