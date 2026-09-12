@@ -11,8 +11,8 @@ name: Publish traceguard to PyPI
 #   Owner: lizhuojunx86 · Repository: traceguard
 #   Workflow: publish.yml · Environment: pypi
 #
-# The manual path in docs/RELEASING.md stays valid as a fallback until a
-# release has gone through this workflow end to end.
+# Every release from 1.1.1 on was uploaded by this workflow. The manual upload
+# in docs/RELEASING.md is a break-glass fallback and ships without provenance.
 
 on:
   push:
@@ -144,7 +144,8 @@ jobs:
       - name: Install Python 3.12
         run: uv python install 3.12
 
-      # RELEASING.md step 6: the simple index refreshes faster than the JSON API.
+      # RELEASING.md step 5 describes this job; step 6 is the independent check
+      # by hand. Poll the simple index: it refreshes faster than the JSON API.
       - name: Install from PyPI and check the version round-trips
         run: |
           version="${{ needs.build.outputs.version }}"

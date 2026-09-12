@@ -16,8 +16,9 @@ Downstream consumers pin git tags: huadian → `v0.1.0-huadian-baseline` (guardi
 ```bash
 # ── traceguard SDK (packages/traceguard) ──
 cd packages/traceguard
-uv sync --extra openai           # keep the extra: a plain `uv sync` uninstalls it,
-                                 # which silently disarms scripts/routing_probe_daily.sh
+uv sync --extra openai           # keep the extra: a plain `uv sync` still uninstalls it; since #55
+                                 # scripts/routing_probe_daily.sh reinstalls it before probing
+                                 # (`uv sync --extra openai --inexact`) or logs ABORT and exits 1
 uv run pytest                    # 1053 tests (3 skip without contamination-hf extra)
 uv run python ../../examples/quickstart/run_quickstart.py
 
