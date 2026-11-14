@@ -114,3 +114,5 @@ launch/*
 # Probe artefacts left by a sandbox with create-but-not-delete mounts.
 .probe.*
 pit-archive-strategy/
+# 同理：含 mi2 报告正文与源文（市场情报衍生物），本仓库公开，整目录不进 git。
+epistemic-audit-strategy/
